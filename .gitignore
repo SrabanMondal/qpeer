@@ -1,0 +1,16 @@
+node_modules/
+.orch/
+secrets/
+*.tsbuildinfo
+.DS_Store
+
+# local env and secrets
+.env
+.env*.local
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+google-services.json
+
+# Cloudflare
+.wrangler/

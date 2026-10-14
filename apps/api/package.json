@@ -1,0 +1,20 @@
+{
+  "name": "@qpeer/api",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "dependencies": {
+    "drizzle-orm": "^0.45.4",
+    "hono": "^4.13.13",
+    "jose": "^6.2.12",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.23.0",
+    "@cloudflare/workers-types": "^5.20261014.1",
+    "drizzle-kit": "^0.31.11",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.11",
+    "wrangler": "^4.124.0"
+  }
+}
