@@ -26,7 +26,7 @@
     }
   ],
   "vars": {
-    "FIREBASE_PROJECT_ID": "REPLACE_FIREBASE_PROJECT_ID",
+    "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
     "ENVIRONMENT": "local"
   },
   "env": {
@@ -35,7 +35,7 @@
         {
           "binding": "DB",
           "database_name": "qpeer-dev",
-          "database_id": "REPLACE_DEV_D1_ID",
+          "database_id": "a9adedc6-eaec-475d-9b4c-0e11773cd9c0",
           "migrations_dir": "drizzle/migrations"
         }
       ],
@@ -54,7 +54,7 @@
         }
       ],
       "vars": {
-        "FIREBASE_PROJECT_ID": "REPLACE_FIREBASE_PROJECT_ID",
+        "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
         "ENVIRONMENT": "dev"
       }
     },
@@ -63,7 +63,7 @@
         {
           "binding": "DB",
           "database_name": "qpeer-demo",
-          "database_id": "REPLACE_DEMO_D1_ID",
+          "database_id": "59f9618a-3eb3-4463-9fdb-4adde061f6b2",
           "migrations_dir": "drizzle/migrations"
         }
       ],
@@ -82,7 +82,7 @@
         }
       ],
       "vars": {
-        "FIREBASE_PROJECT_ID": "REPLACE_FIREBASE_PROJECT_ID",
+        "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
         "ENVIRONMENT": "demo"
       }
     }
