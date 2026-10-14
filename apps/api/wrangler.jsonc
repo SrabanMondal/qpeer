@@ -1,0 +1,90 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "qpeer-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-22",
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "qpeer-local",
+      "database_id": "local-db",
+      "migrations_dir": "drizzle/migrations"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "QUEUE",
+        "class_name": "QueueDO"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["QueueDO"]
+    }
+  ],
+  "vars": {
+    "FIREBASE_PROJECT_ID": "REPLACE_FIREBASE_PROJECT_ID",
+    "ENVIRONMENT": "local"
+  },
+  "env": {
+    "dev": {
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "qpeer-dev",
+          "database_id": "REPLACE_DEV_D1_ID",
+          "migrations_dir": "drizzle/migrations"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "QUEUE",
+            "class_name": "QueueDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["QueueDO"]
+        }
+      ],
+      "vars": {
+        "FIREBASE_PROJECT_ID": "REPLACE_FIREBASE_PROJECT_ID",
+        "ENVIRONMENT": "dev"
+      }
+    },
+    "demo": {
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "qpeer-demo",
+          "database_id": "REPLACE_DEMO_D1_ID",
+          "migrations_dir": "drizzle/migrations"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "QUEUE",
+            "class_name": "QueueDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["QueueDO"]
+        }
+      ],
+      "vars": {
+        "FIREBASE_PROJECT_ID": "REPLACE_FIREBASE_PROJECT_ID",
+        "ENVIRONMENT": "demo"
+      }
+    }
+  }
+}
