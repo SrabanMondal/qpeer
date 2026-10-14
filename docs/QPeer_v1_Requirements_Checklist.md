@@ -46,20 +46,20 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 ## M0 Platform
 
-- [ ] **PLT-01** Monorepo with `npm run check` (typecheck + lint + tests) passing at the root
-- [ ] **PLT-02** API `/v1/health` (public) and `/v1/me` (signed in), with structured logs and a request ID on every response
-- [ ] **PLT-03** Firebase ID token verification: issuer, audience, RS256 only, expiry. Invalid → 401.
-- [ ] **PLT-04** D1 + Drizzle migrations, applied locally, in tests and on `dev` / `demo`
-- [ ] **PLT-05** QueueDO bound and reachable from the Worker
-- [ ] **PLT-06** `dev` environment deployed. `demo` environment created (deployed in M10).
-- [ ] **PLT-07** Secrets only in `.dev.vars` / Wrangler secrets / gitignored app env. `.example` templates committed.
-- [ ] **PLT-08** EAS development build installs on the phone and reaches the `dev` API
+- [x] **PLT-01** Monorepo with `npm run check` (typecheck + lint + tests) passing at the root
+- [x] **PLT-02** API `/v1/health` (public) and `/v1/me` (signed in), with structured logs and a request ID on every response
+- [x] **PLT-03** Firebase ID token verification: issuer, audience, RS256 only, expiry. Invalid → 401.
+- [x] **PLT-04** D1 + Drizzle migrations, applied locally, in tests and on `dev` / `demo`
+- [x] **PLT-05** QueueDO bound and reachable from the Worker
+- [x] **PLT-06** `dev` environment deployed. `demo` environment created (deployed in M10).
+- [x] **PLT-07** Secrets only in `.dev.vars` / Wrangler secrets / gitignored app env. `.example` templates committed.
+- [x] **PLT-08** EAS development build installs on the phone and reaches the `dev` API
 - [ ] **PLT-09** App shows a readable error with the request ID when the API fails
 
 ## M1 Identity
 
-- [ ] **IDN-01** First launch signs in anonymously with no screen shown
-- [ ] **IDN-02** Google Sign-In
+- [x] **IDN-01** First launch signs in anonymously with no screen shown *(add retry on first-launch network error — see NOTES.md)*
+- [x] **IDN-02** Google Sign-In
 - [ ] **IDN-03** Phone sign-in with Firebase test numbers (OTP screen, wrong-code error, resend)
 - [ ] **IDN-04** Upgrade anonymous → Google/phone **keeps the same user and their tokens** (account linking, not a new account)
 - [ ] **IDN-05** "Credential already in use" during upgrade is handled (sign in to the existing account; anonymous tokens are moved or a clear message is shown)

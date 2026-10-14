@@ -11,7 +11,7 @@
   - **API** (`src/lib/api.ts`): `apiFetch(path, schema)` with Bearer Firebase ID token, zod validation, `ApiError { status, code, requestId }` (status 0 = network). `useMe()` (TanStack Query) keyed by uid + provider.
   - **Screens**: `index` (Firebase status + `/v1/me` with error/request ID/retry), `sign-in` (Google + phone OTP), `map-check` (Mapbox map on Jammu with one pin).
   - **Run with the dev build**: install the EAS `development` APK on the phone, then in `apps/mobile` run `npx expo start` (or `npm run android`) and open the project from the dev client. `npx expo prebuild --platform android --clean` regenerates the gitignored `android/` folder for inspection only.
-  - **Pending before Google sign-in works**: add the SHA-1 of the EAS development keystore (`eas credentials`) to the Firebase Android app, download the updated `google-services.json` (and update the `GOOGLE_SERVICES_JSON` EAS file var), and set `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` to the Firebase "Web client" OAuth ID. Enable Anonymous, Google and Phone providers in Firebase Auth and add test phone numbers.
+  - **Firebase setup (done 2026-10-15)**: EAS dev keystore SHA-1/SHA-256 added to Firebase, updated `google-services.json` in place and uploaded as the `GOOGLE_SERVICES_JSON` EAS file var (development + preview), `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID` set in `.env.local`. Anonymous, Google and Phone providers enabled.
 - **Shared package (`packages/shared`)**: Source exported directly (`./src/index.ts`); Zod schemas for `MeResponse` and `ErrorResponse`; Haversine geo distance function (`distanceMeters`) with unit tests for Jammu coordinates and boundary cases.
 - **API workspace (`apps/api`)**:
   - Cloudflare Worker running Hono with base path `/v1`.
@@ -21,3 +21,18 @@
   - Middleware: request UUID tracking (`x-request-id`), structured JSON request logging.
   - Endpoints: `GET /v1/health` (public), `GET /v1/me` (auth, upsert user in D1), `GET /v1/dev/queue-ping/:queueId` (dev DO RPC).
   - Comprehensive integration test suite using `@cloudflare/vitest-pool-workers` against real local D1 and Durable Objects.
+  - **Deployed**: `qpeer-api-dev` at `https://qpeer-api-dev.qpeer-api.workers.dev` (D1 `qpeer-dev`). D1 `qpeer-demo` created and migrated; the demo Worker is deployed in Step 5.
+
+### Step 0 device check — 2026-10-15, Samsung Galaxy A9 (SM-A920F, Android 10)
+- EAS development build (`fe8ad8c3…`) installed via adb; JS from Metro over `adb reverse tcp:8081 tcp:8081`.
+- ✅ Anonymous sign-in at launch → `/v1/me` on the deployed Worker returns the D1 user (PLT-08, IDN-01).
+- ✅ Mapbox renders Jammu with the marker (token from `.env.local` via Metro).
+- ✅ Google sign-in links the anonymous account in place: same Firebase uid and same backend user id, provider `google.com`, `isAnonymous` false (IDN-02, IDN-04).
+- ✅ Sign-out returns to a fresh anonymous user (IDN-07 core).
+- ⏳ Phone sign-in with a Firebase test number: not checked yet.
+
+### Follow-ups found in Step 0
+- First launch right after install once showed "Could not sign in: No internet connection"; a restart fixed it. Add an automatic retry with backoff for the anonymous sign-in (IDN-01 robustness).
+- Google link leaves `displayName` empty (Firebase doesn't copy it on link). Fill it from the Google profile after linking (IDN-06).
+- `@cloudflare/vitest-pool-workers` is renamed to `@cloudflare/vitest-plugin`; migrate before the next backend task.
+- Biome reports the `recommended` field in `biome.json` as deprecated; run `biome migrate`.
