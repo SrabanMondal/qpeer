@@ -1,5 +1,6 @@
 node_modules/
 .orch/
+COMMIT_GUIDELINES.md
 secrets/
 *.tsbuildinfo
 .DS_Store
