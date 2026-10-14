@@ -29,7 +29,7 @@
 - ✅ Mapbox renders Jammu with the marker (token from `.env.local` via Metro).
 - ✅ Google sign-in links the anonymous account in place: same Firebase uid and same backend user id, provider `google.com`, `isAnonymous` false (IDN-02, IDN-04).
 - ✅ Sign-out returns to a fresh anonymous user (IDN-07 core).
-- ⏳ Phone sign-in with a Firebase test number: not checked yet.
+- ✅ Phone sign-in with a Firebase test number works (checked by the user, no rebuild needed). Wrong-code and resend paths not checked yet.
 
 ### Follow-ups found in Step 0
 - First launch right after install once showed "Could not sign in: No internet connection"; a restart fixed it. Add an automatic retry with backoff for the anonymous sign-in (IDN-01 robustness).

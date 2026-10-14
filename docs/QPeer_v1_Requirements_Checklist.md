@@ -60,7 +60,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 - [x] **IDN-01** First launch signs in anonymously with no screen shown *(add retry on first-launch network error — see NOTES.md)*
 - [x] **IDN-02** Google Sign-In
-- [ ] **IDN-03** Phone sign-in with Firebase test numbers (OTP screen, wrong-code error, resend)
+- [ ] **IDN-03** Phone sign-in with Firebase test numbers (OTP screen, wrong-code error, resend) *(sign-in works; wrong-code and resend still to check)*
 - [ ] **IDN-04** Upgrade anonymous → Google/phone **keeps the same user and their tokens** (account linking, not a new account)
 - [ ] **IDN-05** "Credential already in use" during upgrade is handled (sign in to the existing account; anonymous tokens are moved or a clear message is shown)
 - [ ] **IDN-06** Profile screen: view name, email/phone and sign-in method; **edit display name**
