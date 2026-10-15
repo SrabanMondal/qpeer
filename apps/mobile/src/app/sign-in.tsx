@@ -1,20 +1,29 @@
-import { useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { ScrollView, StyleSheet, TextInput } from "react-native";
+import { Alert } from "react-native";
 
-import { Button } from "@/components/button";
 import { ThemedText } from "@/components/themed-text";
-import { ThemedView } from "@/components/themed-view";
-import { Spacing } from "@/constants/theme";
-import { useTheme } from "@/hooks/use-theme";
+import {
+  Button,
+  Card,
+  Screen,
+  SectionHeader,
+  TextField,
+} from "@/components/ui";
+import { useUpdateMe } from "@/lib/api";
 import { authErrorMessage, googleSignInConfigured, useAuth } from "@/lib/auth";
+import { errorText } from "@/lib/error-messages";
+import { goHome } from "@/lib/mode";
 
 type Busy = "google" | "send" | "confirm" | null;
 
 export default function SignInScreen() {
   const router = useRouter();
-  const theme = useTheme();
+  // `mode=business`: the user picked Business mode while anonymous (IDN-08).
+  const params = useLocalSearchParams<{ mode?: string }>();
+  const toBusiness = params.mode === "business";
   const { signInWithGoogle, startPhoneSignIn, confirmPhoneCode } = useAuth();
+  const updateMe = useUpdateMe();
 
   const [phone, setPhone] = useState("+91");
   const [code, setCode] = useState("");
@@ -23,7 +32,20 @@ export default function SignInScreen() {
   const [googleError, setGoogleError] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState<string | null>(null);
 
-  const done = () => {
+  const done = async () => {
+    if (toBusiness) {
+      try {
+        await updateMe.mutateAsync({ preferredMode: "business" });
+        goHome("business");
+      } catch (e) {
+        Alert.alert(
+          "Signed in, but still in Customer mode",
+          `${errorText(e)} Switch to Business mode again from Profile.`,
+        );
+        goHome("customer");
+      }
+      return;
+    }
     if (router.canGoBack()) router.back();
     else router.replace("/");
   };
@@ -32,7 +54,7 @@ export default function SignInScreen() {
     setGoogleError(null);
     setBusy("google");
     try {
-      if (await signInWithGoogle()) done();
+      if (await signInWithGoogle()) await done();
     } catch (e) {
       setGoogleError(authErrorMessage(e));
     } finally {
@@ -46,7 +68,7 @@ export default function SignInScreen() {
     try {
       const autoVerified = await startPhoneSignIn(phone.replace(/[\s-]/g, ""));
       if (autoVerified) {
-        done();
+        await done();
         return;
       }
       setCodeSent(true);
@@ -63,7 +85,7 @@ export default function SignInScreen() {
     setBusy("confirm");
     try {
       await confirmPhoneCode(code);
-      done();
+      await done();
     } catch (e) {
       setPhoneError(authErrorMessage(e));
     } finally {
@@ -71,49 +93,50 @@ export default function SignInScreen() {
     }
   };
 
-  const inputStyle = [
-    styles.input,
-    { color: theme.text, borderColor: theme.backgroundSelected },
-  ];
-
   return (
-    <ThemedView style={styles.flex}>
-      <ScrollView
-        contentContainerStyle={styles.content}
-        keyboardShouldPersistTaps="handled"
-      >
-        <ThemedText type="smallBold">Google</ThemedText>
+    <Screen>
+      {toBusiness ? (
+        <>
+          <Stack.Screen options={{ title: "Sign in for Business mode" }} />
+          <ThemedText type="body">
+            Business mode needs an account. Sign in with Google or your phone,
+            and the app switches to Business mode for you.
+          </ThemedText>
+        </>
+      ) : null}
+
+      <SectionHeader title="Google" />
+      <Card>
         {googleSignInConfigured ? (
           <Button
             title="Continue with Google"
+            icon="login"
             onPress={onGoogle}
             loading={busy === "google"}
             disabled={busy !== null}
           />
         ) : (
-          <ThemedText type="small" themeColor="textSecondary">
-            Google sign-in is not configured yet.
+          <ThemedText type="small" themeColor="inkMuted">
+            Google sign-in is not set up in this build yet.
           </ThemedText>
         )}
         {googleError ? (
-          <ThemedText type="small" style={styles.error}>
+          <ThemedText type="small" themeColor="danger">
             {googleError}
           </ThemedText>
         ) : null}
+      </Card>
 
-        <ThemedText type="smallBold" style={styles.section}>
-          Phone
-        </ThemedText>
-        <TextInput
-          style={inputStyle}
+      <SectionHeader title="Phone" />
+      <Card>
+        <TextField
+          label="Phone number"
           value={phone}
           onChangeText={setPhone}
           placeholder="+91 98765 43210"
-          placeholderTextColor={theme.textSecondary}
           keyboardType="phone-pad"
           autoComplete="tel"
           editable={!codeSent && busy === null}
-          accessibilityLabel="Phone number"
         />
         {!codeSent ? (
           <Button
@@ -124,17 +147,15 @@ export default function SignInScreen() {
           />
         ) : (
           <>
-            <TextInput
-              style={inputStyle}
+            <TextField
+              label="Code from the SMS"
               value={code}
               onChangeText={setCode}
               placeholder="6-digit code"
-              placeholderTextColor={theme.textSecondary}
               keyboardType="number-pad"
               autoComplete="sms-otp"
               textContentType="oneTimeCode"
               maxLength={6}
-              accessibilityLabel="Verification code"
             />
             <Button
               title="Confirm code"
@@ -151,7 +172,7 @@ export default function SignInScreen() {
             />
             <Button
               title="Change number"
-              variant="secondary"
+              variant="outline"
               onPress={() => {
                 setCodeSent(false);
                 setPhoneError(null);
@@ -161,25 +182,11 @@ export default function SignInScreen() {
           </>
         )}
         {phoneError ? (
-          <ThemedText type="small" style={styles.error}>
+          <ThemedText type="small" themeColor="danger">
             {phoneError}
           </ThemedText>
         ) : null}
-      </ScrollView>
-    </ThemedView>
+      </Card>
+    </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  flex: { flex: 1 },
-  content: { padding: Spacing.three, gap: Spacing.two },
-  section: { marginTop: Spacing.four },
-  input: {
-    minHeight: 48,
-    borderWidth: 1,
-    borderRadius: 12,
-    paddingHorizontal: Spacing.three,
-    fontSize: 16,
-  },
-  error: { color: "#D93025" },
-});

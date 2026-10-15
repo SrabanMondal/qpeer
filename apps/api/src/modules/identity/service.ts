@@ -2,6 +2,7 @@ import type { MeResponse, UpdateMeBody } from "@qpeer/shared";
 import { eq } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { type User, users } from "../../db/schema";
+import { AppError } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import type { VerifiedUser } from "../../middleware/auth";
 
@@ -69,21 +70,40 @@ export function toMeResponse(user: User): MeResponse {
       displayName: user.displayName,
       email: user.email,
       phone: user.phone,
+      preferredMode: user.preferredMode ?? null,
     },
   };
 }
 
-/** IDN-06: edit display name. */
+/**
+ * IDN-06: edit display name. IDN-08: remember the chosen app mode.
+ * Business mode needs a registered user (403 `registration_required`).
+ */
 export async function updateMe(
   db: Db,
   now: number,
-  userId: string,
+  user: User,
   body: UpdateMeBody,
 ): Promise<User> {
+  if (body.preferredMode === "business" && user.isAnonymous) {
+    throw new AppError(
+      403,
+      "registration_required",
+      "Sign in with phone or Google to use Business mode",
+    );
+  }
   const [updated] = await db
     .update(users)
-    .set({ displayName: body.displayName, updatedAt: new Date(now) })
-    .where(eq(users.id, userId))
+    .set({
+      ...(body.displayName !== undefined
+        ? { displayName: body.displayName }
+        : {}),
+      ...(body.preferredMode !== undefined
+        ? { preferredMode: body.preferredMode }
+        : {}),
+      updatedAt: new Date(now),
+    })
+    .where(eq(users.id, user.id))
     .returning();
   return updated;
 }

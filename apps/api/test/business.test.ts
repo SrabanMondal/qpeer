@@ -113,6 +113,98 @@ describe("Identity", () => {
     }
   });
 
+  it("IDN-08: preferredMode starts null, is saved by PATCH /me and returned by GET /me", async () => {
+    const tok = await api.token({ sub: "idn08-user", name: "Mode User" });
+    const first = await expectOk(
+      await api.call("GET", "/v1/me", tok),
+      200,
+      MeResponse,
+    );
+    expect(first.user.preferredMode).toBeNull();
+
+    const set = await expectOk(
+      await api.call("PATCH", "/v1/me", tok, { preferredMode: "business" }),
+      200,
+      MeResponse,
+    );
+    expect(set.user.preferredMode).toBe("business");
+    // Changing only the mode leaves the name alone.
+    expect(set.user.displayName).toBe("Mode User");
+
+    const again = await expectOk(
+      await api.call("GET", "/v1/me", tok),
+      200,
+      MeResponse,
+    );
+    expect(again.user.preferredMode).toBe("business");
+
+    const both = await expectOk(
+      await api.call("PATCH", "/v1/me", tok, {
+        displayName: "Ravi",
+        preferredMode: "customer",
+      }),
+      200,
+      MeResponse,
+    );
+    expect(both.user.displayName).toBe("Ravi");
+    expect(both.user.preferredMode).toBe("customer");
+
+    // Changing only the name leaves the mode alone.
+    const nameOnly = await expectOk(
+      await api.call("PATCH", "/v1/me", tok, { displayName: "Ravi K" }),
+      200,
+      MeResponse,
+    );
+    expect(nameOnly.user.preferredMode).toBe("customer");
+  });
+
+  it("IDN-08: anonymous users may choose customer but not business mode", async () => {
+    const tok = await api.token({ sub: "idn08-anon", anonymous: true });
+    await expectError(
+      await api.call("PATCH", "/v1/me", tok, { preferredMode: "business" }),
+      403,
+      "registration_required",
+    );
+    const me = await expectOk(
+      await api.call("GET", "/v1/me", tok),
+      200,
+      MeResponse,
+    );
+    expect(me.user.preferredMode).toBeNull();
+
+    const customer = await expectOk(
+      await api.call("PATCH", "/v1/me", tok, { preferredMode: "customer" }),
+      200,
+      MeResponse,
+    );
+    expect(customer.user.preferredMode).toBe("customer");
+  });
+
+  it("IDN-08: PATCH /me needs at least one known field and a valid mode", async () => {
+    const tok = await api.token({ sub: "idn08-bad" });
+    await expectError(
+      await api.call("PATCH", "/v1/me", tok, {}),
+      400,
+      "invalid_input",
+    );
+    const bad = await expectError(
+      await api.call("PATCH", "/v1/me", tok, { preferredMode: "admin" }),
+      400,
+      "invalid_input",
+    );
+    expect(issuePaths(bad.details)).toEqual(["preferredMode"]);
+    await expectError(
+      await api.call("PATCH", "/v1/me", tok, { preferredMode: null }),
+      400,
+      "invalid_input",
+    );
+    await expectError(
+      await api.call("PATCH", "/v1/me", tok, { mode: "business" }),
+      400,
+      "invalid_input",
+    );
+  });
+
   it("timestamps are stored as epoch milliseconds from the injected clock", async () => {
     api.clock.t += 1234;
     const tok = await api.token({ sub: "ms-user" });
