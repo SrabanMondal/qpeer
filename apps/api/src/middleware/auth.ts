@@ -1,4 +1,9 @@
+import { createMiddleware } from "hono/factory";
 import { createRemoteJWKSet, jwtVerify } from "jose";
+import { db } from "../db/client";
+import type { AppEnv } from "../env";
+import { AppError } from "../lib/errors";
+import { upsertUser } from "../modules/identity/service";
 
 export interface VerifiedUser {
   uid: string;
@@ -70,4 +75,40 @@ export function makeFirebaseVerifier(
       name,
     };
   };
+}
+
+const unauthorized = () =>
+  new AppError(401, "unauthorized", "Missing or invalid token");
+
+/**
+ * Verifies the Firebase ID token and loads (or creates) the user into `c.var.user`.
+ * Only verification failures are 401; config and database errors become 500.
+ */
+export function authMiddleware(verifierOverride?: TokenVerifier) {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const authHeader = c.req.header("Authorization");
+    if (!authHeader?.startsWith("Bearer ")) throw unauthorized();
+
+    const token = authHeader.slice(7).trim();
+    if (!token) throw unauthorized();
+
+    if (!verifierOverride && !c.env.FIREBASE_PROJECT_ID?.trim()) {
+      throw new Error("FIREBASE_PROJECT_ID is not configured");
+    }
+    const verifier =
+      verifierOverride ?? makeFirebaseVerifier(c.env.FIREBASE_PROJECT_ID);
+
+    let verified: VerifiedUser;
+    try {
+      verified = await verifier(token);
+    } catch {
+      // Never log the token.
+      throw unauthorized();
+    }
+
+    const user = await upsertUser(db(c.env.DB), c.get("clock").now(), verified);
+    c.set("userId", user.id);
+    c.set("user", user);
+    await next();
+  });
 }
