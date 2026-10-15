@@ -6,6 +6,7 @@ import {
   real,
   sqliteTable,
   text,
+  uniqueIndex,
 } from "drizzle-orm/sqlite-core";
 
 /*
@@ -104,3 +105,175 @@ export const queues = sqliteTable(
 );
 
 export type Queue = typeof queues.$inferSelect;
+
+// ---------- Step 2: live queue records (written by the QueueDO outbox) ----------
+
+/**
+ * Map snapshot per queue (QUE-18). Written by the QueueDO through its outbox;
+ * `lat`/`lng` are copied from the business at write time (and when the pin
+ * moves). `eta_low_ms`/`eta_high_ms` are wait **durations** for a new joiner.
+ */
+export const queueSnapshots = sqliteTable(
+  "queue_snapshots",
+  {
+    queueId: text("queue_id").primaryKey(),
+    businessId: text("business_id").notNull(),
+    lat: real("lat"),
+    lng: real("lng"),
+    isOpen: integer("is_open", { mode: "boolean" }).notNull(),
+    isPaused: integer("is_paused", { mode: "boolean" }).notNull(),
+    waiting: integer("waiting").notNull(),
+    etaLowMs: integer("eta_low_ms"),
+    etaHighMs: integer("eta_high_ms"),
+    /** Label of the token called last (`47`, `T2`), or null. */
+    nowServing: text("now_serving"),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [index("queue_snapshots_lat_lng_idx").on(t.lat, t.lng)],
+);
+
+export type QueueSnapshot = typeof queueSnapshots.$inferSelect;
+
+export const TOKEN_STATES = [
+  "WAITING",
+  "CALLED",
+  "GRACE",
+  "SERVED",
+  "EXPIRED",
+  "LEFT",
+  "CANCELLED",
+] as const;
+
+/**
+ * Durable token record (QUE-19, TOK-06). The QueueDO owns the live state; this
+ * row is upserted by its outbox, guarded by `rev` (a per-token revision that
+ * only goes up) so a late retry can never move a token backwards.
+ */
+export const tokens = sqliteTable(
+  "tokens",
+  {
+    id: text("id").primaryKey(),
+    queueId: text("queue_id").notNull(),
+    sessionId: text("session_id").notNull(),
+    businessId: text("business_id").notNull(),
+    /** Null for staff-inserted triage tokens. */
+    userId: text("user_id"),
+    number: integer("number").notNull(),
+    series: text("series", { enum: ["R", "P", "T"] }).notNull(),
+    class: text("class", { enum: ["triage", "priority", "regular"] }).notNull(),
+    method: text("method", { enum: ["walkin", "remote", "staff"] }).notNull(),
+    state: text("state", { enum: TOKEN_STATES }).notNull(),
+    joinedAt: ms("joined_at").notNull(),
+    calledAt: ms("called_at"),
+    servedAt: ms("served_at"),
+    endedAt: ms("ended_at"),
+    endReason: text("end_reason", {
+      enum: ["served", "no_show", "left", "cancelled", "closed"],
+    }),
+    paymentId: text("payment_id"),
+    rev: integer("rev").notNull(),
+    createdAt: ms("created_at").notNull(),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [
+    index("tokens_user_id_state_idx").on(t.userId, t.state),
+    index("tokens_queue_id_session_id_idx").on(t.queueId, t.sessionId),
+    uniqueIndex("tokens_queue_session_series_number_uq").on(
+      t.queueId,
+      t.sessionId,
+      t.series,
+      t.number,
+    ),
+  ],
+);
+
+export type TokenRow = typeof tokens.$inferSelect;
+
+/** Expo push tokens per user (ALR-02). */
+export const devices = sqliteTable(
+  "devices",
+  {
+    expoPushToken: text("expo_push_token").primaryKey(),
+    userId: text("user_id").notNull(),
+    platform: text("platform", { enum: ["android", "ios"] }).notNull(),
+    lastSeenAt: ms("last_seen_at").notNull(),
+    createdAt: ms("created_at").notNull(),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [index("devices_user_id_idx").on(t.userId)],
+);
+
+/** Expo push tickets; the hourly cron checks their receipts. */
+export const pushTickets = sqliteTable(
+  "push_tickets",
+  {
+    /** Expo ticket id. */
+    id: text("id").primaryKey(),
+    tokenId: text("token_id").notNull(),
+    /** Device the ticket was sent to (to prune it on `DeviceNotRegistered`). */
+    expoPushToken: text("expo_push_token").notNull(),
+    kind: text("kind").notNull(),
+    sentAt: ms("sent_at").notNull(),
+    receiptCheckedAt: ms("receipt_checked_at"),
+    /** `sent` until the receipt is checked, then `ok` or the Expo error code. */
+    status: text("status").notNull(),
+    createdAt: ms("created_at").notNull(),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [index("push_tickets_receipt_checked_at_idx").on(t.receiptCheckedAt)],
+);
+
+/** One row per free-lane no-show (JON-07); id = the outbox item id (idempotent). */
+export const freeLaneStrikes = sqliteTable(
+  "free_lane_strikes",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    tokenId: text("token_id").notNull(),
+    at: ms("at").notNull(),
+    createdAt: ms("created_at").notNull(),
+  },
+  (t) => [index("free_lane_strikes_user_id_at_idx").on(t.userId, t.at)],
+);
+
+/** Hourly counters per queue (QUE-19), additive upserts from the QueueDO outbox. */
+export const analyticsHourly = sqliteTable(
+  "analytics_hourly",
+  {
+    queueId: text("queue_id").notNull(),
+    businessId: text("business_id").notNull(),
+    /** Start of the IST hour, epoch ms. */
+    hourStart: integer("hour_start").notNull(),
+    joins: integer("joins").notNull().default(0),
+    leaves: integer("leaves").notNull().default(0),
+    served: integer("served").notNull().default(0),
+    noShows: integer("no_shows").notNull().default(0),
+    cancels: integer("cancels").notNull().default(0),
+    sumWaitMs: integer("sum_wait_ms").notNull().default(0),
+    waits: integer("waits").notNull().default(0),
+    sumIntervalMs: integer("sum_interval_ms").notNull().default(0),
+    intervals: integer("intervals").notNull().default(0),
+    etaHits: integer("eta_hits").notNull().default(0),
+    etaTotal: integer("eta_total").notNull().default(0),
+    createdAt: ms("created_at").notNull(),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.queueId, t.hourStart] }),
+    index("analytics_hourly_business_id_hour_start_idx").on(
+      t.businessId,
+      t.hourStart,
+    ),
+  ],
+);
+
+/**
+ * Outbox items already applied to D1 (dedupe for the additive analytics upsert,
+ * §9.8 "outbox id stored in the batch"). Inserted in the same batch as the
+ * upsert; a duplicate id fails the whole batch, which means "already applied".
+ */
+export const outboxReceipts = sqliteTable("outbox_receipts", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  appliedAt: ms("applied_at").notNull(),
+});

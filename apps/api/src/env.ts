@@ -1,13 +1,15 @@
 import type { BusinessRole, ErrorCode } from "@qpeer/shared";
 import type { User } from "./db/schema";
 import type { Clock } from "./lib/time";
-import type { QueueDO } from "./queue-do";
+import type { QueueDO } from "./queue/queue-do";
 
 export interface Bindings {
   DB: D1Database;
   QUEUE: DurableObjectNamespace<QueueDO>;
   FIREBASE_PROJECT_ID: string;
   ENVIRONMENT: string;
+  /** Optional secret, only if Expo push security is enabled (§17). */
+  EXPO_ACCESS_TOKEN?: string;
 }
 
 /** Set by `requireBusinessRole` once the caller's membership is confirmed. */

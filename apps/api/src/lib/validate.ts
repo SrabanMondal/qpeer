@@ -38,6 +38,22 @@ export async function parseBody<S extends z.ZodTypeAny>(
   return parseWith(schema, raw);
 }
 
+/** Like `parseBody`, but an empty body counts as `{}`. */
+export async function parseOptionalBody<S extends z.ZodTypeAny>(
+  c: Context,
+  schema: S,
+): Promise<z.output<S>> {
+  const text = await c.req.text();
+  if (text.trim() === "") return parseWith(schema, {});
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    throw invalidInput([{ path: "", message: "Body must be valid JSON" }]);
+  }
+  return parseWith(schema, raw);
+}
+
 /** Parse the query string (single values per key). */
 export function parseQuery<S extends z.ZodTypeAny>(
   c: Context,

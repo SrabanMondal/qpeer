@@ -5,6 +5,7 @@ import {
   type CreateQueueBody,
   type ListingRequirement,
   type QueueInfoResponse,
+  type QueueLiveSummary,
   QueueSettings,
   type QueueView,
   queueJoinUrl,
@@ -18,24 +19,34 @@ import {
   businesses,
   businessMembers,
   type Queue,
+  type QueueSnapshot,
+  queueSnapshots,
   queues,
 } from "../../db/schema";
+import type { Bindings } from "../../env";
 import { AppError, notFound } from "../../lib/errors";
 import { geohash } from "../../lib/geo";
 import { newId } from "../../lib/ids";
 import { toMs } from "../../lib/time";
 import { findRole } from "../../middleware/guards";
+import { queueStub, unwrap } from "../queue/do-client";
 
 export const MAX_ACTIVE_QUEUES = 10;
 
 export interface ServiceCtx {
   db: Db;
   now: number;
+  /** For QueueDO calls (init, settings, close, live summary). */
+  env: Pick<Bindings, "QUEUE">;
 }
 
 // ---------- views ----------
 
-function queueView(q: Queue, role: BusinessRole | null): QueueView {
+function queueView(
+  q: Queue,
+  role: BusinessRole | null,
+  live?: QueueLiveSummary | null,
+): QueueView {
   const view: QueueView = {
     id: q.id,
     businessId: q.businessId,
@@ -45,11 +56,37 @@ function queueView(q: Queue, role: BusinessRole | null): QueueView {
     createdAt: toMs(q.createdAt),
     updatedAt: toMs(q.updatedAt),
   };
+  if (live !== undefined) view.live = live;
   if (role) {
     view.settings = QueueSettings.parse(q.settingsJson);
     view.settingsVersion = q.settingsVersion;
   }
   return view;
+}
+
+/** D1 map snapshot → live summary (QUE-18). */
+export function snapshotSummary(s: QueueSnapshot): QueueLiveSummary {
+  return {
+    status: !s.isOpen ? "closed" : s.isPaused ? "paused" : "open",
+    nowServing: s.nowServing,
+    waiting: s.waiting,
+    waitLowMs: s.etaLowMs,
+    waitHighMs: s.etaHighMs,
+    updatedAt: toMs(s.updatedAt),
+  };
+}
+
+async function loadSnapshots(
+  db: Db,
+  queueIds: string[],
+): Promise<Map<string, QueueLiveSummary>> {
+  if (queueIds.length === 0) return new Map();
+  const rows = await db
+    .select()
+    .from(queueSnapshots)
+    .where(inArray(queueSnapshots.queueId, queueIds))
+    .all();
+  return new Map(rows.map((r) => [r.queueId, snapshotSummary(r)]));
 }
 
 /** BIZ-07: what is still missing before the business can be listed on the map. */
@@ -61,7 +98,7 @@ function missingForListing(b: Business, qs: Queue[]): ListingRequirement[] {
 }
 
 /** Listed = active AND has a pin AND at least one non-archived queue. */
-function isListed(b: Business, qs: Queue[]): boolean {
+export function isListed(b: Business, qs: Queue[]): boolean {
   return b.status === "active" && missingForListing(b, qs).length === 0;
 }
 
@@ -73,6 +110,7 @@ function businessView(
   b: Business,
   qs: Queue[],
   role: BusinessRole | null,
+  snapshots: Map<string, QueueLiveSummary>,
 ): BusinessView {
   const visibleQueues = role ? qs : qs.filter((q) => q.status === "active");
   const view: BusinessView = {
@@ -86,7 +124,9 @@ function businessView(
     status: b.status,
     listed: isListed(b, qs),
     myRole: role,
-    queues: visibleQueues.map((q) => queueView(q, role)),
+    queues: visibleQueues.map((q) =>
+      queueView(q, role, snapshots.get(q.id) ?? null),
+    ),
     createdAt: toMs(b.createdAt),
     updatedAt: toMs(b.updatedAt),
   };
@@ -94,7 +134,10 @@ function businessView(
   return view;
 }
 
-async function loadQueues(db: Db, businessIds: string[]): Promise<Queue[]> {
+export async function loadQueues(
+  db: Db,
+  businessIds: string[],
+): Promise<Queue[]> {
   if (businessIds.length === 0) return [];
   return db
     .select()
@@ -104,7 +147,10 @@ async function loadQueues(db: Db, businessIds: string[]): Promise<Queue[]> {
     .all();
 }
 
-async function loadBusiness(db: Db, businessId: string): Promise<Business> {
+export async function loadBusiness(
+  db: Db,
+  businessId: string,
+): Promise<Business> {
   const b = await db
     .select()
     .from(businesses)
@@ -120,7 +166,16 @@ async function viewFor(
   role: BusinessRole | null,
 ): Promise<BusinessView> {
   const b = await loadBusiness(db, businessId);
-  return businessView(b, await loadQueues(db, [b.id]), role);
+  const qs = await loadQueues(db, [b.id]);
+  return businessView(
+    b,
+    qs,
+    role,
+    await loadSnapshots(
+      db,
+      qs.map((q) => q.id),
+    ),
+  );
 }
 
 // ---------- businesses ----------
@@ -176,11 +231,16 @@ export async function listMyBusinesses(
     db,
     rows.map((r) => r.business.id),
   );
+  const snaps = await loadSnapshots(
+    db,
+    qs.map((q) => q.id),
+  );
   return rows.map((r) =>
     businessView(
       r.business,
       qs.filter((q) => q.businessId === r.business.id),
       r.role,
+      snaps,
     ),
   );
 }
@@ -198,14 +258,23 @@ export async function getBusinessForViewer(
     .get();
   if (!b) throw notFound();
   const role = await findRole(db, b.id, userId);
-  const view = businessView(b, await loadQueues(db, [b.id]), role);
+  const qs = await loadQueues(db, [b.id]);
+  const view = businessView(
+    b,
+    qs,
+    role,
+    await loadSnapshots(
+      db,
+      qs.map((q) => q.id),
+    ),
+  );
   if (!role && !view.listed) throw notFound();
   return view;
 }
 
 /** BIZ-02/04/05: partial update, including moving the pin. Caller is the owner. */
 export async function updateBusiness(
-  { db, now }: ServiceCtx,
+  { db, now, env }: ServiceCtx,
   businessId: string,
   patch: UpdateBusinessBody,
 ): Promise<BusinessView> {
@@ -228,12 +297,27 @@ export async function updateBusiness(
     .where(eq(businesses.id, businessId))
     .returning({ id: businesses.id });
   if (updated.length === 0) throw notFound();
+  if (patch.location !== undefined) {
+    // BIZ-04: the map snapshot follows the pin immediately.
+    await db
+      .update(queueSnapshots)
+      .set({ lat: patch.location.lat, lng: patch.location.lng })
+      .where(eq(queueSnapshots.businessId, businessId));
+  }
+  if (patch.name !== undefined) {
+    for (const q of await loadQueues(db, [businessId])) {
+      await queueStub(env, q.id).setLabels({ businessName: patch.name });
+    }
+  }
   return viewFor(db, businessId, "owner");
 }
 
-/** BIZ-08: deactivate/activate. Idempotent; `updated_at` only moves on a real change. */
+/**
+ * BIZ-08: deactivate/activate. Idempotent; `updated_at` only moves on a real
+ * change. Deactivating closes every queue's live session (tokens expire).
+ */
 export async function setBusinessStatus(
-  { db, now }: ServiceCtx,
+  { db, now, env }: ServiceCtx,
   businessId: string,
   status: Business["status"],
 ): Promise<BusinessView> {
@@ -246,7 +330,12 @@ export async function setBusinessStatus(
         sql`${businesses.status} <> ${status}`,
       ),
     );
-  // Step 2: deactivation also closes the business's open queues in their QueueDOs.
+  if (status === "inactive") {
+    for (const q of await loadQueues(db, [businessId])) {
+      // TODO(Step 4): refund `paidTokens` returned by close().
+      unwrap(await queueStub(env, q.id).close());
+    }
+  }
   return viewFor(db, businessId, "owner");
 }
 
@@ -254,7 +343,7 @@ export async function setBusinessStatus(
 
 /** BIZ-10/12: new queue with default settings merged with the patch. Max 10 active. */
 export async function createQueue(
-  { db, now }: ServiceCtx,
+  { db, now, env }: ServiceCtx,
   businessId: string,
   body: CreateQueueBody,
 ): Promise<QueueView> {
@@ -277,10 +366,29 @@ export async function createQueue(
       `A business can have at most ${MAX_ACTIVE_QUEUES} active queues`,
     );
   }
-  return queueView(await loadQueue(db, id), "owner");
+  const q = await loadQueue(db, id);
+  await initQueueDO(db, env, q);
+  return queueView(q, "owner");
 }
 
-async function loadQueue(db: Db, queueId: string): Promise<Queue> {
+/** Gives the QueueDO its identity, names and settings. Idempotent. */
+export async function initQueueDO(
+  db: Db,
+  env: Pick<Bindings, "QUEUE">,
+  q: Queue,
+): Promise<void> {
+  const b = await loadBusiness(db, q.businessId);
+  await queueStub(env, q.id).init({
+    queueId: q.id,
+    businessId: q.businessId,
+    settings: QueueSettings.parse(q.settingsJson),
+    settingsVersion: q.settingsVersion,
+    queueName: q.name,
+    businessName: b.name,
+  });
+}
+
+export async function loadQueue(db: Db, queueId: string): Promise<Queue> {
   const q = await db.select().from(queues).where(eq(queues.id, queueId)).get();
   if (!q) throw notFound();
   return q;
@@ -291,7 +399,7 @@ async function loadQueue(db: Db, queueId: string): Promise<Queue> {
  * the merged settings differ from the stored ones.
  */
 export async function updateQueue(
-  { db, now }: ServiceCtx,
+  { db, now, env }: ServiceCtx,
   queueId: string,
   body: UpdateQueueBody,
 ): Promise<QueueView> {
@@ -308,7 +416,6 @@ export async function updateQueue(
     if (JSON.stringify(merged) !== JSON.stringify(current)) {
       set.settingsJson = merged;
       set.settingsVersion = q.settingsVersion + 1;
-      // Step 2: push { settings, version } to the QueueDO (applies to new tokens only).
     }
   }
   if (Object.keys(set).length === 0) return queueView(q, "owner");
@@ -332,29 +439,38 @@ export async function updateQueue(
       "The queue was changed at the same time; try again",
     );
   }
+  const stub = queueStub(env, queueId);
+  if (set.settingsJson && set.settingsVersion) {
+    // Applies to new tokens only; the DO ignores versions it already has.
+    await stub.updateSettings(set.settingsJson, set.settingsVersion);
+  }
+  if (set.name) await stub.setLabels({ queueName: set.name });
   return queueView(updated[0], "owner");
 }
 
-/** Active (WAITING/CALLED/GRACE) tokens in a queue. */
-export async function countActiveTokens(_queueId: string): Promise<number> {
-  // Step 2: ask QueueDO
-  return 0;
+/** Active (WAITING/CALLED/GRACE) tokens in a queue, from its QueueDO. */
+export async function countActiveTokens(
+  env: Pick<Bindings, "QUEUE">,
+  queueId: string,
+): Promise<number> {
+  return queueStub(env, queueId).countActiveTokens();
 }
 
-/** BIZ-11: archive a queue, only when nobody is waiting. Idempotent. */
+/** BIZ-11: archive a queue, only when nobody is waiting. Idempotent. Ends its session. */
 export async function archiveQueue(
-  { db, now }: ServiceCtx,
+  { db, now, env }: ServiceCtx,
   queueId: string,
 ): Promise<QueueView> {
   const q = await loadQueue(db, queueId);
   if (q.status === "archived") return queueView(q, "owner");
-  if ((await countActiveTokens(queueId)) > 0) {
+  if ((await countActiveTokens(env, queueId)) > 0) {
     throw new AppError(
       409,
       "invalid_state",
       "The queue still has waiting tokens",
     );
   }
+  unwrap(await queueStub(env, queueId).close());
   const [updated] = await db
     .update(queues)
     .set({ status: "archived", updatedAt: new Date(now) })
@@ -368,7 +484,7 @@ export async function archiveQueue(
  * its business is listed.
  */
 export async function getQueueInfo(
-  db: Db,
+  { db, env }: Pick<ServiceCtx, "db" | "env">,
   queueId: string,
   userId: string,
 ): Promise<QueueInfoResponse> {
@@ -390,5 +506,6 @@ export async function getQueueInfo(
       listed,
     },
     myRole: role,
+    live: await queueStub(env, q.id).getSummary(),
   };
 }
