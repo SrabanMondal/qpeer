@@ -22,6 +22,8 @@
     "esbuild@0.28.1": true,
     "workerd@1.20260815.1": true,
     "@firebase/util": false,
-    "protobufjs": false
+    "protobufjs": false,
+    "esbuild@0.28.2": true,
+    "workerd@1.20261012.1": true
   }
 }
