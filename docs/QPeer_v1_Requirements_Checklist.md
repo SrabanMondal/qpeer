@@ -103,13 +103,13 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **QUE-04** One active free token per user per queue. Paid reservations are capped per user (e.g. 2 per queue).
 
 **Operations**
-- [ ] **QUE-05** Next (calls the next waiting token, records the interval and the counter)
+- [x] **QUE-05** Next (calls the next waiting token, records the interval and the counter)
 - [ ] **QUE-06** Skip (the token goes back behind the next N people, or to the end; pick one and document it)
 - [ ] **QUE-07** Pause / Resume (paused time is excluded from the wait estimate; waiting users see "paused")
-- [ ] **QUE-08** No-show → grace (default 10 min) → Admit late arrival as next, or expire when the timer ends
+- [x] **QUE-08** No-show → grace (default 10 min) → Admit late arrival as next, or expire when the timer ends
 - [ ] **QUE-09** Close for the day: remaining tokens expire, paid ones are refunded via M8
 - [ ] **QUE-10** Leave (customer) at any time. Cancel with a refund inside the cancel window (via M8).
-- [ ] **QUE-11** Triage insert (free, staff), with a daily cap
+- [x] **QUE-11** Triage insert (free, staff), with a daily cap
 - [ ] **QUE-12** Undo the last Next within ~30 s (staff mis-tap)
 
 **Wait estimates**
@@ -119,7 +119,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 **Timers, live updates, persistence**
 - [ ] **QUE-16** Single-alarm scheduler covering grace expiries, snapshot flushes (≤ 30 s) and hourly analytics flushes
-- [ ] **QUE-17** WebSocket updates per token (now serving, people ahead, range, state). Hibernation API.
+- [x] **QUE-17** WebSocket updates per token (now serving, people ahead, range, state). Hibernation API.
 - [ ] **QUE-18** Map snapshot written to D1 on change (waiting, range, open)
 - [ ] **QUE-19** Finished tokens written to `token_history`. Hourly counters written to `analytics_hourly`.
 - [ ] **QUE-20** State survives a Durable Object restart (everything is in its storage)
@@ -127,32 +127,32 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 ## M4 Walk-in join
 
-- [ ] **JON-01** In-app QR scanner (camera permission request, permission denied → explanation + settings link)
-- [ ] **JON-02** Scanning `qpeer://q/<id>` with the phone's camera opens the app on the join screen
-- [ ] **JON-03** Join screen shows the business, queue, people waiting and the wait range **before** joining
-- [ ] **JON-04** Location check: permission request, one high-accuracy reading, `accuracy` and `mocked` sent. Location is not stored.
+- [x] **JON-01** In-app QR scanner (camera permission request, permission denied → explanation + settings link)
+- [x] **JON-02** Scanning `qpeer://q/<id>` with the phone's camera opens the app on the join screen
+- [x] **JON-03** Join screen shows the business, queue, people waiting and the wait range **before** joining
+- [x] **JON-04** Location check: permission request, one high-accuracy reading, `accuracy` and `mocked` sent. Location is not stored.
 - [ ] **JON-05** Clear errors: too far, fake location, no fix (> 1 km), queue closed/paused/full, already have a token
 - [ ] **JON-06** Location permission denied → explanation, and "ask staff to add you" (x) as the fallback
 - [ ] **JON-07** Free-lane strikes: 3 no-shows in 30 days → free joins blocked for a set time, with a clear message
 
 ## M5 Token experience
 
-- [ ] **TOK-01** Token screen: big number, now serving, people ahead, wait range, be-back-by / leave-home-by, state badge
-- [ ] **TOK-02** Live updates via WebSocket. **Reconnects automatically** after network loss or app background.
-- [ ] **TOK-03** Correct state on reopen (fetched fresh, even if alerts were missed)
+- [x] **TOK-01** Token screen: big number, now serving, people ahead, wait range, be-back-by / leave-home-by, state badge
+- [x] **TOK-02** Live updates via WebSocket. **Reconnects automatically** after network loss or app background.
+- [x] **TOK-03** Correct state on reopen (fetched fresh, even if alerts were missed)
 - [ ] **TOK-04** States shown distinctly: waiting, paused, called (counter N), grace, served, expired, left, cancelled/refunded
 - [ ] **TOK-05** Leave queue (confirm dialog). Cancel paid token (shows refund or no-refund before confirming).
-- [ ] **TOK-06** "My tokens" list: active first, then recent history. Empty state.
+- [x] **TOK-06** "My tokens" list: active first, then recent history. Empty state.
 - [ ] **TOK-07** Directions button opens the phone's maps app at the business pin
 
 ## M6 Alerts
 
-- [ ] **ALR-01** Ask notification permission at the right time (first join), with an explanation
+- [x] **ALR-01** Ask notification permission at the right time (first join), with an explanation
 - [ ] **ALR-02** Register the Expo push token. **Update it when it changes.** Remove it on sign-out.
 - [ ] **ALR-03** Alerts: head back now, you're next, called (counter N), grace started, refund issued, queue paused/closed
 - [ ] **ALR-04** No duplicate alerts (flags per token per alert type)
-- [ ] **ALR-05** Tapping an alert opens that token's screen
-- [ ] **ALR-06** Android notification channel with high importance. In-app guide to turn off battery optimisation.
+- [x] **ALR-05** Tapping an alert opens that token's screen
+- [x] **ALR-06** Android notification channel with high importance. In-app guide to turn off battery optimisation.
 - [ ] **ALR-07** Business console alerts: late arrival waiting in grace (optional sound)
 
 ## M7 Map & discovery

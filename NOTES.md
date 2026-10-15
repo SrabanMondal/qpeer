@@ -131,3 +131,20 @@ Signed in with a Firebase test phone number.
 - **UI kit**: `NumberBadge`, `StatRow`, `ToastHost` + `lib/toast.ts` (single global banner).
 - **Decisions**: Waiting rows offer Skip only (the API allows No-show only for CALLED tokens). Battery tip dismissal and the console's queue choice are kept in memory only (no storage module installed). Foreground alerts show in-app rather than as a system banner, so they are not shown twice.
 - **Deferred**: the join screen can show the walk-in radius only to members, because the public `QueueView` has no settings → add `joinRadiusM` to the public queue view (backend). Leave-home-by on the ticket (needs a phone location reading; TOK-01 partial). Persist tip dismissal / console queue choice once a storage module is in the build. Sound for ALR-07. Add person (EXT-01). Paid cancel with refund (Step 4).
+
+### Step 2 device check — 2026-10-15/16, Samsung Galaxy A9 (Android 10), dev build + Metro
+One phone in both roles (procedure at the top of this file). Signed in with a Firebase test phone number.
+- ✅ **Console:** open queue (Live badge), triage T1 (cap 5 → 4), NEXT, No-show → grace, Admit, Served, live counts.
+- ✅ **QR join:** owner scanned the laptop-screen QR with the in-app scanner **and** with the phone's camera app (deep link) → join screen → ticket #1. Location permission was already granted (from Set pin), so no prompt. GPS check passed with plain GPS (no Google Location Accuracy) against a pin set from the same phone.
+- ✅ **Live updates:** ticket ↔ console update instantly; Waiting → "Your turn · Counter 1".
+- ✅ **Alerts:** "It's your turn · Please go to counter 1 now" on the `queue-alerts` channel with the app in the background; tapping opens the ticket. **Cold start:** app process killed after the alert arrived (`am kill`, like a swipe-away) → tapping the alert started the app straight on the ticket. Server-side `push_tickets` rows confirmed (`called`, `grace_started`, status `sent`).
+- ✅ **Leave:** confirm dialog → "You left the queue"; D1 `tokens` row `LEFT` / `end_reason left`; snapshot `waiting 0`. Rejoin via `qpeer://q/<id>` deep link → #2.
+- ✅ **Offline:** airplane mode on the ticket → "Reconnecting… pull down to refresh", last state kept; back online → Live again within ~35 s with fresh data, no manual refresh.
+- ✅ **Step 1 fixes re-checked:** B2 (keyboard keeps field + Save visible), B3 (compact Business pill), B4 (radius 20 → red error, typing 150 clears it), B7 (invalid hours → alert + day marked), B8 (Discard changes? on back).
+- Note: **force-stop** blocks FCM delivery and clears the app's notifications (Android behaviour) — test alerts with swipe-away/`am kill`, never `am force-stop`.
+
+### Bugs found in the Step 2 device check
+- **B9 (bug):** the phone's clock is ~11.5 min fast vs the server; the app computes countdowns with the phone clock → a fresh 10-min grace showed "Time is up — expiring" at once, the ticket's grace countdown was missing, and server times ("Joined") disagree with the status bar. Fix: estimate the server clock offset (HTTP `Date` header or a `serverTime` field) and use server-corrected time for every countdown.
+- **B10 (minor):** on a small screen the console's Undo bar and lists sit below the fold.
+- **B11 (watch):** once, a burst of quick taps on the hours screen ended with the app process killed by the system (no crash in logcat). Not reproduced.
+- **B12 (dev only):** the dev-build "Tools" gear overlaps the Business header pill.
