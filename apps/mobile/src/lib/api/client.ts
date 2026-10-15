@@ -12,6 +12,8 @@ export class ApiError extends Error {
   readonly requestId: string | undefined;
   /** Field problems for `invalid_input`. */
   readonly issues: ValidationIssue[];
+  /** The raw `details` of the error body (e.g. `{ distanceM, joinRadiusM }` for `too_far`). */
+  readonly details: unknown;
 
   constructor(opts: {
     status: number;
@@ -19,6 +21,7 @@ export class ApiError extends Error {
     message?: string;
     requestId?: string;
     issues?: ValidationIssue[];
+    details?: unknown;
   }) {
     super(opts.message ?? messageForCode(opts.code, opts.status));
     this.name = "ApiError";
@@ -26,6 +29,7 @@ export class ApiError extends Error {
     this.code = opts.code;
     this.requestId = opts.requestId;
     this.issues = opts.issues ?? [];
+    this.details = opts.details;
   }
 }
 
@@ -112,6 +116,7 @@ export async function apiFetch<T>(
       requestId:
         (parsed.success ? parsed.data.requestId : undefined) ?? headerRequestId,
       issues: issues?.success ? issues.data : undefined,
+      details: parsed.success ? parsed.data.details : undefined,
     });
   }
 
