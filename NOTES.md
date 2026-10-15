@@ -68,3 +68,25 @@
 - Google link leaves `displayName` empty (Firebase doesn't copy it on link). Fill it from the Google profile after linking (IDN-06).
 - `@cloudflare/vitest-pool-workers` is renamed to `@cloudflare/vitest-plugin`; migrate before the next backend task.
 - Biome reports the `recommended` field in `biome.json` as deprecated; run `biome migrate`.
+
+### Step 1 device check — 2026-10-15, Samsung Galaxy A9 (Android 10), dev build + Metro
+Signed in with a Firebase test phone number.
+- ✅ Icons (Material Symbols via expo-symbols) render on Android; tabs, dark theme and cards match the design guide.
+- ✅ App recovers by itself when the network returns.
+- ✅ Profile: edit display name saved (IDN-06). Mode switch → Business tabs; mode survives kill + relaunch (IDN-08).
+- ✅ Create business: empty submit shows field errors; valid submit opens the business screen with "Not listed yet: add a pin / add a queue".
+- ✅ Set pin: fixed centre pin, coordinates follow the map, save works, banner updates (BIZ-03). Without device location it falls back to Jammu with a clear message.
+- ✅ Hours editor: add range, overlap → blocked with "Ranges must not overlap" marked in red; Sunday shows Closed (BIZ-06). A valid save was not checked.
+- ✅ Create queue "OPD" with default settings; QR screen + Share link (share sheet opened, nothing sent); business becomes "Listed on the map" (BIZ-07, BIZ-10, BIZ-14 partial).
+- ✅ Deactivate (with confirm) → Inactive; Activate → Listed again (BIZ-08 core, NFR-13).
+- Not checked on device: edit profile fields, move pin later, settings validation (radius 20), rename/archive queue, sign out, light theme.
+
+### Bugs and polish from the Step 1 device check
+- **B1 (bug):** offline launch with a signed-in user hangs on "Starting…" (waits for `/v1/me`) and retries the ID token about twice a second without backoff. Expected: open with the last known mode + an offline/"Connecting…" banner, back off retries.
+- **B2:** keyboard covers the Save button on the profile name editor (needs keyboard-aware scrolling on forms).
+- **B3:** Business header is cramped: the "Business" toggle label runs into the "My businesses" title.
+- **B4:** field errors stay visible after the value becomes valid; they should clear as the user types.
+- **B5 (note):** the phone's device location was off; the walk-in GPS check (Step 2) needs a clear "turn on location" path.
+- **B6 (UX):** hours editor is long (7 large cards); add "Copy to weekdays"/"Copy to all" later.
+- **B7:** on an invalid hours save, the dialog doesn't scroll to the first invalid day.
+- **B8:** leaving a form with unsaved edits discards them silently; ask "Discard changes?".

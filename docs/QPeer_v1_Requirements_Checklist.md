@@ -63,35 +63,35 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **IDN-03** Phone sign-in with Firebase test numbers (OTP screen, wrong-code error, resend) *(sign-in works; wrong-code and resend still to check)*
 - [ ] **IDN-04** Upgrade anonymous → Google/phone **keeps the same user and their tokens** (account linking, not a new account)
 - [ ] **IDN-05** "Credential already in use" during upgrade is handled (sign in to the existing account; anonymous tokens are moved or a clear message is shown)
-- [ ] **IDN-06** Profile screen: view name, email/phone and sign-in method; **edit display name**
+- [x] **IDN-06** Profile screen: view name, email/phone and sign-in method; **edit display name**
 - [ ] **IDN-07** Sign out (returns to anonymous). Sign out is blocked or warned while holding an active paid token.
-- [ ] **IDN-08** Mode switch Customer ↔ Business. Business mode is only offered to non-anonymous users. The chosen mode is remembered.
+- [x] **IDN-08** Mode switch Customer ↔ Business. Business mode is only offered to non-anonymous users. The chosen mode is remembered.
 - [ ] **IDN-09** Session survives app restart. An expired token is refreshed silently.
 - [ ] **IDN-10** Paid and business actions are rejected by the API for anonymous users (server-side, not just hidden buttons)
 
 ## M2 Business
 
 **Profile**
-- [ ] **BIZ-01** Create a business: name, category (clinic, lab, service centre, salon, other), address, phone (optional)
+- [x] **BIZ-01** Create a business: name, category (clinic, lab, service centre, salon, other), address, phone (optional)
 - [ ] **BIZ-02** **Edit** every profile field later
-- [ ] **BIZ-03** Set the map pin by dragging the map / tapping, centred on the current location or the typed address area
+- [x] **BIZ-03** Set the map pin by dragging the map / tapping, centred on the current location or the typed address area
 - [ ] **BIZ-04** **Move the pin later** (edit location). The map snapshot follows immediately.
 - [ ] **BIZ-05** Opening hours per weekday (open/closed, from–to). **Edit later.** "Closed today" is handled.
-- [ ] **BIZ-06** Validation: required fields, a pin is required before going live, sensible hours (from < to)
-- [ ] **BIZ-07** Business is hidden from the map until it has a pin and at least one queue
-- [ ] **BIZ-08** **Deactivate business** (hidden from the map, queues closed; data kept). Reactivate.
+- [x] **BIZ-06** Validation: required fields, a pin is required before going live, sensible hours (from < to)
+- [x] **BIZ-07** Business is hidden from the map until it has a pin and at least one queue
+- [ ] **BIZ-08** **Deactivate business** (hidden from the map, queues closed; data kept). Reactivate. *(hide/reactivate works; closing open queues comes with Step 2)*
 - [ ] **BIZ-09** An owner can have more than one business and switch between them in Business mode
 
 **Queues**
-- [ ] **BIZ-10** Create a queue (name, e.g. "OPD", "Sample collection")
+- [x] **BIZ-10** Create a queue (name, e.g. "OPD", "Sample collection")
 - [ ] **BIZ-11** **Rename** a queue. **Archive** a queue (only when it has no waiting tokens).
 - [ ] **BIZ-12** Queue settings with defaults: join radius, walk-in quota, reservation fee, grace minutes, cancel window, counters, max size. **Edit later**; changes apply to new tokens only.
 - [ ] **BIZ-13** Open / close a queue for the day from the console. Closed queues reject joins.
-- [ ] **BIZ-14** QR code per queue: show full screen, **share as an image**, save to the gallery for printing
-- [ ] **BIZ-15** Business list, empty state ("Create your first business"), and loading/error states on every business screen
+- [ ] **BIZ-14** QR code per queue: show full screen, **share as an image**, save to the gallery for printing *(full screen + share link work; image share/save needs the next native build)*
+- [x] **BIZ-15** Business list, empty state ("Create your first business"), and loading/error states on every business screen
 
 **Access**
-- [ ] **BIZ-16** Only the owner can edit a business or its queues (enforced in the API)
+- [x] **BIZ-16** Only the owner can edit a business or its queues (enforced in the API)
 - [ ] **BIZ-17 (x)** Invite staff by phone/email with a "staff" role (console only)
 
 ## M3 Queue engine (backend)
