@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { LatLng } from "./geo";
 import { defaultWeeklyHours, WeeklyHours } from "./hours";
+import { QueueLiveSummary } from "./queue";
 import { QueueSettings, QueueSettingsPatch } from "./queue-settings";
 
 export const BusinessCategory = z.enum([
@@ -101,6 +102,11 @@ export const QueueView = z.object({
   settingsVersion: z.number().int().optional(),
   /** Deep link encoded in the queue QR code: `qpeer://q/<id>`. */
   joinUrl: z.string(),
+  /**
+   * Map snapshot (≤ ~30 s old) in business views; null until the queue's first
+   * snapshot is written. Absent in queue create/update responses.
+   */
+  live: QueueLiveSummary.nullable().optional(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });
@@ -134,7 +140,7 @@ export const MyBusinessesResponse = z.object({
 
 export type MyBusinessesResponse = z.infer<typeof MyBusinessesResponse>;
 
-/** GET /v1/queues/:id — public queue info (JON-03). Live summary comes in Step 2. */
+/** GET /v1/queues/:id — public queue info + live summary from the QueueDO (JON-03). */
 export const QueueInfoResponse = z.object({
   queue: QueueView,
   business: z.object({
@@ -147,6 +153,7 @@ export const QueueInfoResponse = z.object({
     listed: z.boolean(),
   }),
   myRole: BusinessRole.nullable(),
+  live: QueueLiveSummary,
 });
 
 export type QueueInfoResponse = z.infer<typeof QueueInfoResponse>;

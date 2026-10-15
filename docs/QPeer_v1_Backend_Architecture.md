@@ -189,10 +189,11 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `business_members` | business_id, user_id, role (`owner`/`staff`) | pk(business_id, user_id), idx(user_id) | 1 |
 | `queues` | id, business_id, name, status (`active`/`archived`), settings_json, settings_version | idx(business_id) | 1 |
 | `queue_snapshots` | queue_id (pk), business_id, lat, lng, is_open, is_paused, waiting, eta_low_ms, eta_high_ms, now_serving, updated_at | idx(lat, lng) | 2 |
-| `tokens` | id, queue_id, session_id, business_id, user_id, number, series (`R`/`P`/`T`), class, method (`walkin`/`remote`/`staff`), state, joined_at, called_at, served_at, ended_at, end_reason, payment_id | idx(user_id, state), idx(queue_id, session_id), unique(queue_id, session_id, series, number) | 2 |
+| `tokens` | id, queue_id, session_id, business_id, user_id (null for triage), number, series (`R`/`P`/`T`), class, method (`walkin`/`remote`/`staff`), state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev | idx(user_id, state), idx(queue_id, session_id), unique(queue_id, session_id, series, number) | 2 |
 | `devices` | user_id, expo_push_token, platform, last_seen_at | pk(expo_push_token), idx(user_id) | 2 |
-| `push_tickets` | id (Expo ticket id), token_id, kind, sent_at, receipt_checked_at, status | idx(receipt_checked_at) | 2 |
-| `free_lane_strikes` | user_id, at (one row per no-show) | idx(user_id, at) | 2 |
+| `push_tickets` | id (Expo ticket id), token_id, expo_push_token, kind, sent_at, receipt_checked_at, status | idx(receipt_checked_at) | 2 |
+| `free_lane_strikes` | id (outbox id), user_id, token_id, at (one row per no-show) | idx(user_id, at) | 2 |
+| `outbox_receipts` | id (QueueDO outbox id), kind, applied_at — dedupe for additive analytics upserts | pk(id) | 2 |
 | `payments` | id, user_id, queue_id, business_id, token_id, kind (`reservation`/`priority`), amount_paise, razorpay_order_id, razorpay_payment_id, status, refund_id, expires_at | unique(razorpay_order_id), unique(razorpay_payment_id), idx(user_id), idx(status, expires_at) | 4 |
 | `ledger_entries` | id, payment_id, business_id, kind (`capture`/`refund`/`forfeit`/`business_share`/`platform_share`), amount_paise, at | idx(business_id, at), idx(payment_id) — **append-only** | 4 |
 | `webhook_events` | id (Razorpay event id), type, received_at, processed_at | pk(id) — dedupe | 4 |
@@ -242,7 +243,7 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 
 ### 9.4 Order and "people ahead"
 
-`sortKey = classRank * 1e12 + sequence`, where `classRank` is 0 for triage, 1 for priority, 2 for regular, and `sequence` increases per allocation (for remote reservations: at payment confirmation).
+`sortKey = classRank * 1e15 + sequence * 1024`, where `classRank` is 0 for triage, 1 for priority, 2 for regular, and `sequence` increases per allocation (for remote reservations: at payment confirmation). The gaps of 1024 let a skip take a key between two neighbours; when a gap is used up, the waiting list is renumbered (`ordering.ts`).
 - **People ahead** = `COUNT(*) WHERE state = 'WAITING' AND sortKey < mine`, using an index on `(state, sortKey)`. This is exact after leaves, cancels and skips, and fast for thousands of tokens, so the Fenwick tree from the early design isn't needed.
 - **Priority limit** (when enabled): a priority token's sequence is pushed back so that at most 1 priority entry is served per `priorityPerRegular` regular tokens.
 - **Skip** gives the token a new sequence equal to "after the next N waiting tokens" (N = 3 by default) — decided once, documented in tests.
@@ -293,21 +294,21 @@ The DO never writes to D1 or sends pushes inline in a way that could be lost. In
 
 | Outbox kind | Target | Idempotency |
 |---|---|---|
-| `token_upsert` | D1 `tokens` | upsert by token id, guarded by state order (never move backwards) |
+| `token_upsert` | D1 `tokens` | upsert by token id, guarded by a per-token `rev` that only goes up (never move backwards) |
 | `snapshot` | D1 `queue_snapshots` | upsert by queue id with `updated_at` guard |
-| `analytics` | D1 `analytics_hourly` | additive upsert keyed by (queue_id, hour_start); each outbox item applied once (outbox id stored in the batch) |
+| `analytics` | D1 `analytics_hourly` | additive upsert keyed by (queue_id, hour_start); each outbox item applied once (outbox id inserted into `outbox_receipts` in the same batch) |
 | `strike` | D1 `free_lane_strikes` | insert with outbox id as row id |
 | `forfeit` / `refund_request` | Worker payments service (via D1 `payments` status + cron pickup) | payment status transitions are idempotent |
 | `push` | Expo Push API | dedupe by (token id, alert kind) flag set before sending |
 
 ### 9.9 Live updates (WebSocket protocol)
 
-- The app opens `wss://…/v1/queues/:queueId/live?tokenId=…` (Firebase token in `Sec-WebSocket-Protocol` or a short-lived ticket — Step 2 decides; never in a URL query). The Worker authorizes, then forwards the upgrade to the DO.
-- Hibernation API: `ctx.acceptWebSocket(ws, [tokenId])`; attachment stores the token id.
-- Server → client messages (`protocol.ts`, zod in shared):
-  - `{ type: "token", token: TokenView }` — personal state: number, state, peopleAhead, nowServing, etaLow/High, beBackBy/leaveHomeBy, counter
-  - `{ type: "queue", status, nowServing, waiting }` — for staff consoles
-  - `{ type: "ping" }` every 30 s
+- The app opens `wss://…/v1/queues/:queueId/live?tokenId=…` (or `?console=1` for staff) with `Authorization: Bearer <Firebase ID token>` on the upgrade request — never a token in the URL (§23). The Worker authorizes, then forwards the upgrade to the DO.
+- Hibernation API: `ctx.acceptWebSocket(ws, ["t:<tokenId>" | "console"])`; the attachment stores `{ kind, tokenId }`.
+- Server → client messages (`protocol.ts`, `LiveMessage` zod union in shared):
+  - `{ type: "token", token: TokenView }` — personal state: number, state, peopleAhead, nowServing, etaLow/High, beBackBy, counter (leaveHomeBy is computed by the app)
+  - `{ type: "queue", console: ConsoleState }` — full state for staff consoles
+  - `{ type: "pong" }` — reply to the client's `{"type":"ping"}` heartbeat (every 30 s), sent by the Hibernation auto-response
 - Clients reconnect with backoff and always refetch `GET /v1/tokens/:id` after reconnecting (TOK-02, TOK-03). The socket is a fast path, never the only path.
 - Fan-out: on each change, sockets for tokens within the first ~20 positions get an update immediately; others at most every 30 s (they don't need every Next).
 
@@ -394,7 +395,7 @@ Cron handlers are thin and call the same services as the API, so they are tested
 ## 15. Rate Limiting
 
 - Queue-level limits are enforced by the DO itself (one active free token per user per queue, paid cap per user, max size, triage cap).
-- Endpoint-level limits (join, order, verify) use a simple per-user fixed window counter. v1 implementation: the Workers Rate Limiting binding if available on the plan, otherwise a small D1 counter table keyed by `(user_id, action, window)`. Decided in Step 2.
+- Endpoint-level limits (join, order, verify) use a simple per-user fixed window counter. v1 implementation: the Workers Rate Limiting binding if available on the plan, otherwise a small D1 counter table keyed by `(user_id, action, window)`. **Step 2 decision: deferred** (NFR-11, `TODO(NFR-11)` at the join route); only the DO's queue-level caps exist so far.
 - OTP and sign-in abuse are handled by Firebase.
 
 ---
@@ -513,8 +514,19 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 
 | Question | Step |
 |---|---|
-| WebSocket auth: Firebase token in `Sec-WebSocket-Protocol` vs short-lived ticket from `POST /v1/queues/:id/live-ticket` | 2 |
-| Rate limiting: Workers Rate Limiting binding vs D1 counters | 2 |
-| Skip semantics: behind next 3 vs to the end | 2 |
 | Razorpay Route availability in test mode (split in ledger only if not) | 4 |
 | Priority Pass rules (limit or none) — setting already supported | 6 |
+
+### Decided in Step 2
+
+| Question | Decision |
+|---|---|
+| WebSocket auth | The client sends `Authorization: Bearer <Firebase ID token>` on the upgrade request (React Native's WebSocket supports headers). Tokens are never accepted in the URL. The Worker authorises (token owner, or staff with `?console=1`) and forwards only the upgrade to the DO. |
+| Rate limiting | Only the queue-level caps in the DO for now (one active free token per user per queue, max size, paid cap, triage cap). Endpoint limits (NFR-11) are deferred; `TODO(NFR-11)` marks the join route. |
+| Skip semantics | The skipped token is re-sequenced behind the next **3** waiting tokens, or to the end if fewer remain. A skipped CALLED token re-enters behind the first 3 waiting. |
+| Heartbeat | Client sends `{"type":"ping"}` every 30 s; the DO's Hibernation auto-response answers `{"type":"pong"}` without waking the object (no server pings, no alarm wake-ups). |
+| Console live message | `{ type: "queue", console: ConsoleState }` (full state) instead of only status/nowServing/waiting, so the console never refetches after a push. |
+| D1 token upsert guard | A per-token `rev` that only goes up (instead of a state order), because admit (GRACE → CALLED) and undo move states "backwards" legitimately. |
+| Snapshot wait range | `queue_snapshots.eta_low_ms/eta_high_ms` and `QueueLiveSummary.waitLowMs/waitHighMs` are **durations** for a new joiner (absolute times would go stale in an idle snapshot). |
+| Staff joining their own queue | Allowed: owners/staff may walk-in join as customers (one phone plays both roles in device tests; staff of small businesses queue too). |
+| Free-lane block | 3 no-shows (grace expiry of a free walk-in) within 30 days → `users.free_lane_blocked_until` = last strike + 7 days. |

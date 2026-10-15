@@ -29,6 +29,10 @@
     "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
     "ENVIRONMENT": "local"
   },
+  // Must match the expressions in src/cron/jobs.ts.
+  "triggers": {
+    "crons": ["*/15 * * * *", "0 * * * *"]
+  },
   "env": {
     "dev": {
       "d1_databases": [
@@ -56,6 +60,9 @@
       "vars": {
         "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
         "ENVIRONMENT": "dev"
+      },
+      "triggers": {
+        "crons": ["*/15 * * * *", "0 * * * *"]
       }
     },
     "demo": {
@@ -84,6 +91,9 @@
       "vars": {
         "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
         "ENVIRONMENT": "demo"
+      },
+      "triggers": {
+        "crons": ["*/15 * * * *", "0 * * * *"]
       }
     }
   }

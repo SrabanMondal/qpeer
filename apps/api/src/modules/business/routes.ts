@@ -19,6 +19,7 @@ import * as service from "./service";
 const ctx = (c: Context<AppEnv>): service.ServiceCtx => ({
   db: db(c.env.DB),
   now: c.get("clock").now(),
+  env: c.env,
 });
 
 const ownerOfBusiness = [
@@ -87,7 +88,7 @@ export const businessRoutes = new Hono<AppEnv>()
   })
   .get("/queues/:id", async (c) => {
     const info = await service.getQueueInfo(
-      db(c.env.DB),
+      ctx(c),
       c.req.param("id"),
       currentUser(c).id,
     );
