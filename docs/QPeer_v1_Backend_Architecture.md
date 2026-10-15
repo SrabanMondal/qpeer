@@ -185,7 +185,7 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | Table | Key columns | Indexes / constraints | Step |
 |---|---|---|---|
 | `users` | id, firebase_uid, is_anonymous, phone, email, display_name, free_lane_blocked_until | unique(firebase_uid) | 0 (migrate to ms in 1) |
-| `businesses` | id, owner_user_id, name, category, address, phone, lat, lng, geohash, hours_json, status (`draft`/`active`/`inactive`) | idx(status, lat, lng), idx(owner_user_id) | 1 |
+| `businesses` | id, owner_user_id, name, category, address, phone, lat (nullable until pinned), lng, geohash, hours_json, status (`active`/`inactive`, owner toggle) | idx(status, lat, lng), idx(owner_user_id) | 1 |
 | `business_members` | business_id, user_id, role (`owner`/`staff`) | pk(business_id, user_id), idx(user_id) | 1 |
 | `queues` | id, business_id, name, status (`active`/`archived`), settings_json, settings_version | idx(business_id) | 1 |
 | `queue_snapshots` | queue_id (pk), business_id, lat, lng, is_open, is_paused, waiting, eta_low_ms, eta_high_ms, now_serving, updated_at | idx(lat, lng) | 2 |
@@ -200,6 +200,8 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `reviews` *(x)* | id, token_id, business_id, user_id, stars, text | unique(token_id) | 6 |
 
 **Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, `priorityFeePaise` 10000, `priorityPerRegular` 0 (off), `businessSharePct` 70, `graceMinutes` 10, `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2. Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only.
+
+**Listed on the map** is derived, not stored: `status = active` AND the business has a pin AND at least one non-archived queue (BIZ-07). Responses include `listed: boolean` and, for owners, `missingForListing: ("pin" | "queue")[]`.
 
 **Business hours** (`hours_json`): `{ mon: [{ from: "09:00", to: "13:00" }, ...], ... }` — multiple ranges per day, empty array = closed.
 
