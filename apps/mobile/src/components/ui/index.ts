@@ -9,7 +9,7 @@ export { Icon, type IconName } from "./icon";
 export { InfoRow } from "./info-row";
 export { ListItem } from "./list-item";
 export { ModeSwitch } from "./mode-switch";
-export { Screen } from "./screen";
+export { Screen, type ScreenHandle } from "./screen";
 export { SectionHeader } from "./section-header";
 export { EmptyState, ErrorState, LoadingState } from "./states";
 export { StatusBanner, type StatusTone } from "./status-banner";

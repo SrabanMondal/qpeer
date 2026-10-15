@@ -4,7 +4,6 @@ import { StatusBar } from "expo-status-bar";
 import {
   Badge,
   Button,
-  ConnectionBanner,
   EmptyState,
   ErrorState,
   ListItem,
@@ -39,7 +38,6 @@ export default function BusinessTab() {
     >
       {/* Light status-bar icons over the dark header band. */}
       {focused ? <StatusBar style="light" /> : null}
-      <ConnectionBanner />
       {list.isPending ? (
         <LoadingState label="Loading your businesses…" />
       ) : list.isError ? (

@@ -1,6 +1,6 @@
 import { DisplayName } from "@qpeer/shared";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
@@ -8,7 +8,6 @@ import {
   Button,
   Card,
   ConfirmDialog,
-  ConnectionBanner,
   ErrorState,
   InfoRow,
   ListItem,
@@ -22,7 +21,15 @@ import { Spacing } from "@/constants/theme";
 import { useUpdateMe } from "@/lib/api";
 import { authErrorMessage, providerOf, useAuth } from "@/lib/auth";
 import { errorText } from "@/lib/error-messages";
+import { type FieldErrors, useFieldErrors } from "@/lib/form";
 import { goHome, useAppMode, useModeToggle } from "@/lib/mode";
+import { useBackPressGuard } from "@/lib/unsaved-changes";
+
+function validateDisplayName(name: string): FieldErrors {
+  return DisplayName.safeParse(name).success
+    ? {}
+    : { name: "Enter a name of 1 to 60 characters." };
+}
 
 const PROVIDER_LABELS: Record<string, string> = {
   anonymous: "Guest (not signed in)",
@@ -47,28 +54,28 @@ export default function ProfileTab() {
 
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
-  const [nameError, setNameError] = useState<string | null>(null);
+  const nameForm = useFieldErrors(validateDisplayName);
   const [signingOut, setSigningOut] = useState(false);
 
   const profile = me.data?.user;
+  const nameDirty = editingName && name !== (profile?.displayName ?? "");
+  const closeNameEditor = useCallback(() => setEditingName(false), []);
+  // B8: Android back while the name has unsaved edits asks first.
+  useBackPressGuard(nameDirty, closeNameEditor);
 
   const startEditName = () => {
     setName(profile?.displayName ?? "");
-    setNameError(null);
+    nameForm.reset();
     setEditingName(true);
   };
 
   const saveName = async () => {
-    const parsed = DisplayName.safeParse(name);
-    if (!parsed.success) {
-      setNameError("Enter a name of 1 to 60 characters.");
-      return;
-    }
+    if (!nameForm.validateAll(name)) return;
     try {
-      await updateMe.mutateAsync({ displayName: parsed.data });
+      await updateMe.mutateAsync({ displayName: name.trim() });
       setEditingName(false);
     } catch (e) {
-      setNameError(errorText(e));
+      nameForm.showErrors({ name: errorText(e) });
     }
   };
 
@@ -99,8 +106,6 @@ export default function ProfileTab() {
         void me.refetch();
       }}
     >
-      <ConnectionBanner />
-
       <SectionHeader title="Mode" />
       <Card>
         <ModeSwitch
@@ -135,8 +140,11 @@ export default function ProfileTab() {
               <TextField
                 label="Display name"
                 value={name}
-                onChangeText={setName}
-                error={nameError}
+                onChangeText={(v) => {
+                  setName(v);
+                  nameForm.revalidate(v, "name");
+                }}
+                error={nameForm.errors.name}
                 autoFocus
                 maxLength={60}
                 autoCapitalize="words"

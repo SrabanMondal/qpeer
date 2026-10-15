@@ -1,5 +1,5 @@
 import Mapbox from "@rnmapbox/maps";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import {
   DarkTheme,
   DefaultTheme,
@@ -13,19 +13,11 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { config } from "@/config";
 import { Type } from "@/constants/theme";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
-import { ApiError } from "@/lib/api";
 import { AuthProvider } from "@/lib/auth";
+import { createQueryClient, useAppFocusRefetch } from "@/lib/network";
 
 if (config.mapboxToken) {
   Mapbox.setAccessToken(config.mapboxToken);
-}
-
-/** Retry once, but never on 4xx answers: retrying cannot change them. */
-function shouldRetry(failureCount: number, error: unknown): boolean {
-  if (error instanceof ApiError && error.status >= 400 && error.status < 500) {
-    return false;
-  }
-  return failureCount < 1;
 }
 
 /**
@@ -35,14 +27,9 @@ function shouldRetry(failureCount: number, error: unknown): boolean {
 export default function RootLayout() {
   const dark = useIsDark();
   const colors = useTheme();
-  const [queryClient] = useState(
-    () =>
-      new QueryClient({
-        defaultOptions: {
-          queries: { retry: shouldRetry, staleTime: 30_000 },
-        },
-      }),
-  );
+  // Retries back off 1 s → 30 s on network errors (B1); see lib/network.ts.
+  const [queryClient] = useState(createQueryClient);
+  useAppFocusRefetch(queryClient);
 
   const base = dark ? DarkTheme : DefaultTheme;
   const navTheme: Theme = {
