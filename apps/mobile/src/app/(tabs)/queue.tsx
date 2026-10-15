@@ -1,4 +1,4 @@
-import { ConnectionBanner, EmptyState, Screen } from "@/components/ui";
+import { EmptyState, Screen } from "@/components/ui";
 import { useAppMode } from "@/lib/mode";
 
 /** Customer: my tickets. Business: queue console. Both arrive in Step 2. */
@@ -6,7 +6,6 @@ export default function QueueTab() {
   const { mode } = useAppMode();
   return (
     <Screen bottomInset={false}>
-      <ConnectionBanner />
       {mode === "business" ? (
         <EmptyState
           icon="queue"

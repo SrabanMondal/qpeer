@@ -29,6 +29,23 @@ export class ApiError extends Error {
   }
 }
 
+/** Firebase reports a failed token refresh offline as `auth/network-request-failed`. */
+function isFirebaseNetworkError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const { code, message } = error as { code?: unknown; message?: unknown };
+  if (code === "auth/network-request-failed") return true;
+  return typeof message === "string" && /network/i.test(message);
+}
+
+/**
+ * True when the request never reached the API (no connection, DNS, timeout,
+ * or the ID token could not be refreshed offline). Retrying can fix these.
+ */
+export function isNetworkError(error: unknown): boolean {
+  if (error instanceof ApiError) return error.status === 0;
+  return isFirebaseNetworkError(error);
+}
+
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 /**
@@ -42,7 +59,15 @@ export async function apiFetch<T>(
 ): Promise<T> {
   const user = getAuth().currentUser;
   if (!user) throw new ApiError({ status: 401, code: "no_user" });
-  const token = await getIdToken(user);
+  let token: string;
+  try {
+    // Uses the cached token; only an expired one is refreshed over the network.
+    token = await getIdToken(user);
+  } catch (e) {
+    if (isFirebaseNetworkError(e))
+      throw new ApiError({ status: 0, code: "network" });
+    throw e;
+  }
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${token}`,

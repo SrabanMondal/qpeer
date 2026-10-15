@@ -3,13 +3,18 @@ import {
   CreateBusinessBody,
   UpdateBusinessBody,
 } from "@qpeer/shared";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert } from "react-native";
 
 import { Button, ChoiceChips, TextField } from "@/components/ui";
 import { ApiError } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
-import { apiFieldErrors, type FieldErrors, zodFieldErrors } from "@/lib/form";
+import {
+  apiFieldErrors,
+  type FieldErrors,
+  useFieldErrors,
+  zodFieldErrors,
+} from "@/lib/form";
 import { CATEGORY_CHOICES } from "@/lib/format";
 
 export type BusinessProfileValues = {
@@ -36,59 +41,94 @@ function friendly(errors: FieldErrors): FieldErrors {
   return out;
 }
 
+type Draft = {
+  name: string;
+  category: BusinessCategory | null;
+  address: string;
+  phone: string;
+};
+
+function toDraft(initial?: BusinessProfileValues): Draft {
+  return {
+    name: initial?.name ?? "",
+    category: initial?.category ?? null,
+    address: initial?.address ?? "",
+    phone: initial?.phone ?? "",
+  };
+}
+
+function sameDraft(a: Draft, b: Draft): boolean {
+  return (
+    a.name === b.name &&
+    a.category === b.category &&
+    a.address === b.address &&
+    a.phone === b.phone
+  );
+}
+
+function validateDraft(mode: "create" | "edit", draft: Draft): FieldErrors {
+  const trimmedPhone = draft.phone.trim();
+  const candidate = {
+    name: draft.name,
+    category: draft.category ?? undefined,
+    address: draft.address,
+    phone: mode === "create" ? trimmedPhone || undefined : trimmedPhone || null,
+  };
+  const parsed =
+    mode === "create"
+      ? CreateBusinessBody.safeParse(candidate)
+      : UpdateBusinessBody.safeParse(candidate);
+  return parsed.success ? {} : friendly(zodFieldErrors(parsed.error));
+}
+
 /**
  * Profile fields of a business (BIZ-01 create, BIZ-02 edit), validated on the
- * phone with the same shared zod schemas the API uses (BIZ-06).
+ * phone with the same shared zod schemas the API uses (BIZ-06). Errors clear
+ * as soon as a field becomes valid (B4). `onDirtyChange` reports unsaved
+ * edits so the screen can guard leaving (B8).
  */
 export function BusinessForm({
   mode,
   initial,
   submitLabel,
   onSubmit,
+  onDirtyChange,
 }: {
   mode: "create" | "edit";
   initial?: BusinessProfileValues;
   submitLabel: string;
   onSubmit: (values: BusinessProfileValues) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const [name, setName] = useState(initial?.name ?? "");
-  const [category, setCategory] = useState<BusinessCategory | null>(
-    initial?.category ?? null,
-  );
-  const [address, setAddress] = useState(initial?.address ?? "");
-  const [phone, setPhone] = useState(initial?.phone ?? "");
-  const [errors, setErrors] = useState<FieldErrors>({});
+  const [start] = useState(() => toDraft(initial));
+  const [draft, setDraft] = useState<Draft>(start);
+  const form = useFieldErrors((d: Draft) => validateDraft(mode, d));
   const [saving, setSaving] = useState(false);
 
+  const dirty = !sameDraft(draft, start);
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  const change = <K extends keyof Draft>(field: K, value: Draft[K]) => {
+    const next = { ...draft, [field]: value };
+    setDraft(next);
+    form.revalidate(next, field);
+  };
+
   const submit = async () => {
-    const trimmedPhone = phone.trim();
-    const candidate = {
-      name,
-      category: category ?? undefined,
-      address,
-      phone:
-        mode === "create" ? trimmedPhone || undefined : trimmedPhone || null,
-    };
-    const parsed =
-      mode === "create"
-        ? CreateBusinessBody.safeParse(candidate)
-        : UpdateBusinessBody.safeParse(candidate);
-    if (!parsed.success) {
-      setErrors(friendly(zodFieldErrors(parsed.error)));
-      return;
-    }
-    setErrors({});
+    if (!form.validateAll(draft)) return;
     setSaving(true);
     try {
       await onSubmit({
-        name: name.trim(),
-        category: category as BusinessCategory,
-        address: address.trim(),
-        phone: trimmedPhone || null,
+        name: draft.name.trim(),
+        category: draft.category as BusinessCategory,
+        address: draft.address.trim(),
+        phone: draft.phone.trim() || null,
       });
     } catch (e) {
       if (e instanceof ApiError && e.issues.length > 0) {
-        setErrors(friendly(apiFieldErrors(e.issues)));
+        form.showErrors(friendly(apiFieldErrors(e.issues)));
       } else {
         Alert.alert("Could not save", errorText(e));
       }
@@ -97,12 +137,13 @@ export function BusinessForm({
     }
   };
 
+  const { errors } = form;
   return (
     <>
       <TextField
         label="Business name"
-        value={name}
-        onChangeText={setName}
+        value={draft.name}
+        onChangeText={(v) => change("name", v)}
         error={errors.name}
         placeholder="e.g. City Clinic"
         autoCapitalize="words"
@@ -111,14 +152,14 @@ export function BusinessForm({
       <ChoiceChips
         label="Category"
         options={CATEGORY_CHOICES}
-        value={category}
-        onChange={setCategory}
+        value={draft.category}
+        onChange={(v) => change("category", v)}
         error={errors.category}
       />
       <TextField
         label="Address"
-        value={address}
-        onChangeText={setAddress}
+        value={draft.address}
+        onChangeText={(v) => change("address", v)}
         error={errors.address}
         placeholder="Street, area, city"
         multiline
@@ -127,8 +168,8 @@ export function BusinessForm({
       />
       <TextField
         label="Phone (optional)"
-        value={phone}
-        onChangeText={setPhone}
+        value={draft.phone}
+        onChangeText={(v) => change("phone", v)}
         error={errors.phone}
         placeholder="+91 98765 43210"
         keyboardType="phone-pad"

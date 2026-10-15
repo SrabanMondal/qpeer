@@ -1,7 +1,9 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useState } from "react";
 
 import { ErrorState, LoadingState, Screen } from "@/components/ui";
 import { useBusiness, useUpdateBusiness } from "@/lib/api";
+import { useUnsavedChangesGuard } from "@/lib/unsaved-changes";
 import { BusinessForm } from "@/screens/business-form";
 
 /** BIZ-02: edit every profile field. */
@@ -10,6 +12,8 @@ export default function EditBusinessScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const business = useBusiness(id);
   const update = useUpdateBusiness(id);
+  const [dirty, setDirty] = useState(false);
+  const allowLeave = useUnsavedChangesGuard(dirty);
 
   if (!business.data) {
     return (
@@ -39,6 +43,7 @@ export default function EditBusinessScreen() {
           phone: b.phone,
         }}
         submitLabel="Save changes"
+        onDirtyChange={setDirty}
         onSubmit={async (v) => {
           await update.mutateAsync({
             name: v.name,
@@ -46,6 +51,7 @@ export default function EditBusinessScreen() {
             address: v.address,
             phone: v.phone,
           });
+          allowLeave();
           router.back();
         }}
       />

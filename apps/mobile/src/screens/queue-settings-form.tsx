@@ -3,7 +3,7 @@ import {
   type QueueSettings,
   QueueSettingsPatch,
 } from "@qpeer/shared";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
@@ -11,7 +11,7 @@ import { Button, Card, SectionHeader, TextField } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { ApiError } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
-import { apiFieldErrors, type FieldErrors } from "@/lib/form";
+import { apiFieldErrors, type FieldErrors, useFieldErrors } from "@/lib/form";
 import { formatRupees, paiseToRupeesText } from "@/lib/format";
 
 type SettingKey = keyof QueueSettings;
@@ -139,43 +139,70 @@ function fromText(spec: FieldSpec, text: string): number | null {
   return Number(t);
 }
 
-/** BIZ-12: queue settings with defaults; saved with PATCH /v1/queues/:id. */
+type Texts = Record<string, string>;
+
+function textsOf(settings: QueueSettings): Texts {
+  return Object.fromEntries(
+    FIELDS.map((f) => [f.key, toText(f, settings[f.key])]),
+  );
+}
+
+/** Reads every field; `errors` is empty when all are in range. */
+function readTexts(text: Texts): {
+  patch: Record<string, number>;
+  errors: FieldErrors;
+} {
+  const patch: Record<string, number> = {};
+  const errors: FieldErrors = {};
+  for (const f of FIELDS) {
+    const value = fromText(f, text[f.key] ?? "");
+    const { min, max } = bounds(f.key);
+    if (value === null || value < min || value > max) {
+      errors[f.key] =
+        f.kind === "rupees"
+          ? `Enter an amount from ${rangeText(f)}, e.g. 20 or 20.50.`
+          : `Enter a whole number from ${rangeText(f)}.`;
+    } else {
+      patch[f.key] = value;
+    }
+  }
+  return { patch, errors };
+}
+
+/**
+ * BIZ-12: queue settings with defaults; saved with PATCH /v1/queues/:id.
+ * Errors clear as soon as a field becomes valid (B4); `onDirtyChange`
+ * reports unsaved edits so the screen can guard leaving (B8).
+ */
 export function QueueSettingsForm({
   settings,
   disabled,
   onSave,
+  onDirtyChange,
 }: {
   settings: QueueSettings;
   disabled: boolean;
   onSave: (patch: QueueSettingsPatch) => Promise<void>;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const [text, setText] = useState<Record<string, string>>(() =>
-    Object.fromEntries(FIELDS.map((f) => [f.key, toText(f, settings[f.key])])),
-  );
-  const [errors, setErrors] = useState<FieldErrors>({});
+  const [text, setText] = useState<Texts>(() => textsOf(settings));
+  const form = useFieldErrors((t: Texts) => readTexts(t).errors);
+  const { errors } = form;
   const [saving, setSaving] = useState(false);
 
+  // Compared by value with the saved settings ("20" = "20.00"), so after a
+  // successful save the form is clean again.
+  const dirty = FIELDS.some(
+    (f) => fromText(f, text[f.key] ?? "") !== settings[f.key],
+  );
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
   const save = async () => {
-    const patch: Record<string, number> = {};
-    const next: FieldErrors = {};
-    for (const f of FIELDS) {
-      const value = fromText(f, text[f.key] ?? "");
-      const { min, max } = bounds(f.key);
-      if (value === null || value < min || value > max) {
-        next[f.key] =
-          f.kind === "rupees"
-            ? `Enter an amount from ${rangeText(f)}, e.g. 20 or 20.50.`
-            : `Enter a whole number from ${rangeText(f)}.`;
-      } else {
-        patch[f.key] = value;
-      }
-    }
-    const parsed = QueueSettingsPatch.safeParse(patch);
-    if (Object.keys(next).length > 0 || !parsed.success) {
-      setErrors(next);
-      return;
-    }
-    setErrors({});
+    if (!form.validateAll(text)) return;
+    const parsed = QueueSettingsPatch.safeParse(readTexts(text).patch);
+    if (!parsed.success) return;
     setSaving(true);
     try {
       await onSave(parsed.data);
@@ -187,7 +214,7 @@ export function QueueSettingsForm({
         for (const [path, msg] of Object.entries(apiFieldErrors(e.issues))) {
           byField[path.replace(/^settings\./, "")] = msg;
         }
-        setErrors(byField);
+        form.showErrors(byField);
       } else {
         Alert.alert("Could not save settings", errorText(e));
       }
@@ -211,9 +238,11 @@ export function QueueSettingsForm({
                 key={f.key}
                 label={f.unit ? `${f.label} (${f.unit})` : f.label}
                 value={text[f.key] ?? ""}
-                onChangeText={(v) =>
-                  setText((prev) => ({ ...prev, [f.key]: v }))
-                }
+                onChangeText={(v) => {
+                  const next = { ...text, [f.key]: v };
+                  setText(next);
+                  form.revalidate(next, f.key);
+                }}
                 keyboardType={
                   f.kind === "rupees" ? "decimal-pad" : "number-pad"
                 }

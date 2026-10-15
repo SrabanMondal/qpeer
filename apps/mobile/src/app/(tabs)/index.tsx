@@ -1,6 +1,6 @@
 import { Redirect } from "expo-router";
 
-import { ConnectionBanner, EmptyState, Screen } from "@/components/ui";
+import { EmptyState, Screen } from "@/components/ui";
 import { useAppMode } from "@/lib/mode";
 
 /** Customer Home. The live queue map (Step 3) replaces the placeholder. */
@@ -11,7 +11,6 @@ export default function HomeTab() {
 
   return (
     <Screen bottomInset={false}>
-      <ConnectionBanner />
       <EmptyState
         icon="map"
         title="Discover queues in Jammu"

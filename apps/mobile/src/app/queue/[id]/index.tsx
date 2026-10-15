@@ -1,4 +1,4 @@
-import { defaultQueueSettings } from "@qpeer/shared";
+import { CreateQueueBody, defaultQueueSettings } from "@qpeer/shared";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Alert } from "react-native";
@@ -17,7 +17,16 @@ import {
 } from "@/components/ui";
 import { ApiError, useArchiveQueue, useQueue, useUpdateQueue } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
+import { type FieldErrors, useFieldErrors } from "@/lib/form";
+import { useUnsavedChangesGuard } from "@/lib/unsaved-changes";
 import { QueueSettingsForm } from "@/screens/queue-settings-form";
+
+function validateQueueName(name: string): FieldErrors {
+  const parsed = CreateQueueBody.shape.name.safeParse(name);
+  return parsed.success
+    ? {}
+    : { name: "Enter a queue name of 1 to 40 characters." };
+}
 
 /** BIZ-11 rename/archive, BIZ-12 settings, BIZ-14 QR entry point. */
 export default function QueueScreen() {
@@ -27,7 +36,11 @@ export default function QueueScreen() {
   const update = useUpdateQueue(id);
   const archive = useArchiveQueue(id);
   const [name, setName] = useState<string | null>(null);
-  const [nameError, setNameError] = useState<string | null>(null);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const nameForm = useFieldErrors(validateQueueName);
+  // B8: unsaved name or settings edits ask before leaving.
+  const nameDirty = name !== null && name !== queue.data?.queue.name;
+  useUnsavedChangesGuard(nameDirty || settingsDirty);
 
   if (!queue.data) {
     return (
@@ -51,17 +64,12 @@ export default function QueueScreen() {
   const editedName = name ?? q.name;
 
   const saveName = async () => {
-    const trimmed = editedName.trim();
-    if (trimmed.length < 1 || trimmed.length > 40) {
-      setNameError("Enter a queue name of 1 to 40 characters.");
-      return;
-    }
-    setNameError(null);
+    if (!nameForm.validateAll(editedName)) return;
     try {
-      await update.mutateAsync({ name: trimmed });
+      await update.mutateAsync({ name: editedName.trim() });
       setName(null);
     } catch (e) {
-      setNameError(errorText(e));
+      nameForm.showErrors({ name: errorText(e) });
     }
   };
 
@@ -119,8 +127,11 @@ export default function QueueScreen() {
         <TextField
           label="Queue name"
           value={editedName}
-          onChangeText={setName}
-          error={nameError}
+          onChangeText={(v) => {
+            setName(v);
+            nameForm.revalidate(v, "name");
+          }}
+          error={nameForm.errors.name}
           editable={!archived}
           maxLength={40}
           autoCapitalize="words"
@@ -139,6 +150,7 @@ export default function QueueScreen() {
         key={q.id}
         settings={q.settings ?? defaultQueueSettings()}
         disabled={archived}
+        onDirtyChange={setSettingsDirty}
         onSave={async (settings) => {
           await update.mutateAsync({ settings });
         }}

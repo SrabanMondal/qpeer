@@ -1,4 +1,5 @@
 import { Tabs } from "expo-router/js-tabs";
+import { useEffect, useState } from "react";
 import type { ColorValue } from "react-native";
 import { HeaderModeSwitch } from "@/components/header-mode-switch";
 import { ThemedView } from "@/components/themed-view";
@@ -7,6 +8,9 @@ import { Type } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useAuth } from "@/lib/auth";
 import { useAppMode } from "@/lib/mode";
+
+/** Longest wait for the first /v1/me answer before the tabs open anyway. */
+const STARTUP_WAIT_MS = 2500;
 
 function tabIcon(name: IconName) {
   return ({ color, size }: { color: ColorValue; size: number }) => (
@@ -23,11 +27,33 @@ export default function TabsLayout() {
   const theme = useTheme();
   const { initializing } = useAuth();
   const { mode, me, registered } = useAppMode();
+  const [waitedLongEnough, setWaitedLongEnough] = useState(false);
+  // Once the tabs are shown they stay shown (B1). Before, a refetch of /v1/me
+  // without data reset the query to "pending", which put "Starting…" back,
+  // unmounted the tabs, and the remounted screens refetched again: a loop.
+  const [opened, setOpened] = useState(false);
 
-  // A registered user may have chosen Business mode: wait for /v1/me so the
-  // wrong set of tabs never flashes. On error, fall back to Customer mode
-  // (Profile shows the error with Retry).
-  if (initializing || (registered && !me.data && !me.isError)) {
+  // A registered user may have chosen Business mode: briefly wait for the
+  // first /v1/me answer so the wrong set of tabs does not flash. Never block
+  // on the network: on the first failure (e.g. offline) or after 2.5 s, open
+  // in Customer mode and switch when /v1/me arrives.
+  const settled =
+    !initializing &&
+    (!registered ||
+      me.data !== undefined ||
+      me.isError ||
+      me.failureCount > 0 ||
+      waitedLongEnough);
+  // Latch during render (React's "derived state" pattern, no extra effect).
+  if (settled && !opened) setOpened(true);
+
+  useEffect(() => {
+    if (initializing) return;
+    const timer = setTimeout(() => setWaitedLongEnough(true), STARTUP_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [initializing]);
+
+  if (!opened && !settled) {
     return (
       <ThemedView style={{ flex: 1, justifyContent: "center" }}>
         <LoadingState label="Starting…" />
@@ -79,10 +105,15 @@ export default function TabsLayout() {
           href: businessOnly,
           tabBarIcon: tabIcon("storefront"),
           // Dark header band with the mode toggle (business-interface.jpg).
+          // B3: title on the left takes the free space and truncates; the
+          // toggle is a compact pill on the right that never shrinks.
           headerStyle: { backgroundColor: theme.header },
           headerTintColor: theme.onPrimary,
           headerTitleStyle: { ...Type.heading, color: theme.onPrimary },
-          headerLeft: () => <HeaderModeSwitch />,
+          headerTitleAlign: "left",
+          headerTitleContainerStyle: { flex: 1, maxWidth: "100%" },
+          headerRightContainerStyle: { flexGrow: 0, flexBasis: "auto" },
+          headerRight: () => <HeaderModeSwitch />,
         }}
       />
       <Tabs.Screen

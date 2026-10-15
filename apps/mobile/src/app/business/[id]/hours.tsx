@@ -6,7 +6,7 @@ import {
   WeeklyHours,
 } from "@qpeer/shared";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { Alert, StyleSheet, Switch, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
@@ -19,32 +19,76 @@ import {
   HeaderButton,
   LoadingState,
   Screen,
+  type ScreenHandle,
   StatusBanner,
 } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useBusiness, useUpdateBusiness } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
-import { type FieldErrors, zodFieldErrors } from "@/lib/form";
+import { type FieldErrors, useFieldErrors, zodFieldErrors } from "@/lib/form";
 import {
   formatDay,
   todayInIndia,
   todayText,
   WEEKDAY_LABELS,
 } from "@/lib/format";
+import { useUnsavedChangesGuard } from "@/lib/unsaved-changes";
 
 const MAX_RANGES = 3;
 const DEFAULT_RANGE: HoursRange = { from: "09:00", to: "18:00" };
 
-function sortDay(ranges: DayHours): DayHours {
-  return ranges
-    .map((r) => ({ from: normalizeTime(r.from), to: normalizeTime(r.to) }))
-    .sort((a, b) => (a.from < b.from ? -1 : a.from > b.from ? 1 : 0));
+function normalizeDay(ranges: DayHours): DayHours {
+  return ranges.map((r) => ({
+    from: normalizeTime(r.from),
+    to: normalizeTime(r.to),
+  }));
 }
 
+/** Indexes of `ranges` in start-time order. */
+function startOrder(ranges: DayHours): number[] {
+  return ranges
+    .map((_, i) => i)
+    .sort((a, b) =>
+      ranges[a].from < ranges[b].from
+        ? -1
+        : ranges[a].from > ranges[b].from
+          ? 1
+          : a - b,
+    );
+}
+
+/** Normalised times, ranges sorted by start: what is saved. */
 function cleanHours(hours: WeeklyHours): WeeklyHours {
   const out = { ...hours };
-  for (const day of WEEKDAYS) out[day] = sortDay(hours[day]);
+  for (const day of WEEKDAYS) {
+    const ranges = normalizeDay(hours[day]);
+    out[day] = startOrder(ranges).map((i) => ranges[i]);
+  }
+  return out;
+}
+
+/**
+ * Validates the hours as they will be saved (sorted), but reports errors at
+ * the positions the user sees ("mon.1.from"), so a fix clears its own red
+ * mark while typing (B4).
+ */
+function validateHours(hours: WeeklyHours): FieldErrors {
+  const parsed = WeeklyHours.safeParse(cleanHours(hours));
+  if (parsed.success) return {};
+  const errors = zodFieldErrors(parsed.error);
+  const out: FieldErrors = {};
+  for (const [path, message] of Object.entries(errors)) {
+    const [day, index, ...rest] = path.split(".");
+    const ranges = hours[day as Weekday];
+    const sortedIndex = Number(index);
+    if (!ranges || !Number.isInteger(sortedIndex)) {
+      out[path] = message;
+      continue;
+    }
+    const shownIndex = startOrder(normalizeDay(ranges))[sortedIndex];
+    out[[day, shownIndex, ...rest].join(".")] = message;
+  }
   return out;
 }
 
@@ -91,28 +135,44 @@ function HoursEditor({
   const router = useRouter();
   const update = useUpdateBusiness(businessId);
   const [hours, setHours] = useState<WeeklyHours>(initial);
-  const [errors, setErrors] = useState<FieldErrors>({});
+  const form = useFieldErrors(validateHours);
+  const { errors } = form;
   const today = todayInIndia();
+  const screen = useRef<ScreenHandle>(null);
+  const dayTop = useRef<Partial<Record<Weekday, number>>>({});
+
+  // B8: compare what would be saved, so retyping "9" as "09:00" is not a change.
+  const dirty =
+    JSON.stringify(cleanHours(hours)) !== JSON.stringify(cleanHours(initial));
+  const allowLeave = useUnsavedChangesGuard(dirty);
 
   const setDay = (day: Weekday, ranges: DayHours) => {
-    setHours((prev) => ({ ...prev, [day]: ranges }));
-    setErrors({});
+    const next = { ...hours, [day]: ranges };
+    setHours(next);
+    form.revalidate(next, day);
   };
 
   const save = async () => {
-    const cleaned = cleanHours(hours);
-    setHours(cleaned);
-    const parsed = WeeklyHours.safeParse(cleaned);
-    if (!parsed.success) {
-      setErrors(zodFieldErrors(parsed.error));
+    if (!form.validateAll(hours)) {
+      // B7: bring the first invalid day into view, then explain.
+      const firstBad = WEEKDAYS.find((day) =>
+        Object.keys(validateHours(hours)).some(
+          (p) => p === day || p.startsWith(`${day}.`),
+        ),
+      );
+      const y = firstBad ? dayTop.current[firstBad] : undefined;
+      if (y !== undefined) screen.current?.scrollTo(y - Spacing.three);
       Alert.alert(
         "Check the hours",
         "Some times are not valid. They are marked in red.",
       );
       return;
     }
+    const cleaned = cleanHours(hours);
+    setHours(cleaned);
     try {
-      await update.mutateAsync({ hours: parsed.data });
+      await update.mutateAsync({ hours: cleaned });
+      allowLeave();
       router.back();
     } catch (e) {
       Alert.alert("Could not save hours", errorText(e));
@@ -120,7 +180,7 @@ function HoursEditor({
   };
 
   return (
-    <Screen>
+    <Screen ref={screen}>
       <StatusBanner
         tone={hours[today].length > 0 ? "active" : "closed"}
         title={todayText(hours)}
@@ -128,14 +188,20 @@ function HoursEditor({
       />
 
       {WEEKDAYS.map((day) => (
-        <DayEditor
+        <View
           key={day}
-          day={day}
-          isToday={day === today}
-          ranges={hours[day]}
-          errors={errors}
-          onChange={(ranges) => setDay(day, ranges)}
-        />
+          onLayout={(e) => {
+            dayTop.current[day] = e.nativeEvent.layout.y;
+          }}
+        >
+          <DayEditor
+            day={day}
+            isToday={day === today}
+            ranges={hours[day]}
+            errors={errors}
+            onChange={(ranges) => setDay(day, ranges)}
+          />
+        </View>
       ))}
 
       <Button title="Save hours" onPress={save} loading={update.isPending} />
