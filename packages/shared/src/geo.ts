@@ -1,7 +1,12 @@
-export interface LatLng {
-  lat: number;
-  lng: number;
-}
+import { z } from "zod";
+
+/** A WGS84 point in decimal degrees. */
+export const LatLng = z.object({
+  lat: z.number().finite().min(-90).max(90),
+  lng: z.number().finite().min(-180).max(180),
+});
+
+export type LatLng = z.infer<typeof LatLng>;
 
 const EARTH_RADIUS_METERS = 6371008.8;
 

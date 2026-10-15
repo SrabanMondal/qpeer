@@ -1,12 +1,12 @@
 import { env } from "cloudflare:workers";
-import { MeResponse } from "@qpeer/shared";
+import { ErrorResponse, MeResponse } from "@qpeer/shared";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
 import { beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
-import { makeFirebaseVerifier } from "../src/auth";
 import { users } from "../src/db/schema";
+import { makeFirebaseVerifier } from "../src/middleware/auth";
 
 describe("API Skeleton and Auth", () => {
   const testProjectId = "test-firebase-project";
@@ -86,7 +86,7 @@ describe("API Skeleton and Auth", () => {
   it("2. missing header -> 401", async () => {
     const res = await app.fetch(new Request("http://localhost/v1/me"), env);
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: string; requestId?: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("unauthorized");
     expect(body.requestId).toBeDefined();
   });
@@ -99,7 +99,7 @@ describe("API Skeleton and Auth", () => {
       env,
     );
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: string; requestId?: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("unauthorized");
     expect(body.requestId).toBeDefined();
   });
@@ -113,7 +113,7 @@ describe("API Skeleton and Auth", () => {
       env,
     );
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("unauthorized");
   });
 
@@ -128,7 +128,7 @@ describe("API Skeleton and Auth", () => {
       env,
     );
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("unauthorized");
   });
 
@@ -142,7 +142,7 @@ describe("API Skeleton and Auth", () => {
       env,
     );
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("unauthorized");
   });
 
@@ -155,7 +155,7 @@ describe("API Skeleton and Auth", () => {
       env,
     );
     expect(res.status).toBe(401);
-    const body = (await res.json()) as { error: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("unauthorized");
   });
 
@@ -393,7 +393,7 @@ describe("API Skeleton and Auth", () => {
       { ...env, FIREBASE_PROJECT_ID: "" },
     );
     expect(res.status).toBe(500);
-    const body = (await res.json()) as { error: string; requestId?: string };
+    const body = ErrorResponse.parse(await res.json());
     expect(body.error).toBe("internal");
     expect(body.requestId).toBeDefined();
   });

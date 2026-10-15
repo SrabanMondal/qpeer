@@ -31,6 +31,25 @@
 - ✅ Sign-out returns to a fresh anonymous user (IDN-07 core).
 - ✅ Phone sign-in with a Firebase test number works (checked by the user, no rebuild needed). Wrong-code and resend paths not checked yet.
 
+## Step 1 backend — business module (2026-10-15, branch `feat/step1-backend`)
+- **Layout** now follows architecture doc §3: `src/env.ts`, `middleware/{request-context,auth,guards}.ts`, `lib/{errors,validate,time,ids,geo}.ts`, `db/{schema,client}.ts`, `modules/{identity,business,dev}/`. `src/auth.ts` moved into `middleware/auth.ts` (`makeFirebaseVerifier` still exported). `queue-do.ts` untouched (Step 2).
+- **Errors**: `AppError(status, code, message?, details?)` + `onError`; body `{ error, message?, requestId, details? }`; unknown routes → 404 `not_found`; validation → 400 `invalid_input` with `details: [{ path, message }]`.
+- **Guards**: `requireRegistered()` (403 `registration_required`), `requireBusinessRole(role, "business" | "queue")` → 404 when the business/queue is missing **or** the caller isn't a member, 403 `forbidden` for staff on owner routes.
+- **Endpoints**: `PATCH /v1/me`, `POST /v1/businesses`, `GET /v1/me/businesses`, `GET/PATCH /v1/businesses/:id`, `POST /v1/businesses/:id/{deactivate,activate,queues}`, `GET/PATCH /v1/queues/:id`, `POST /v1/queues/:id/archive`.
+- **Data**: migration `0001_step1_business.sql` adds `businesses`, `business_members`, `queues`, `users.free_lane_blocked_until`, and converts `users` timestamps seconds → ms (hand-added `UPDATE … * 1000` guarded by `< 1e11`). All timestamps are `integer(mode: "timestamp_ms")`.
+- **Shared**: `BusinessCategory`, `LatLng` (now a zod schema; the type is unchanged), `HoursRange`/`WeeklyHours`/`defaultWeeklyHours()`, `QueueSettings` (+ `QueueSettingsPatch`, defaults per §8), request bodies, `BusinessView`, `QueueView`, `MyBusinessesResponse`, `QueueInfoResponse`, `ErrorCode`, `ValidationIssue`; `ErrorResponse.error` is now the `ErrorCode` enum.
+- **Decisions**:
+  - The token `name` claim only fills `display_name` while it is empty, so a name set with `PATCH /me` survives later sign-ins (previously every request overwrote it).
+  - Request bodies are `.strict()` (unknown keys → 400). Update bodies need at least one field. `phone: null` clears the phone. The pin can be moved but not removed.
+  - Owner routes also run `requireRegistered()` first (defence in depth).
+  - Queue limit (10 active) is enforced in one `INSERT … SELECT … WHERE count < 10` so parallel creates can't exceed it.
+  - `settings_version` only increments when the merged settings actually differ; queue updates are guarded on the version read (409 `conflict` on a concurrent change).
+  - Archived queues: can't be edited (409 `invalid_state`), archive is idempotent, no unarchive yet. Members see archived queues; public views don't.
+  - Deactivate/activate are idempotent; `updated_at` only moves on a real status change.
+  - `GET /v1/queues/:id` returns `{ queue, business, myRole }`; 404 for non-members unless the queue is active and the business is listed.
+  - Lists are ordered oldest first and not paginated yet (a user has few businesses; max 10 active queues each).
+- **Deferred**: deactivation closing open queues, pushing new settings to QueueDO, `countActiveTokens` (returns 0, `// Step 2: ask QueueDO`), staff invites (BIZ-17), pagination of `/me/businesses`, `requireDevEnv` beyond "not demo".
+
 ### Follow-ups found in Step 0
 - First launch right after install once showed "Could not sign in: No internet connection"; a restart fixed it. Add an automatic retry with backoff for the anonymous sign-in (IDN-01 robustness).
 - Google link leaves `displayName` empty (Firebase doesn't copy it on link). Fill it from the Google profile after linking (IDN-06).
