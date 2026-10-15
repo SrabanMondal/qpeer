@@ -1,5 +1,13 @@
 # QPeer Build Progress Notes
 
+## Device test procedure: QR join with one phone (owner's instruction, 2026-10-15)
+There is only one test phone, so it plays both roles:
+1. **Business side:** switch the app to Business mode, open the queue → **Show QR code**, take a screenshot with `adb exec-out screencap -p`, crop/save it on the laptop (e.g. `G:\dev\qpeer\.orch\qr\<queue>.png`), and open it full-screen on the laptop display.
+2. Before joining, make sure the walk-in GPS check can pass: phone location **on**, and the business pin within the join radius of where the phone is (Set pin → **Use my location**, or temporarily raise the queue's join radius).
+3. **Customer side:** switch the app back to Customer mode (normal user profile).
+4. **Ask the owner** to scan the QR on the laptop screen with the phone (in-app scanner, and also the phone camera to test the deep link), then continue checking the ticket screen with adb screenshots.
+5. Drive the console (Next / No-show / Pause) through the API or by switching back to Business mode, and check the ticket updates live.
+
 ## Step 0: Foundations — Repo Tooling, Shared Package, and API Skeleton with Firebase Auth
 - **Repo tooling**: Biome 2.x configured at repo root with recommended lint rules and 2-space formatting; `.gitattributes` for LF line endings; `tsconfig.base.json` with strict mode; `AGENTS.md` and `CLAUDE.md` documenting monorepo conventions.
 - **Mobile workspace (`apps/mobile`)**: Expo SDK 57 app shell (template demo removed).
