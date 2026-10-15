@@ -10,4 +10,12 @@ export const queryKeys = {
   myBusinesses: (uid: string | null) => ["businesses", uid, "mine"] as const,
   business: (uid: string | null, id: string) => ["business", uid, id] as const,
   queue: (uid: string | null, id: string) => ["queue", uid, id] as const,
+  /** Staff console state of one queue (Step 2). */
+  console: (uid: string | null, queueId: string) =>
+    ["console", uid, queueId] as const,
+  token: (uid: string | null, id: string) => ["token", uid, id] as const,
+  /** Prefix for both "My tokens" lists. */
+  myTokensAll: (uid: string | null) => ["tokens", uid, "mine"] as const,
+  myTokens: (uid: string | null, status: "active" | "recent") =>
+    ["tokens", uid, "mine", status] as const,
 };

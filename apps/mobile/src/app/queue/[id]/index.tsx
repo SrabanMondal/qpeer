@@ -107,7 +107,7 @@ export default function QueueScreen() {
         detail={
           archived
             ? "Archived queues cannot be edited or joined."
-            : `${business.name} · opening and closing for the day comes with the console in Step 2.`
+            : `${business.name} · open, pause and close it for the day from the Queue tab (console).`
         }
       />
 

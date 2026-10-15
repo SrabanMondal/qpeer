@@ -143,6 +143,21 @@ export type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Work that must run while the old user is still signed in (e.g. ALR-02). */
+const beforeSignOutHooks = new Set<() => Promise<void>>();
+
+/**
+ * Registers a step to run before every sign-out, while the ID token of the
+ * user who is leaving still works (e.g. removing this phone's push token).
+ * Each step should finish quickly and never throw.
+ */
+export function onBeforeSignOut(hook: () => Promise<void>): () => void {
+  beforeSignOutHooks.add(hook);
+  return () => {
+    beforeSignOutHooks.delete(hook);
+  };
+}
+
 /** Waits between automatic anonymous sign-in attempts; the last one repeats. */
 const ANON_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
 
@@ -347,6 +362,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const signOut = useCallback(async () => {
+    await Promise.all(
+      [...beforeSignOutHooks].map((hook) => hook().catch(() => undefined)),
+    );
     if (config.googleWebClientId && GoogleSignin.hasPreviousSignIn()) {
       try {
         await GoogleSignin.signOut();

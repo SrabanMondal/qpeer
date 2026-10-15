@@ -1,16 +1,25 @@
-import { Redirect } from "expo-router";
+import { Redirect, useRouter } from "expo-router";
 
-import { EmptyState, Screen } from "@/components/ui";
+import { Button, EmptyState, Screen } from "@/components/ui";
 import { useAppMode } from "@/lib/mode";
 
 /** Customer Home. The live queue map (Step 3) replaces the placeholder. */
 export default function HomeTab() {
+  const router = useRouter();
   const { mode } = useAppMode();
   // Opened in Business mode (e.g. at launch): go to the business home.
   if (mode === "business") return <Redirect href="/business" />;
 
   return (
     <Screen bottomInset={false}>
+      {/* JON-01: the main way to join in v1. */}
+      <Button
+        title="Scan QR to join"
+        variant="brand"
+        icon="qr_code_scanner"
+        onPress={() => router.push("/scan")}
+        style={{ minHeight: 64 }}
+      />
       <EmptyState
         icon="map"
         title="Discover queues in Jammu"

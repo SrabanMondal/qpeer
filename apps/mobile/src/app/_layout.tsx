@@ -9,15 +9,28 @@ import {
 } from "expo-router";
 import { useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-
+import { ToastHost } from "@/components/ui";
 import { config } from "@/config";
 import { Type } from "@/constants/theme";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
 import { AuthProvider } from "@/lib/auth";
 import { createQueryClient, useAppFocusRefetch } from "@/lib/network";
+import { usePushSetup } from "@/lib/push";
 
 if (config.mapboxToken) {
   Mapbox.setAccessToken(config.mapboxToken);
+}
+
+/**
+ * A deep link (`qpeer://q/<id>`) or an alert tap on a cold start opens its
+ * screen on top of the tabs, so Back returns to the app (NFR-16).
+ */
+export const unstable_settings = { anchor: "(tabs)" };
+
+/** Push setup (ALR-01–06) needs the auth and query providers above it. */
+function PushSetup() {
+  usePushSetup();
+  return null;
 }
 
 /**
@@ -93,7 +106,15 @@ export default function RootLayout() {
                 name="queue/[id]/qr"
                 options={{ title: "QR code" }}
               />
+              <Stack.Screen name="scan" options={{ title: "Scan queue QR" }} />
+              <Stack.Screen name="q/[id]" options={{ title: "Join queue" }} />
+              <Stack.Screen
+                name="token/[id]"
+                options={{ title: "Your Ticket" }}
+              />
             </Stack>
+            <PushSetup />
+            <ToastHost />
           </ThemeProvider>
         </AuthProvider>
       </QueryClientProvider>
