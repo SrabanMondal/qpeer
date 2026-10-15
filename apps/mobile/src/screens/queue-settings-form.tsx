@@ -1,0 +1,241 @@
+import {
+  QUEUE_SETTINGS_DEFAULTS,
+  type QueueSettings,
+  QueueSettingsPatch,
+} from "@qpeer/shared";
+import { useState } from "react";
+import { Alert, View } from "react-native";
+
+import { ThemedText } from "@/components/themed-text";
+import { Button, Card, SectionHeader, TextField } from "@/components/ui";
+import { Spacing } from "@/constants/theme";
+import { ApiError } from "@/lib/api";
+import { errorText } from "@/lib/error-messages";
+import { apiFieldErrors, type FieldErrors } from "@/lib/form";
+import { formatRupees, paiseToRupeesText } from "@/lib/format";
+
+type SettingKey = keyof QueueSettings;
+
+type FieldSpec = {
+  key: SettingKey;
+  label: string;
+  /** "rupees": edited in ₹, stored in paise. */
+  kind: "int" | "rupees";
+  unit: string;
+  help?: string;
+};
+
+/** The fields owners edit in v1 (BIZ-12), grouped as on the design. */
+const GROUPS: { title: string; fields: FieldSpec[] }[] = [
+  {
+    title: "Joining",
+    fields: [
+      {
+        key: "joinRadiusM",
+        label: "Join radius",
+        kind: "int",
+        unit: "m",
+        help: "Walk-in check: GPS. People must be this close to your pin to join in person.",
+      },
+      {
+        key: "maxSize",
+        label: "Max queue size",
+        kind: "int",
+        unit: "people",
+      },
+      {
+        key: "walkinQuotaPct",
+        label: "Walk-in share",
+        kind: "int",
+        unit: "%",
+        help: "Share of places kept for people who are physically here.",
+      },
+    ],
+  },
+  {
+    title: "Fees",
+    fields: [
+      {
+        key: "reservationFeePaise",
+        label: "Reservation fee",
+        kind: "rupees",
+        unit: "₹",
+      },
+      {
+        key: "priorityFeePaise",
+        label: "Priority fee",
+        kind: "rupees",
+        unit: "₹",
+      },
+    ],
+  },
+  {
+    title: "Timing",
+    fields: [
+      {
+        key: "graceMinutes",
+        label: "Grace time",
+        kind: "int",
+        unit: "min",
+        help: "How long a called person has to arrive.",
+      },
+      {
+        key: "cancelWindowMin",
+        label: "Cancel window",
+        kind: "int",
+        unit: "min",
+        help: "Paid reservations can be cancelled up to this long before.",
+      },
+      {
+        key: "serviceMinutesHint",
+        label: "Typical service time",
+        kind: "int",
+        unit: "min",
+        help: "Used for wait estimates until real data exists.",
+      },
+    ],
+  },
+  {
+    title: "Counters",
+    fields: [
+      {
+        key: "counters",
+        label: "Counters serving this queue",
+        kind: "int",
+        unit: "",
+      },
+    ],
+  },
+];
+
+const FIELDS = GROUPS.flatMap((g) => g.fields);
+
+function bounds(key: SettingKey): { min: number; max: number } {
+  const num = QueueSettingsPatch.shape[key].unwrap();
+  return { min: num.minValue ?? 0, max: num.maxValue ?? 0 };
+}
+
+function show(spec: FieldSpec, value: number): string {
+  return spec.kind === "rupees" ? formatRupees(value) : `${value} ${spec.unit}`;
+}
+
+function rangeText(spec: FieldSpec): string {
+  const { min, max } = bounds(spec.key);
+  return `${show(spec, min)} to ${show(spec, max)}`.trim();
+}
+
+function toText(spec: FieldSpec, value: number): string {
+  return spec.kind === "rupees" ? paiseToRupeesText(value) : String(value);
+}
+
+/** Parses the typed text; null when it is not a number in the right format. */
+function fromText(spec: FieldSpec, text: string): number | null {
+  const t = text.trim();
+  if (spec.kind === "rupees") {
+    if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
+    return Math.round(Number(t) * 100);
+  }
+  if (!/^\d+$/.test(t)) return null;
+  return Number(t);
+}
+
+/** BIZ-12: queue settings with defaults; saved with PATCH /v1/queues/:id. */
+export function QueueSettingsForm({
+  settings,
+  disabled,
+  onSave,
+}: {
+  settings: QueueSettings;
+  disabled: boolean;
+  onSave: (patch: QueueSettingsPatch) => Promise<void>;
+}) {
+  const [text, setText] = useState<Record<string, string>>(() =>
+    Object.fromEntries(FIELDS.map((f) => [f.key, toText(f, settings[f.key])])),
+  );
+  const [errors, setErrors] = useState<FieldErrors>({});
+  const [saving, setSaving] = useState(false);
+
+  const save = async () => {
+    const patch: Record<string, number> = {};
+    const next: FieldErrors = {};
+    for (const f of FIELDS) {
+      const value = fromText(f, text[f.key] ?? "");
+      const { min, max } = bounds(f.key);
+      if (value === null || value < min || value > max) {
+        next[f.key] =
+          f.kind === "rupees"
+            ? `Enter an amount from ${rangeText(f)}, e.g. 20 or 20.50.`
+            : `Enter a whole number from ${rangeText(f)}.`;
+      } else {
+        patch[f.key] = value;
+      }
+    }
+    const parsed = QueueSettingsPatch.safeParse(patch);
+    if (Object.keys(next).length > 0 || !parsed.success) {
+      setErrors(next);
+      return;
+    }
+    setErrors({});
+    setSaving(true);
+    try {
+      await onSave(parsed.data);
+      Alert.alert("Settings saved", "Changes apply to new tokens.");
+    } catch (e) {
+      if (e instanceof ApiError && e.issues.length > 0) {
+        // API paths look like "settings.joinRadiusM".
+        const byField: FieldErrors = {};
+        for (const [path, msg] of Object.entries(apiFieldErrors(e.issues))) {
+          byField[path.replace(/^settings\./, "")] = msg;
+        }
+        setErrors(byField);
+      } else {
+        Alert.alert("Could not save settings", errorText(e));
+      }
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <>
+      <ThemedText type="small" themeColor="inkMuted">
+        Changes apply to new tokens. People already in the queue keep the rules
+        they joined with.
+      </ThemedText>
+      {GROUPS.map((group) => (
+        <View key={group.title} style={{ gap: Spacing.three }}>
+          <SectionHeader title={group.title} />
+          <Card>
+            {group.fields.map((f) => (
+              <TextField
+                key={f.key}
+                label={f.unit ? `${f.label} (${f.unit})` : f.label}
+                value={text[f.key] ?? ""}
+                onChangeText={(v) =>
+                  setText((prev) => ({ ...prev, [f.key]: v }))
+                }
+                keyboardType={
+                  f.kind === "rupees" ? "decimal-pad" : "number-pad"
+                }
+                editable={!disabled}
+                error={errors[f.key]}
+                hint={[
+                  f.help,
+                  `Default ${show(f, QUEUE_SETTINGS_DEFAULTS[f.key])}. Allowed ${rangeText(f)}.`,
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              />
+            ))}
+          </Card>
+        </View>
+      ))}
+      <Button
+        title="Save settings"
+        onPress={save}
+        loading={saving}
+        disabled={disabled}
+      />
+    </>
+  );
+}

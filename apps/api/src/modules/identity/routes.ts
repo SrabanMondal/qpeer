@@ -13,7 +13,7 @@ export const identityRoutes = new Hono<AppEnv>()
     const user = await updateMe(
       db(c.env.DB),
       c.get("clock").now(),
-      currentUser(c).id,
+      currentUser(c),
       body,
     );
     return c.json(toMeResponse(user));

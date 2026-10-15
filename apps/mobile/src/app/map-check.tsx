@@ -2,23 +2,28 @@ import { Camera, MapView, PointAnnotation } from "@rnmapbox/maps";
 import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { ThemedView } from "@/components/themed-view";
+import { Card, Screen } from "@/components/ui";
 import { config } from "@/config";
-import { Spacing } from "@/constants/theme";
+import { Radius } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 
 // Jammu city centre, [longitude, latitude] as Mapbox expects.
 const JAMMU: [number, number] = [74.857, 32.7266];
 
+/** Developer check: the Mapbox token works and a pin renders on Jammu. */
 export default function MapCheckScreen() {
+  const theme = useTheme();
   if (!config.mapboxToken) {
     return (
-      <ThemedView style={styles.message}>
-        <ThemedText type="smallBold">Mapbox token missing</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          Set EXPO_PUBLIC_MAPBOX_TOKEN in apps/mobile/.env.local (or the EAS
-          environment) and restart Metro.
-        </ThemedText>
-      </ThemedView>
+      <Screen>
+        <Card>
+          <ThemedText type="heading">Mapbox token missing</ThemedText>
+          <ThemedText type="small" themeColor="inkMuted">
+            Set EXPO_PUBLIC_MAPBOX_TOKEN in apps/mobile/.env.local (or the EAS
+            environment) and restart Metro.
+          </ThemedText>
+        </Card>
+      </Screen>
     );
   }
 
@@ -26,7 +31,12 @@ export default function MapCheckScreen() {
     <MapView style={styles.map}>
       <Camera centerCoordinate={JAMMU} zoomLevel={12} animationDuration={0} />
       <PointAnnotation id="jammu" coordinate={JAMMU} title="Jammu">
-        <View style={styles.pin} />
+        <View
+          style={[
+            styles.pin,
+            { backgroundColor: theme.brand, borderColor: theme.card },
+          ]}
+        />
       </PointAnnotation>
     </MapView>
   );
@@ -34,18 +44,10 @@ export default function MapCheckScreen() {
 
 const styles = StyleSheet.create({
   map: { flex: 1 },
-  message: {
-    flex: 1,
-    padding: Spacing.four,
-    gap: Spacing.two,
-    justifyContent: "center",
-  },
   pin: {
     width: 24,
     height: 24,
-    borderRadius: 12,
-    backgroundColor: "#208AEF",
+    borderRadius: Radius.pill,
     borderWidth: 3,
-    borderColor: "#ffffff",
   },
 });

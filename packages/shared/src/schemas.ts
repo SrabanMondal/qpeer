@@ -1,5 +1,12 @@
 import { z } from "zod";
 
+/** App mode (IDN-08). Only registered users may choose `business`. */
+export const AppMode = z.enum(["customer", "business"]);
+
+export type AppMode = z.infer<typeof AppMode>;
+
+export const DisplayName = z.string().trim().min(1).max(60);
+
 export const MeResponse = z.object({
   user: z.object({
     id: z.string(),
@@ -7,17 +14,23 @@ export const MeResponse = z.object({
     displayName: z.string().nullable(),
     email: z.string().nullable(),
     phone: z.string().nullable(),
+    /** Null until the user picks a mode; the app then shows Customer mode. */
+    preferredMode: AppMode.nullable(),
   }),
 });
 
 export type MeResponse = z.infer<typeof MeResponse>;
 
-/** PATCH /v1/me (IDN-06). */
+/** PATCH /v1/me (IDN-06, IDN-08). At least one field is required. */
 export const UpdateMeBody = z
   .object({
-    displayName: z.string().trim().min(1).max(60),
+    displayName: DisplayName.optional(),
+    preferredMode: AppMode.optional(),
   })
-  .strict();
+  .strict()
+  .refine((b) => b.displayName !== undefined || b.preferredMode !== undefined, {
+    message: "At least one of displayName or preferredMode is required",
+  });
 
 export type UpdateMeBody = z.infer<typeof UpdateMeBody>;
 

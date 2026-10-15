@@ -23,6 +23,8 @@ export const users = sqliteTable("users", {
   phone: text("phone"),
   email: text("email"),
   displayName: text("display_name"),
+  /** Last mode chosen in the app (IDN-08); null = never chosen (app shows Customer). */
+  preferredMode: text("preferred_mode", { enum: ["customer", "business"] }),
   /** Unused until Step 2 (free-lane no-show blocking). */
   freeLaneBlockedUntil: ms("free_lane_blocked_until"),
   createdAt: ms("created_at").notNull(),

@@ -1,86 +1,29 @@
-import { Platform, StyleSheet, Text, type TextProps } from "react-native";
+import { Text, type TextProps } from "react-native";
 
-import { Fonts, type ThemeColor } from "@/constants/theme";
+import { type ThemeColor, Type, type TypeToken } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 
 export type ThemedTextProps = TextProps & {
-  type?:
-    | "default"
-    | "title"
-    | "small"
-    | "smallBold"
-    | "subtitle"
-    | "link"
-    | "linkPrimary"
-    | "code";
+  /** Type token from the design guide; default `body`. */
+  type?: TypeToken;
+  /** Colour token; default `ink`. */
   themeColor?: ThemeColor;
 };
 
+/** Text in a type-scale token and a colour token. Scales with the phone's font size. */
 export function ThemedText({
   style,
-  type = "default",
+  type = "body",
   themeColor,
   ...rest
 }: ThemedTextProps) {
   const theme = useTheme();
-
   return (
     <Text
-      style={[
-        { color: theme[themeColor ?? "text"] },
-        type === "default" && styles.default,
-        type === "title" && styles.title,
-        type === "small" && styles.small,
-        type === "smallBold" && styles.smallBold,
-        type === "subtitle" && styles.subtitle,
-        type === "link" && styles.link,
-        type === "linkPrimary" && styles.linkPrimary,
-        type === "code" && styles.code,
-        style,
-      ]}
+      // The huge display numbers may grow only so far, to stay on screen.
+      maxFontSizeMultiplier={type === "display" ? 1.3 : undefined}
+      style={[{ color: theme[themeColor ?? "ink"] }, Type[type], style]}
       {...rest}
     />
   );
 }
-
-const styles = StyleSheet.create({
-  small: {
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: 500,
-  },
-  smallBold: {
-    fontSize: 14,
-    lineHeight: 20,
-    fontWeight: 700,
-  },
-  default: {
-    fontSize: 16,
-    lineHeight: 24,
-    fontWeight: 500,
-  },
-  title: {
-    fontSize: 48,
-    fontWeight: 600,
-    lineHeight: 52,
-  },
-  subtitle: {
-    fontSize: 32,
-    lineHeight: 44,
-    fontWeight: 600,
-  },
-  link: {
-    lineHeight: 30,
-    fontSize: 14,
-  },
-  linkPrimary: {
-    lineHeight: 30,
-    fontSize: 14,
-    color: "#3c87f7",
-  },
-  code: {
-    fontFamily: Fonts.mono,
-    fontWeight: Platform.select({ android: 700 }) ?? 500,
-    fontSize: 12,
-  },
-});

@@ -12,6 +12,7 @@ import {
   signInAnonymously,
   signInWithCredential,
   type User,
+  updateProfile,
   verifyPhoneNumber,
 } from "@react-native-firebase/auth";
 import {
@@ -123,8 +124,15 @@ export type AuthContextValue = {
   /** Changes whenever the user's providers may have changed. */
   revision: number;
   initializing: boolean;
-  /** Set when the automatic anonymous sign-in failed. */
+  /**
+   * True while the automatic anonymous sign-in keeps failing and is being
+   * retried (IDN-01). Show a small "Connecting…" state, not an error.
+   */
+  connecting: boolean;
+  /** The last anonymous sign-in failure, for a detail line under "Connecting…". */
   error: string | null;
+  /** Try the anonymous sign-in again now (manual Retry). */
+  retry: () => void;
   /** Returns false when the user cancelled the Google dialog. */
   signInWithGoogle: () => Promise<boolean>;
   /** Sends the SMS code. Resolves to true if Android verified the number automatically. */
@@ -135,45 +143,86 @@ export type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/** Waits between automatic anonymous sign-in attempts; the last one repeats. */
+const ANON_RETRY_DELAYS_MS = [1000, 2000, 4000, 8000, 15000];
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>({ user: null, revision: 0 });
   const [initializing, setInitializing] = useState(true);
+  const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const anonymousInFlight = useRef(false);
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const failedAttempts = useRef(0);
   const verificationId = useRef<string | null>(null);
 
   const publish = useCallback((user: User | null) => {
     setState((prev) => ({ user, revision: prev.revision + 1 }));
   }, []);
 
+  const clearRetryTimer = useCallback(() => {
+    if (retryTimer.current) {
+      clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+  }, []);
+
+  /**
+   * IDN-01: sign in anonymously; on failure (e.g. the network is not ready on
+   * first launch) retry after 1 s, 2 s, 4 s, 8 s, then every 15 s.
+   */
+  const signInAnonymouslyWithRetry = useCallback(() => {
+    if (anonymousInFlight.current || auth.currentUser) return;
+    clearRetryTimer();
+    anonymousInFlight.current = true;
+    signInAnonymously(auth)
+      .catch((e: unknown) => {
+        setError(authErrorMessage(e));
+        setConnecting(true);
+        setInitializing(false);
+        const index = Math.min(
+          failedAttempts.current,
+          ANON_RETRY_DELAYS_MS.length - 1,
+        );
+        failedAttempts.current += 1;
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null;
+          signInAnonymouslyWithRetry();
+        }, ANON_RETRY_DELAYS_MS[index]);
+      })
+      .finally(() => {
+        anonymousInFlight.current = false;
+      });
+  }, [clearRetryTimer]);
+
   useEffect(() => {
-    return onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
       publish(user);
       if (user) {
+        clearRetryTimer();
+        failedAttempts.current = 0;
         setInitializing(false);
+        setConnecting(false);
         setError(null);
         return;
       }
       // IDN-01 / IDN-07: there is always a user; anonymous when nobody signed in.
-      if (anonymousInFlight.current) return;
-      anonymousInFlight.current = true;
-      signInAnonymously(auth)
-        .catch((e: unknown) => {
-          setError(authErrorMessage(e));
-          setInitializing(false);
-        })
-        .finally(() => {
-          anonymousInFlight.current = false;
-        });
+      signInAnonymouslyWithRetry();
     });
-  }, [publish]);
+    return () => {
+      unsubscribe();
+      clearRetryTimer();
+    };
+  }, [publish, clearRetryTimer, signInAnonymouslyWithRetry]);
 
   /**
    * IDN-04: an anonymous user is upgraded in place (same uid); anyone else
-   * signs in with the credential.
+   * signs in with the credential. `profileName` (from Google) fills an empty
+   * Firebase display name, so the refreshed ID token carries a `name` claim
+   * and the backend fills `display_name` (IDN-06).
    */
   const linkOrSignIn = useCallback(
-    async (credential: AuthCredential) => {
+    async (credential: AuthCredential, profileName?: string | null) => {
       const current = auth.currentUser;
       if (current?.isAnonymous) {
         try {
@@ -192,7 +241,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       const user = auth.currentUser;
       if (user) {
-        // Make sure the backend sees the new provider straight away.
+        const name = profileName?.trim();
+        if (!user.displayName && name) {
+          try {
+            await updateProfile(user, { displayName: name });
+          } catch {
+            // Not fatal: the user can still set a name on the Profile screen.
+          }
+        }
+        // Make sure the backend sees the new provider (and name) straight away.
         await getIdToken(user, true);
       }
       publish(auth.currentUser);
@@ -217,7 +274,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!idToken) {
       throw new AuthUiError("Google did not return an ID token.");
     }
-    await linkOrSignIn(GoogleAuthProvider.credential(idToken));
+    await linkOrSignIn(
+      GoogleAuthProvider.credential(idToken),
+      response.data.user.name,
+    );
     return true;
   }, [linkOrSignIn]);
 
@@ -298,12 +358,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await firebaseSignOut(auth);
   }, []);
 
+  const retry = useCallback(() => {
+    clearRetryTimer();
+    signInAnonymouslyWithRetry();
+  }, [clearRetryTimer, signInAnonymouslyWithRetry]);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       user: state.user,
       revision: state.revision,
       initializing,
+      connecting,
       error,
+      retry,
       signInWithGoogle,
       startPhoneSignIn,
       confirmPhoneCode,
@@ -312,7 +379,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [
       state,
       initializing,
+      connecting,
       error,
+      retry,
       signInWithGoogle,
       startPhoneSignIn,
       confirmPhoneCode,
