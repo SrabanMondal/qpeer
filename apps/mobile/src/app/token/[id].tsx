@@ -1,4 +1,4 @@
-import { isActiveState, type TokenView } from "@qpeer/shared";
+import { isActiveState, newerTokenView, type TokenView } from "@qpeer/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Stack,
@@ -129,6 +129,8 @@ export default function TicketScreen() {
       const before = queryClient.getQueryData<TokenView>(
         queryKeys.token(uid, tokenId),
       );
+      // Older than what we show (e.g. sent before our leave): ignore (H1).
+      if (newerTokenView(before, m.token) !== m.token) return;
       if (before?.state !== m.token.state) {
         // State changed: also refresh "My tokens".
         storeToken(queryClient, uid, m.token);

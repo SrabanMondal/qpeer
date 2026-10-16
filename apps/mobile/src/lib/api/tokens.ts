@@ -2,6 +2,7 @@ import {
   CancelResponse,
   type JoinBody,
   MyTokensResponse,
+  newerTokenView,
   TokenView,
 } from "@qpeer/shared";
 import {
@@ -53,21 +54,43 @@ function useUid(): string | null {
   return useAuth().user?.uid ?? null;
 }
 
+/**
+ * Puts a token view in the cache unless the cached one is newer (higher
+ * `rev`): socket messages and HTTP answers can arrive out of order, and a
+ * left/ended ticket must never flip back (Step 3.5 H1). Returns the view kept.
+ */
+export function mergeToken(
+  queryClient: QueryClient,
+  uid: string | null,
+  token: TokenView,
+): TokenView {
+  const key = queryKeys.token(uid, token.id);
+  const kept = newerTokenView(queryClient.getQueryData<TokenView>(key), token);
+  queryClient.setQueryData(key, kept);
+  return kept;
+}
+
 /** Stores a fresh token view and marks the "My tokens" lists stale. */
 export function storeToken(
   queryClient: QueryClient,
   uid: string | null,
   token: TokenView,
 ) {
-  queryClient.setQueryData(queryKeys.token(uid, token.id), token);
+  mergeToken(queryClient, uid, token);
   void queryClient.invalidateQueries({ queryKey: queryKeys.myTokensAll(uid) });
 }
 
 export function useToken(id: string) {
   const uid = useUid();
+  const queryClient = useQueryClient();
   return useQuery({
     queryKey: queryKeys.token(uid, id),
-    queryFn: () => getToken(id),
+    // A refetch that started before a leave must not undo it.
+    queryFn: async () =>
+      newerTokenView(
+        queryClient.getQueryData<TokenView>(queryKeys.token(uid, id)),
+        await getToken(id),
+      ),
     enabled: uid !== null && id.length > 0,
     // The live socket keeps it fresh; HTTP refetches on focus/reconnect.
     staleTime: 5_000,

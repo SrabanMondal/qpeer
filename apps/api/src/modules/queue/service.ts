@@ -312,6 +312,7 @@ function viewFromRow(
     endedAt: row.endedAt ? toMs(row.endedAt) : null,
     endReason: row.endReason,
     paid: row.paymentId !== null,
+    rev: row.rev,
   };
 }
 

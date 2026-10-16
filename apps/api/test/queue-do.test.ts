@@ -4,7 +4,7 @@ import {
   runInDurableObject,
 } from "cloudflare:test";
 import { env } from "cloudflare:workers";
-import { ConsoleState, TokenView } from "@qpeer/shared";
+import { ConsoleState, newerTokenView, TokenView } from "@qpeer/shared";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pushOverride } from "../src/modules/notifications/expo-push";
 import { SKIP_BEHIND } from "../src/queue/ordering";
@@ -952,6 +952,35 @@ describe("QueueDO live updates (QUE-17)", () => {
     expect(farState.dirty).toBe(false);
     // Before the fix the alarm was set ~250 ms ahead, forever.
     if (alarm !== null) expect(alarm).toBeGreaterThan(Date.now() + 1_000);
+    ws.close();
+  });
+
+  it("H1: views carry a rev that orders them; a stale WAITING loses to the leave", async () => {
+    const { stub } = await seedQueue();
+    const a = await join(stub);
+    const res = await stub.fetch(`https://queue-do/live?tokenId=${a.id}`, {
+      headers: { Upgrade: "websocket" },
+    });
+    const { ws, messages } = collect(res);
+    await waitFor(() => messages.length >= 1);
+    await join(stub); // a queue change: a's view is re-sent, same rev
+    await waitFor(() => messages.length >= 2);
+    const tokenMsgs = () =>
+      messages.flatMap((m) => (m.type === "token" ? [m.token] : []));
+    const [first, second] = tokenMsgs();
+    expect(first.rev).toBe(a.rev);
+    expect(second.rev).toBe(a.rev);
+    const left = TokenView.parse(must(await stub.leave(a.id, null)));
+    expect(left.state).toBe("LEFT");
+    expect(left.rev).toBeGreaterThan(second.rev);
+    // The app's rule: a late WAITING (sent before the leave) never wins.
+    expect(newerTokenView(left, second)).toBe(left);
+    const wsLeft = await waitFor(() =>
+      tokenMsgs().find((t) => t.state === "LEFT"),
+    );
+    expect(wsLeft.rev).toBe(left.rev);
+    // GET (DO view) agrees.
+    expect((await view(stub, a.id)).rev).toBe(left.rev);
     ws.close();
   });
 

@@ -1646,6 +1646,7 @@ export class QueueDO extends DurableObject<Env> {
       endedAt: row.ended_at,
       endReason: row.end_reason,
       paid: row.payment_order_id !== null,
+      rev: row.rev,
     };
   }
 
