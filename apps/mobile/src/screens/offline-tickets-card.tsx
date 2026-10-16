@@ -1,0 +1,83 @@
+import { isActiveState } from "@qpeer/shared";
+import { useRouter } from "expo-router";
+import { StyleSheet, View } from "react-native";
+
+import { ThemedText } from "@/components/themed-text";
+import { Button, Card, Icon, ListItem } from "@/components/ui";
+import { Radius, Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
+import { useAuth } from "@/lib/auth";
+import { formatAge } from "@/lib/queue-format";
+import { useSavedTickets } from "@/lib/storage";
+
+/**
+ * B13/B14 (INC-040/041): the calm card shown instead of a blank map when
+ * there is no internet or the map can't load. The user's active tickets
+ * (saved on the phone, C1) are one tap away.
+ */
+export function OfflineTicketsCard({
+  title = "The map needs internet",
+  message = "Queues and the map come back by themselves when you're online.",
+  onRetry,
+}: {
+  title?: string;
+  message?: string;
+  onRetry?: () => void;
+}) {
+  const router = useRouter();
+  const theme = useTheme();
+  const uid = useAuth().user?.uid ?? null;
+  const { tickets } = useSavedTickets(uid);
+  const active = tickets.filter((t) => isActiveState(t.view.state));
+
+  return (
+    <Card style={styles.card}>
+      <View style={styles.head}>
+        <View style={[styles.icon, { backgroundColor: theme.warningSoft }]}>
+          <Icon name="cloud_off" color="warning" />
+        </View>
+        <View style={styles.flex}>
+          <ThemedText type="heading">{title}</ThemedText>
+          <ThemedText type="small" themeColor="inkMuted">
+            {message}
+          </ThemedText>
+        </View>
+      </View>
+      {active.map((t) => (
+        <ListItem
+          key={t.view.id}
+          icon="confirmation_number"
+          title={`#${t.view.label} · ${t.view.queueName}`}
+          subtitle={`${t.view.businessName} · updated ${formatAge(t.savedAt)}`}
+          onPress={() =>
+            router.push({
+              pathname: "/token/[id]",
+              params: { id: t.view.id },
+            })
+          }
+        />
+      ))}
+      {onRetry ? (
+        <Button
+          title="Try again"
+          variant="secondary"
+          icon="refresh"
+          onPress={onRetry}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+const styles = StyleSheet.create({
+  card: { gap: Spacing.twoHalf },
+  head: { flexDirection: "row", alignItems: "center", gap: Spacing.twoHalf },
+  icon: {
+    width: 44,
+    height: 44,
+    borderRadius: Radius.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  flex: { flex: 1, gap: Spacing.half },
+});

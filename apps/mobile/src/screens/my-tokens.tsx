@@ -1,4 +1,4 @@
-import type { TokenSummary } from "@qpeer/shared";
+import { isActiveState, type TokenSummary } from "@qpeer/shared";
 import { useFocusEffect, useRouter } from "expo-router";
 import { type ReactNode, useCallback } from "react";
 
@@ -13,17 +13,24 @@ import {
   SectionHeader,
 } from "@/components/ui";
 import { useMyTokens } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
+import { useOffline } from "@/lib/network";
 import {
+  formatAge,
   formatClock,
   formatDateTime,
   tokenStatusBadge,
 } from "@/lib/queue-format";
+import { useSavedTickets } from "@/lib/storage";
 
 /** Customer Queue tab: "My tokens" — active first, then recent (TOK-06). */
 export function MyTokens() {
   const router = useRouter();
   const active = useMyTokens("active");
   const recent = useMyTokens("recent");
+  const uid = useAuth().user?.uid ?? null;
+  const saved = useSavedTickets(uid);
+  const offline = useOffline();
 
   const refetchActive = active.refetch;
   const refetchRecent = recent.refetch;
@@ -44,8 +51,39 @@ export function MyTokens() {
     (t) => !activeIds.has(t.id),
   );
 
+  // C1: no answer yet (offline, cold start): the tickets saved on the phone.
+  const savedActive = saved.tickets.filter((t) => isActiveState(t.view.state));
   let body: ReactNode;
-  if (active.isPending) {
+  if (!active.data && savedActive.length > 0) {
+    body = (
+      <>
+        <SectionHeader title="Active (saved on this phone)" />
+        {savedActive.map(({ view: t, savedAt }) => {
+          const badge = tokenStatusBadge(t);
+          return (
+            <ListItem
+              key={t.id}
+              icon="confirmation_number"
+              title={`#${t.label} · ${t.queueName}`}
+              subtitle={`${t.businessName} · updated ${formatAge(savedAt)}`}
+              footer={<Badge label={badge.label} tone={badge.tone} />}
+              onPress={() =>
+                router.push({ pathname: "/token/[id]", params: { id: t.id } })
+              }
+            />
+          );
+        })}
+      </>
+    );
+  } else if (active.isPending && offline) {
+    body = (
+      <EmptyState
+        icon="cloud_off"
+        title="No saved tickets"
+        message="Your tickets show here as soon as you're online."
+      />
+    );
+  } else if (active.isPending) {
     body = <LoadingState label="Loading your tickets…" />;
   } else if (active.isError) {
     body = (

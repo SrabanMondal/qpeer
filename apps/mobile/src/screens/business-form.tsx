@@ -175,7 +175,12 @@ export function BusinessForm({
         keyboardType="phone-pad"
         autoComplete="tel"
       />
-      <Button title={submitLabel} onPress={submit} loading={saving} />
+      <Button
+        title={submitLabel}
+        onPress={submit}
+        loading={saving}
+        needsNetwork
+      />
     </>
   );
 }

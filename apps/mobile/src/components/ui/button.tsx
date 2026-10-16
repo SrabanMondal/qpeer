@@ -10,6 +10,7 @@ import {
 import { Icon, type IconName } from "@/components/ui/icon";
 import { Radius, Spacing, type ThemeColor, Type } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
+import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 
 /**
  * Design guide §3:
@@ -47,6 +48,11 @@ type ButtonProps = {
   /** Spoken label when the title alone is not clear enough. */
   accessibilityLabel?: string;
   style?: StyleProp<ViewStyle>;
+  /**
+   * B13: the action needs the server. While offline the button is disabled
+   * and says why (title "… (offline)", spoken hint `OFFLINE_ACTION_TEXT`).
+   */
+  needsNetwork?: boolean;
 };
 
 /** Pill-cornered button, 52 dp tall (touch target ≥ 44 dp, NFR-15). */
@@ -59,15 +65,20 @@ export function Button({
   loading = false,
   accessibilityLabel,
   style,
+  needsNetwork = false,
 }: ButtonProps) {
   const theme = useTheme();
   const look = LOOK[variant];
-  const inactive = disabled || loading;
+  const offline = useOffline();
+  const blocked = needsNetwork && offline;
+  const inactive = disabled || loading || blocked;
+  const label = blocked ? `${title} (offline)` : title;
 
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityLabel={accessibilityLabel ?? label}
+      accessibilityHint={blocked ? OFFLINE_ACTION_TEXT : undefined}
       accessibilityState={{ disabled: inactive, busy: loading }}
       onPress={onPress}
       disabled={inactive}
@@ -88,7 +99,7 @@ export function Button({
         <>
           {icon ? <Icon name={icon} size={20} color={look.text} /> : null}
           <Text style={[styles.text, { color: theme[look.text] }]}>
-            {title}
+            {label}
           </Text>
         </>
       )}

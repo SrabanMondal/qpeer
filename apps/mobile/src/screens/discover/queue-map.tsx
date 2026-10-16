@@ -4,6 +4,7 @@ import {
   CircleLayer,
   Images,
   LocationPuck,
+  Logger,
   type MapState,
   MapView,
   ShapeSource,
@@ -53,6 +54,23 @@ const PILL_TEXT_OFFSET = [0, -1.08];
 /** Points stop clustering above this zoom (street level). */
 const CLUSTER_MAX_ZOOM = 14;
 
+/**
+ * B14 (INC-041): Mapbox reports a failed style load (e.g. offline) with
+ * `console.error`, which the dev build shows as a red LogBox bar. The app
+ * handles it (`onLoadError` → calm offline card, retry when back online), so
+ * these known network failures are logged as warnings instead. Anything
+ * else keeps Mapbox's default logging.
+ */
+const NETWORK_LOAD_ERROR =
+  /map load failed|failed to load style|connectivity|network|unable to resolve host|offline/i;
+Logger.setLogCallback((log) => {
+  if (log.level === "error" && NETWORK_LOAD_ERROR.test(log.message)) {
+    console.warn(`[map] ${log.message}`);
+    return true;
+  }
+  return false;
+});
+
 export type QueueMapHandle = {
   /** Moves the camera to a point (MAP-07 recenter, cluster tap). */
   flyTo: (to: LatLng, zoom?: number) => void;
@@ -72,6 +90,10 @@ type Props = {
   onIdle: (state: MapState) => void;
   /** Show the user's blue dot (location permission granted). */
   showUser: boolean;
+  /** B14: the map style could not load (offline, Mapbox down). */
+  onLoadError?: (message: string) => void;
+  /** The style loaded (again). */
+  onLoaded?: () => void;
 };
 
 /**
@@ -90,6 +112,8 @@ export function QueueMap({
   onMapPress,
   onIdle,
   showUser,
+  onLoadError,
+  onLoaded,
 }: Props) {
   const theme = useTheme();
   const dark = useIsDark();
@@ -151,6 +175,15 @@ export function QueueMap({
       attributionPosition={{ bottom: 8, right: 8 }}
       onMapIdle={onIdle}
       onPress={onMapPress}
+      onMapLoadingError={(e) => {
+        // Only a failed style leaves the map blank; tile errors still show
+        // the cached map.
+        if (!e || e.type === undefined || e.type === "style") {
+          console.warn(`[map] load error: ${e?.error ?? "unknown"}`);
+          onLoadError?.(e?.error ?? "unknown");
+        }
+      }}
+      onDidFinishLoadingStyle={onLoaded}
     >
       <Camera
         ref={camera}

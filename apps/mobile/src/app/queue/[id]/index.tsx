@@ -141,6 +141,7 @@ export default function QueueScreen() {
             title="Save name"
             onPress={saveName}
             loading={update.isPending}
+            needsNetwork
           />
         ) : null}
       </Card>
@@ -165,6 +166,7 @@ export default function QueueScreen() {
             variant="danger-soft"
             onPress={onArchive}
             loading={archive.isPending}
+            needsNetwork
           />
         </>
       ) : null}

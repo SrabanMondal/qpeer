@@ -1,4 +1,4 @@
-import { isActiveState, newerTokenView, type TokenView } from "@qpeer/shared";
+import { approxDuration, isActiveState, type TokenView } from "@qpeer/shared";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   Stack,
@@ -9,6 +9,7 @@ import {
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useState } from "react";
 import { Linking, Platform, StyleSheet, View } from "react-native";
+import QRCode from "react-native-qrcode-svg";
 
 import { ThemedText } from "@/components/themed-text";
 import {
@@ -16,6 +17,7 @@ import {
   Button,
   Card,
   ConfirmDialog,
+  EmptyState,
   ErrorState,
   HeaderButton,
   Icon,
@@ -29,6 +31,7 @@ import {
 import { Radius, Spacing, Type } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import {
+  mergeToken,
   queryKeys,
   storeToken,
   useLeaveToken,
@@ -39,6 +42,7 @@ import { useAuth } from "@/lib/auth";
 import { openDirections } from "@/lib/directions";
 import { useLiveSocket } from "@/lib/live";
 import { goHome, useAppMode } from "@/lib/mode";
+import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 import {
   type AlertPermission,
   alertPermission,
@@ -46,16 +50,15 @@ import {
   openBatterySettings,
 } from "@/lib/push";
 import {
+  formatAge,
   formatClock,
   formatCountdown,
-  formatWaitRange,
+  formatDateTime,
   tokenStatusBadge,
   useNow,
 } from "@/lib/queue-format";
+import { useSavedTicket, useStored } from "@/lib/storage";
 import { showErrorToast, showToast } from "@/lib/toast";
-
-/** ALR-06 tip: dismissed for this app run (no storage module installed yet). */
-let batteryTipDismissed = false;
 
 function endCard(t: TokenView): {
   icon: IconName;
@@ -88,12 +91,19 @@ function endCard(t: TokenView): {
             title: "The queue closed for the day",
             message: "This ticket has ended. You can join again when it opens.",
           }
-        : {
-            icon: "event_busy",
-            title: "This ticket has expired",
-            message:
-              "Your turn passed and the time to come back ran out. You can join again.",
-          };
+        : t.endReason === "validity"
+          ? {
+              icon: "event_busy",
+              title: "This ticket's time ran out",
+              message:
+                "It was valid for a set time that has now passed. You can join again.",
+            }
+          : {
+              icon: "event_busy",
+              title: "This ticket has expired",
+              message:
+                "Your turn passed and the time to come back ran out. You can join again.",
+            };
   }
 }
 
@@ -107,11 +117,15 @@ export default function TicketScreen() {
   const uid = useAuth().user?.uid ?? null;
   const { mode } = useAppMode();
   const token = useToken(tokenId);
-  const t = token.data;
+  // C1: the last view saved on the phone, for offline (also a cold start).
+  const saved = useSavedTicket(uid, tokenId);
+  const offline = useOffline();
+  const t = token.data ?? saved?.view;
+  const fromSaved = !token.data && saved !== undefined;
   const active = t ? isActiveState(t.state) : false;
   const queue = useQueue(t?.queueId ?? "");
   const leave = useLeaveToken(tokenId);
-  const [tipHidden, setTipHidden] = useState(batteryTipDismissed);
+  const tip = useStored("batteryTipDismissed");
   const [alerts, setAlerts] = useState<AlertPermission>("granted");
 
   const now = useNow(active && focused, t?.state === "GRACE" ? 1000 : 15_000);
@@ -130,12 +144,14 @@ export default function TicketScreen() {
         queryKeys.token(uid, tokenId),
       );
       // Older than what we show (e.g. sent before our leave): ignore (H1).
-      if (newerTokenView(before, m.token) !== m.token) return;
+      if (before && before.rev > m.token.rev) return;
       if (before?.state !== m.token.state) {
         // State changed: also refresh "My tokens".
         storeToken(queryClient, uid, m.token);
       } else {
-        queryClient.setQueryData(queryKeys.token(uid, tokenId), m.token);
+        // Keeps the signed ticket the socket view doesn't carry (C3) and
+        // saves the view on the phone (C1).
+        mergeToken(queryClient, uid, m.token);
       }
     },
   });
@@ -156,7 +172,13 @@ export default function TicketScreen() {
     return (
       <Screen>
         <Stack.Screen options={{ title: "Your Ticket" }} />
-        {token.isError ? (
+        {offline ? (
+          <EmptyState
+            icon="cloud_off"
+            title="This ticket isn't saved on this phone"
+            message="It shows as soon as you're online. Your place in the queue is kept."
+          />
+        ) : token.isError ? (
           <ErrorState
             title="Could not load your ticket"
             error={token.error}
@@ -191,10 +213,20 @@ export default function TicketScreen() {
     }
   };
 
+  // One wait formula on every surface (coordinator report 2026-10-16): the
+  // DO's range, shown as its midpoint like the map, list and join screen.
   const etaText =
     t.etaLowMs !== null && t.etaHighMs !== null
-      ? formatWaitRange(t.etaLowMs - now, t.etaHighMs - now)
+      ? approxDuration(t.etaLowMs - now, t.etaHighMs - now)
       : null;
+  const carried = t.carriedOver === true;
+  const closedKept = active && t.queueStatus === "closed";
+  // While offline (or showing a saved view) the time of the last update is
+  // what matters; the live line says "Last updated N min ago".
+  const updatedAt = fromSaved
+    ? (saved?.savedAt ?? null)
+    : token.dataUpdatedAt || null;
+  const stale = offline || fromSaved || live !== "live";
 
   return (
     <Screen
@@ -240,6 +272,16 @@ export default function TicketScreen() {
           {t.state === "WAITING" && t.beBackByMs !== null ? (
             <InfoRow label="Be back by" value={formatClock(t.beBackByMs)} />
           ) : null}
+          {active ? (
+            <InfoRow
+              label="Valid until"
+              value={
+                t.expiresAt
+                  ? formatDateTime(t.expiresAt)
+                  : "The queue closes for the day"
+              }
+            />
+          ) : null}
           {(called || t.state === "GRACE") && t.counter !== null ? (
             <InfoRow label="Counter" value={String(t.counter)} />
           ) : null}
@@ -252,9 +294,11 @@ export default function TicketScreen() {
             style={styles.liveLine}
             accessibilityLiveRegion="polite"
           >
-            {live === "live"
+            {!stale
               ? "● Live — updates by itself"
-              : "Reconnecting… pull down to refresh"}
+              : updatedAt !== null
+                ? `Last updated ${formatAge(updatedAt)}${offline ? " · offline" : " · reconnecting…"}`
+                : "Reconnecting… pull down to refresh"}
           </ThemedText>
         ) : null}
       </View>
@@ -290,6 +334,12 @@ export default function TicketScreen() {
             expires.
           </ThemedText>
         </Card>
+      ) : closedKept ? (
+        <StatusBanner
+          tone="paused"
+          title="The queue is closed — your ticket is kept"
+          detail={`You keep number #${t.label} and go first when it opens again${t.expiresAt ? `, if that is before ${formatDateTime(t.expiresAt)}` : ""}.`}
+        />
       ) : t.state === "WAITING" && t.queueStatus === "paused" ? (
         <StatusBanner
           tone="paused"
@@ -350,10 +400,35 @@ export default function TicketScreen() {
             variant="danger-soft"
             icon="logout"
             loading={leave.isPending}
+            disabled={offline}
             onPress={() => void onLeave()}
             style={styles.flex}
           />
         </View>
+      ) : null}
+      {active && offline ? (
+        <ThemedText type="small" themeColor="inkMuted">
+          {OFFLINE_ACTION_TEXT} Your place is kept.
+        </ThemedText>
+      ) : null}
+      {active && carried && !closedKept ? (
+        <ThemedText type="small" themeColor="inkMuted">
+          Kept from an earlier session: you keep number #{t.label} and are
+          served first.
+        </ThemedText>
+      ) : null}
+
+      {/* C3: signed ticket staff can check, also without internet. */}
+      {active && t.signedTicket ? (
+        <Card style={styles.qrCard}>
+          <ThemedText type="heading">Your ticket code</ThemedText>
+          <View style={styles.qrBox}>
+            <QRCode value={t.signedTicket} size={200} quietZone={12} ecl="M" />
+          </View>
+          <ThemedText type="small" themeColor="inkMuted" style={styles.centre}>
+            Staff can scan it to check your ticket. It works without internet.
+          </ThemedText>
+        </Card>
       ) : null}
 
       {active && alerts !== "granted" ? (
@@ -382,7 +457,7 @@ export default function TicketScreen() {
         </Card>
       ) : null}
 
-      {active && Platform.OS === "android" && !tipHidden ? (
+      {active && Platform.OS === "android" && tip.ready && !tip.value ? (
         <Card>
           <View style={styles.tipHead}>
             <Icon name="battery_saver" color="primary" />
@@ -392,10 +467,7 @@ export default function TicketScreen() {
             <HeaderButton
               title="Dismiss"
               color="inkMuted"
-              onPress={() => {
-                batteryTipDismissed = true;
-                setTipHidden(true);
-              }}
+              onPress={() => tip.set(true)}
             />
           </View>
           <ThemedText type="small" themeColor="inkMuted">
@@ -435,4 +507,11 @@ const styles = StyleSheet.create({
   actions: { flexDirection: "row", gap: Spacing.twoHalf },
   flex: { flex: 1 },
   tipHead: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
+  qrCard: { alignItems: "center", gap: Spacing.two },
+  // The QR's quiet zone stays pure white in both themes so scanners read it.
+  qrBox: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: Radius.card,
+    overflow: "hidden",
+  },
 });

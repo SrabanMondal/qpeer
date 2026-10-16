@@ -211,7 +211,12 @@ function PinPicker({
           }}
           loading={locating}
         />
-        <Button title="Save pin" onPress={save} loading={update.isPending} />
+        <Button
+          title="Save pin"
+          onPress={save}
+          loading={update.isPending}
+          needsNetwork
+        />
       </View>
     </View>
   );
