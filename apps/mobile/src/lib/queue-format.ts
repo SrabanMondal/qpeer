@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 
 import type { BadgeTone } from "@/components/ui/badge";
 import type { StatusTone } from "@/components/ui/status-banner";
+import { serverNow, useClockStatus } from "@/lib/clock";
 
 const MINUTE_MS = 60_000;
 
@@ -116,14 +117,19 @@ export function tokenStatusBadge(
   return map[t.state];
 }
 
-/** The current time, ticking every `intervalMs` while `active`. */
+/**
+ * The current server-corrected time (B9, `serverNow()`), ticking every
+ * `intervalMs` while `active`. Compare it with server timestamps only.
+ */
 export function useNow(active: boolean, intervalMs = 1000): number {
-  const [now, setNow] = useState(() => Date.now());
+  const [now, setNow] = useState(serverNow);
+  // A new clock measurement shifts the time at once, even when not ticking.
+  const { offsetMs } = useClockStatus();
   useEffect(() => {
+    setNow(Date.now() + offsetMs);
     if (!active) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    const timer = setInterval(() => setNow(serverNow()), intervalMs);
     return () => clearInterval(timer);
-  }, [active, intervalMs]);
+  }, [active, intervalMs, offsetMs]);
   return now;
 }
