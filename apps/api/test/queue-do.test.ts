@@ -132,6 +132,57 @@ describe("QueueDO numbering and order", () => {
     expect(back.waiting.findIndex((w) => w.id === called.id)).toBe(SKIP_BEHIND);
   });
 
+  it("G1: a skipped triage token goes behind the next 3 people, even regulars", async () => {
+    const { stub } = await seedQueue({ settings: { triageDailyCap: 10 } });
+    const tri = must(await stub.insertTriage()).token;
+    const r = [];
+    for (let i = 0; i < 5; i++) r.push(await join(stub));
+    must(await stub.skip(tri.id));
+    const ids = (await consoleOf(stub)).waiting.map((w) => w.id);
+    expect(ids.indexOf(tri.id)).toBe(SKIP_BEHIND);
+    // A new triage arrival still goes first (ahead of the skipped one).
+    const tri2 = must(await stub.insertTriage()).token;
+    expect((await consoleOf(stub)).waiting[0].id).toBe(tri2.id);
+  });
+
+  it("G1: a skipped regular never lands inside the triage range", async () => {
+    const { stub } = await seedQueue({ settings: { triageDailyCap: 10 } });
+    const r1 = await join(stub);
+    const r2 = await join(stub);
+    must(await stub.next(1)); // r1 called
+    const tri = [];
+    for (let i = 0; i < 4; i++) tri.push(must(await stub.insertTriage()).token);
+    // Called regular re-enters "behind the first 3 waiting" = among triage
+    // tokens by position; it must stay behind every triage token instead.
+    must(await stub.skip(r1.id));
+    let c = await consoleOf(stub);
+    expect(c.waiting.map((w) => w.cls)).toEqual([
+      "triage",
+      "triage",
+      "triage",
+      "triage",
+      "regular",
+      "regular",
+    ]);
+    expect(c.waiting[4].id).toBe(r1.id); // head of the regulars, ahead of r2
+    expect(c.waiting[5].id).toBe(r2.id);
+    // A later triage arrival goes ahead of the skipped regular.
+    const late = must(await stub.insertTriage()).token;
+    c = await consoleOf(stub);
+    expect(c.waiting.findIndex((w) => w.id === late.id)).toBe(4);
+
+    // "To the end" with only triage tokens waiting keeps the regular's class.
+    const { stub: s2 } = await seedQueue({ settings: { triageDailyCap: 10 } });
+    const a = await join(s2);
+    must(await s2.next(1)); // a called, nobody waiting
+    must(await s2.insertTriage());
+    must(await s2.skip(a.id));
+    const t2 = must(await s2.insertTriage()).token;
+    const w = (await consoleOf(s2)).waiting;
+    expect(w.map((x) => x.cls)).toEqual(["triage", "triage", "regular"]);
+    expect(w[1].id).toBe(t2.id);
+  });
+
   it("QUE-04: one active free token per user per queue", async () => {
     const { stub } = await seedQueue();
     const user = crypto.randomUUID();
@@ -479,6 +530,8 @@ describe("QueueDO timers, outbox and persistence", () => {
       .bind(queueId)
       .first();
     expect(snapClosed).toEqual({ is_open: 0, waiting: 0 });
+    // Analytics drain in the background (G2): wait for it.
+    expect(await stub.flushOutbox()).toBe(0);
     const analytics = await env.DB.prepare(
       "SELECT SUM(joins) AS joins, SUM(waits) AS waits FROM analytics_hourly WHERE queue_id = ?",
     )
@@ -637,6 +690,7 @@ describe("QueueDO alerts", () => {
     const a = await join(stub, ua);
     const b = await join(stub, ub);
     must(await stub.next(1)); // a called; b is next
+    await stub.flushOutbox(); // pushes drain in the background (G2)
     expect(push.kinds(a.id)).toEqual(["called"]);
     expect(push.kinds(b.id)).toEqual(["next"]);
     const msg = push.sent.find((m) => m.data.tokenId === a.id);
@@ -653,6 +707,7 @@ describe("QueueDO alerts", () => {
     must(await stub.pause());
     must(await stub.resume());
     must(await stub.pause()); // second pause: no second paused alert
+    await stub.flushOutbox();
     expect(push.kinds(a.id)).toEqual(["called", "grace_started"]);
     expect(push.kinds(b.id)).toEqual(["next", "queue_paused"]);
 
@@ -674,6 +729,7 @@ describe("QueueDO alerts", () => {
     const a = await join(stub, u);
     push.failNextSends(1);
     must(await stub.close());
+    expect(await stub.flushOutbox()).toBe(1); // the push waits for its retry
     expect(push.kinds(a.id)).toEqual([]);
     await stub.testAdvanceClock(6_000);
     await runDurableObjectAlarm(stub);
@@ -689,6 +745,7 @@ describe("QueueDO alerts", () => {
     for (const u of users) await addDevice(u, `ExponentPushToken[h-${u}]`);
     const t = [];
     for (const u of users) t.push(await join(stub, u));
+    await stub.flushOutbox();
     // t[2] has 2 ahead → expected ~30 min; t[1] ~20 min. Nobody alerted yet (just joined).
     expect(t.flatMap((x) => push.kinds(x.id))).toEqual([]);
     await stub.testAdvanceClock(10 * MIN);
@@ -709,7 +766,7 @@ describe("QueueDO alerts", () => {
     const t = [];
     for (const u of users) t.push(await join(stub, u));
     must(await stub.close());
-    expect(await stub.pendingOutbox()).toBe(0);
+    expect(await stub.flushOutbox()).toBe(0);
     for (const x of t) {
       expect(push.kinds(x.id).filter((k) => k === "queue_closed")).toHaveLength(
         x.id === t[5].id ? 2 : 1, // two devices for users[5]
@@ -729,6 +786,55 @@ describe("QueueDO alerts", () => {
     expect(gone).toBeNull();
   });
 
+  it("G2: a stuck Expo send doesn't hold the RPC; each push still goes out once", async () => {
+    const { stub } = await seedQueue();
+    const ua = crypto.randomUUID();
+    const ub = crypto.randomUUID();
+    await addDevice(ua, `ExponentPushToken[g-${ua}]`);
+    await addDevice(ub, `ExponentPushToken[g-${ub}]`);
+    const a = await join(stub, ua);
+    const b = await join(stub, ub);
+    await stub.flushOutbox();
+    let open!: () => void;
+    const gate = new Promise<void>((r) => {
+      open = r;
+    });
+    const sent: string[] = [];
+    const saved = pushOverride.transport;
+    pushOverride.transport = {
+      async send(messages) {
+        await gate;
+        sent.push(...messages.map((m) => `${m.data.tokenId}:${m.data.kind}`));
+        return messages.map(() => ({
+          status: "ok" as const,
+          id: crypto.randomUUID(),
+        }));
+      },
+      getReceipts: async () => ({}),
+    };
+    try {
+      const nextDone = stub.next(1).then(must);
+      const winner = await Promise.race([
+        nextDone.then(() => "rpc"),
+        new Promise((r) => setTimeout(() => r("timeout"), 2_000)),
+      ]);
+      expect(winner).toBe("rpc"); // returned while Expo is stuck
+      // Token rows are already in D1 (read-your-writes).
+      const row = await env.DB.prepare("SELECT state FROM tokens WHERE id = ?")
+        .bind(a.id)
+        .first();
+      expect(row).toEqual({ state: "CALLED" });
+      // A concurrent drain (the alarm, a flush) must not send them again.
+      const flushing = stub.flushOutbox();
+      open();
+      expect(await flushing).toBe(0);
+      expect(sent.sort()).toEqual([`${a.id}:called`, `${b.id}:next`].sort());
+    } finally {
+      open();
+      pushOverride.transport = saved;
+    }
+  });
+
   it("ALR-02: a DeviceNotRegistered ticket removes the device", async () => {
     const { stub } = await seedQueue();
     const u = crypto.randomUUID();
@@ -738,6 +844,7 @@ describe("QueueDO alerts", () => {
     const a = await join(stub, u);
     await join(stub);
     must(await stub.next(1));
+    await stub.flushOutbox();
     expect(push.kinds(a.id)).toEqual(["called"]);
     const dev = await env.DB.prepare(
       "SELECT 1 FROM devices WHERE expo_push_token = ?",

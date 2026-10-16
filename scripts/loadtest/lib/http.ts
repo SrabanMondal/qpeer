@@ -42,6 +42,8 @@ export class Metrics {
   readonly endpoints = new Map<string, EndpointStats>();
   /** Requests re-sent because the connection failed (never reached the server). */
   connectRetries = 0;
+  /** GETs re-sent once after a broken connection (status 0, `network:*`). */
+  networkRetries = 0;
 
   record(endpoint: string, status: number, ms: number): void {
     let s = this.endpoints.get(endpoint);
@@ -185,10 +187,19 @@ export class Api {
           parsed = null;
         }
       }
-      if (status !== 0 || error !== "connect" || attempt >= CONNECT_RETRIES) {
-        break;
+      if (status !== 0 || attempt >= CONNECT_RETRIES) break;
+      if (error === "connect") {
+        this.metrics.connectRetries++;
+        continue;
       }
-      this.metrics.connectRetries++;
+      // A GET is idempotent: after a broken connection (e.g. ECONNRESET on a
+      // reused keep-alive socket) re-send it once, as the app's next poll
+      // would (G2). Timeouts are not retried: they mean the server was slow.
+      if (method === "GET" && error?.startsWith("network:") && attempt === 0) {
+        this.metrics.networkRetries++;
+        continue;
+      }
+      break;
     }
     const ms = performance.now() - start;
     this.metrics.record(`${method} ${endpoint}`, status, ms);

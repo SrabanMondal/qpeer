@@ -711,7 +711,11 @@ function orderFailures(
     let lastRegular = -1;
     for (const t of list) {
       const r = CLASS_RANK[t.cls] ?? 9;
-      if (r < rank)
+      // A skipped (or undo-restored) token may sit behind lower classes: skip
+      // puts it behind the next 3 people, whoever they are (§23, G1). It still
+      // counts for the tokens after it, so a skip that lifted a token into a
+      // higher class's range is caught on the next arrival of that class.
+      if (r < rank && !disturbed.has(t.id))
         f.push(`${label}: ${t.cls} #${t.number} after a lower class`);
       rank = Math.max(rank, r);
       if (t.cls === "regular" && !disturbed.has(t.id)) {

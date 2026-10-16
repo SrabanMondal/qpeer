@@ -545,6 +545,17 @@ export class QueueStore {
       .toArray();
   }
 
+  dueOutboxKinds(now: number, limit: number, kinds: OutboxKind[]): OutboxRow[] {
+    return this.sql
+      .exec<OutboxRow>(
+        `SELECT * FROM outbox WHERE next_attempt_at <= ? AND kind IN (${kinds.map(() => "?").join(", ")}) ORDER BY created_at, rowid LIMIT ?`,
+        now,
+        ...kinds,
+        limit,
+      )
+      .toArray();
+  }
+
   nextOutboxAttempt(): number | null {
     const row = this.sql
       .exec<{ t: number | null }>(

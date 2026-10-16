@@ -179,7 +179,8 @@ export async function resetLoadtest(env: Env): Promise<ResetResult> {
     batch.map(async (queueId) => {
       const stub = queueStub(env, queueId);
       await stub.close();
-      return stub.pendingOutbox();
+      // Pushes drain in the background since G2: wait for them here.
+      return stub.flushOutbox();
     }),
   );
   const pendingOutbox = pending.reduce((a, b) => a + b, 0);

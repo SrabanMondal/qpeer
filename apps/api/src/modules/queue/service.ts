@@ -177,9 +177,12 @@ export async function joinQueue(
   queueId: string,
   body: JoinBody,
 ): Promise<TokenView> {
+  const t0 = Date.now();
   const { queue, business } = await loadJoinable(db, queueId);
+  const t1 = Date.now();
   const stub = queueStub(env, queueId);
   unwrap(await stub.checkJoin());
+  const t2 = Date.now();
 
   if (body.mocked) {
     throw new AppError(422, "mock_location", "Fake location detected");
@@ -217,11 +220,33 @@ export async function joinQueue(
     );
   }
   // TODO(NFR-11): endpoint rate limit for joins (only queue-level caps for now).
-  const r = unwrap(
-    await stub.allocate({ method: "walkin", userId: user.id, cls: "regular" }),
-  );
-  return r.token;
+  const result = await stub.allocate({
+    method: "walkin",
+    userId: user.id,
+    cls: "regular",
+  });
+  const t3 = Date.now();
+  if (t3 - t0 >= SLOW_JOIN_MS) {
+    // Phase timings only (G2): no user id, token or location.
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "warn",
+        where: "queue.join.slow",
+        queueId,
+        d1Ms: t1 - t0,
+        checkJoinMs: t2 - t1,
+        allocateMs: t3 - t2,
+        totalMs: t3 - t0,
+        ok: result.ok,
+      }),
+    );
+  }
+  return unwrap(result).token;
 }
+
+/** Joins slower than this log their phase timings. */
+const SLOW_JOIN_MS = 1_000;
 
 // ---------- tokens (TOK-01, TOK-05, TOK-06) ----------
 
