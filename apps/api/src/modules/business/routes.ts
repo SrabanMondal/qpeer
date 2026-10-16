@@ -41,6 +41,7 @@ export const businessRoutes = new Hono<AppEnv>()
     const items = await service.listMyBusinesses(
       db(c.env.DB),
       currentUser(c).id,
+      c.get("clock").now(),
     );
     return c.json({ items });
   })
@@ -49,6 +50,7 @@ export const businessRoutes = new Hono<AppEnv>()
       db(c.env.DB),
       c.req.param("id"),
       currentUser(c).id,
+      c.get("clock").now(),
     );
     return c.json(view);
   })

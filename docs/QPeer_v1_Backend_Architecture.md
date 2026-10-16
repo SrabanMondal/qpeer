@@ -185,7 +185,7 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | Table | Key columns | Indexes / constraints | Step |
 |---|---|---|---|
 | `users` | id, firebase_uid, is_anonymous, phone, email, display_name, free_lane_blocked_until | unique(firebase_uid) | 0 (migrate to ms in 1) |
-| `businesses` | id, owner_user_id, name, category, address, phone, lat (nullable until pinned), lng, geohash, hours_json, status (`active`/`inactive`, owner toggle) | idx(status, lat, lng), idx(owner_user_id) | 1 |
+| `businesses` | id, owner_user_id, name, category, address, phone, lat (nullable until pinned), lng, geohash, hours_json, status (`active`/`inactive`, owner toggle), public_stats (owner opt-in, Step 3), first_listed_at (set once, Step 3) | idx(status, lat, lng), idx(owner_user_id) | 1 |
 | `business_members` | business_id, user_id, role (`owner`/`staff`) | pk(business_id, user_id), idx(user_id) | 1 |
 | `queues` | id, business_id, name, status (`active`/`archived`), settings_json, settings_version | idx(business_id) | 1 |
 | `queue_snapshots` | queue_id (pk), business_id, lat, lng, is_open, is_paused, waiting, eta_low_ms, eta_high_ms, now_serving, updated_at | idx(lat, lng) | 2 |
@@ -365,10 +365,12 @@ created ──(captured, verified)──► captured ──► allocated
 
 ## 12. Map and Discovery
 
-- `GET /v1/map?minLat&minLng&maxLat&maxLng&category` → one D1 query: `businesses` (status `active`, has pin, has at least one queue) joined with `queue_snapshots`, filtered by the bounding box, limited to 200 results. Indexes on `(lat, lng)` make this fast at city scale.
-- Business detail `GET /v1/businesses/:id` → profile + queues with snapshots + public stats (average wait and service time over the last 28 days from `analytics_hourly`).
+- `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` (any signed-in user) → **one** D1 statement (`modules/map/service.ts`): a CTE picks listed businesses (status `active`, has pin, ≥ 1 active queue) inside the box through `idx(status, lat, lng)`, nearest to the box centre first, `limit + 1` rows; the outer select joins their active queues and `queue_snapshots`. `limit` defaults to 200 (max 300); `truncated: true` tells the app to zoom in. Each box side may be at most 1.5° (else 400 `invalid_input`). `openNow` is evaluated in SQL (`json_each` over the IST weekday's ranges, `from <= now < to`), the same rule as the shared `isOpenAt()`, so the limit applies after the filter. Response `MapResponse { items: MapBusiness[], truncated, serverTime }`; no user-specific data. The request log records the path only, never the box.
+- Business detail `GET /v1/businesses/:id` → profile + queues with snapshots + `isOpenNow` + `todayHours` + `stats` (MAP-05: `servedCount`, `avgWaitMs` = Σwait/waits, `avgServiceMs` = Σinterval/intervals, `etaAccuracyPct` = eta_hits/eta_total, over the last 28 days of `analytics_hourly`; each average null below 20 samples). **MAP-06 visibility:** members always get `stats`; non-members get it once the business has been listed for 14 days (`businesses.first_listed_at`) or when the owner set `publicStats` (`PATCH /v1/businesses/:id { publicStats }`), otherwise `stats: null`.
+- `GET /v1/queues/:id` exposes `joinRadiusM` to everyone (the only public queue setting).
 - Snapshots are at most ~30 s old (MAP-02); the app polls the visible area every 30 s while the map is visible.
 - Geohash is stored for later (clustering on the server, larger areas); v1 uses the bounding box only.
+- Dev only: `POST /v1/dev/seed-map` / `POST /v1/dev/unseed-map` (registered user; 404 unless `ENVIRONMENT` is `local` or `dev`) create/delete 8 "Demo · " businesses (11 queues) around Jammu, owned by the fixed user `seed-map-owner`, ids prefixed `5eed0000-` (queues `5eed0001-`). Seeding is idempotent, opens every queue and tops each up to a few triage tokens so the map shows waiting counts.
 
 ---
 
@@ -462,11 +464,11 @@ Every requirement ID that has backend behaviour gets at least one test named aft
 | Identity | `GET /v1/me` · `PATCH /v1/me` (displayName) | A | IDN-06 |
 | Identity | `POST /v1/me/devices` · `DELETE /v1/me/devices/:pushToken` | A | ALR-02 |
 | Business | `POST /v1/businesses` · `GET /v1/me/businesses` | R | BIZ-01, BIZ-09, BIZ-15 |
-| Business | `GET /v1/businesses/:id` | A | public detail (MAP-05); owner gets extra fields |
-| Business | `PATCH /v1/businesses/:id` (profile, pin, hours) | O | BIZ-02, BIZ-04, BIZ-05 |
+| Business | `GET /v1/businesses/:id` | A | public detail + `isOpenNow`, `todayHours`, `stats` (MAP-05/06); members get extra fields |
+| Business | `PATCH /v1/businesses/:id` (profile, pin, hours, `publicStats`) | O | BIZ-02, BIZ-04, BIZ-05, MAP-06 |
 | Business | `POST /v1/businesses/:id/deactivate` · `/activate` | O | BIZ-08 |
 | Queues | `POST /v1/businesses/:id/queues` · `PATCH /v1/queues/:id` (name, settings) · `POST /v1/queues/:id/archive` | O | BIZ-10–12 |
-| Queues | `GET /v1/queues/:id` (public info + live summary) | A | JON-03 |
+| Queues | `GET /v1/queues/:id` (public info + live summary + `joinRadiusM`) | A | JON-03 |
 | Console | `POST /v1/queues/:id/{open,close,pause,resume,next,undo-next,triage}` | S | BIZ-13, QUE-05–12 |
 | Console | `POST /v1/queues/:id/tokens/:tid/{skip,no-show,admit,served}` | S | QUE-06, QUE-08 |
 | Console | `GET /v1/queues/:id/console` (full live state) | S | console screen |
@@ -474,11 +476,12 @@ Every requirement ID that has backend behaviour gets at least one test named aft
 | Tokens | `GET /v1/me/tokens?status=active\|recent` | A | TOK-06 |
 | Tokens | `GET /v1/tokens/:id` · `POST /v1/tokens/:id/leave` · `POST /v1/tokens/:id/cancel` | A (owner of token) | TOK-01, TOK-05 |
 | Live | `GET /v1/queues/:id/live` (WebSocket) | A | TOK-02 |
-| Map | `GET /v1/map?bbox…&category` | A | MAP-01–04 |
+| Map | `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` | A | MAP-01–04, NFR-04 |
 | Payments | `POST /v1/queues/:id/orders` · `POST /v1/payments/verify` · `GET /v1/me/payments` | R | PAY-01–05, PAY-11 |
 | Payments | `POST /v1/webhooks/razorpay` | P (signature) | PAY-04, PAY-07 |
 | Insights | `GET /v1/businesses/:id/analytics?range=` · `GET /v1/businesses/:id/earnings?range=` | O | INS-01–08 |
 | Dev | `POST /v1/dev/seed` · `POST /v1/dev/simulate` · `GET /v1/dev/queue-ping/:id` | D | DEM-01–06 |
+| Dev | `POST /v1/dev/seed-map` · `POST /v1/dev/unseed-map` (registered) | D | map testing before Step 5 |
 
 Every request/response pair has a named zod schema in `packages/shared` (e.g. `CreateBusinessBody`, `BusinessDetail`, `TokenView`, `MapResponse`).
 
@@ -530,3 +533,12 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Snapshot wait range | `queue_snapshots.eta_low_ms/eta_high_ms` and `QueueLiveSummary.waitLowMs/waitHighMs` are **durations** for a new joiner (absolute times would go stale in an idle snapshot). |
 | Staff joining their own queue | Allowed: owners/staff may walk-in join as customers (one phone plays both roles in device tests; staff of small businesses queue too). |
 | Free-lane block | 3 no-shows (grace expiry of a free walk-in) within 30 days → `users.free_lane_blocked_until` = last strike + 7 days. |
+
+### Decided in Step 3
+
+| Question | Decision |
+|---|---|
+| "Listed for 14 days" (MAP-06) | `businesses.first_listed_at`, set the first time the BIZ-07 rule holds (pin set, queue created, activation) and never cleared, so a short deactivation doesn't restart the clock. Existing businesses were backfilled with their first active queue's `created_at`. |
+| Stats thresholds | Each average needs ≥ 20 samples (waits, intervals, ETA checks); `servedCount` is always returned. |
+| Map ordering under the limit | Nearest to the box centre first (equirectangular distance), so a truncated result keeps the middle of the view. |
+| Dev environments | Dev routes answer only when `ENVIRONMENT` is `local` or `dev` (was "not demo"). |
