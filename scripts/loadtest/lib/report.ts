@@ -24,6 +24,8 @@ export interface RunReport {
   };
   stoppedBy: string;
   requestsUsed: number;
+  /** Requests re-sent after a failed connection (they never reached the server). */
+  clientConnectRetries: number;
   counts: {
     tokens: number;
     joinsOk: number;
@@ -33,6 +35,8 @@ export interface RunReport {
     fullRejections: number;
     mapPolls: number;
     consoleResponses: number;
+    joinRetriesRecovered: number;
+    joinRetriesAlreadyInQueue: number;
   };
   endpoints: ReturnType<Metrics["summary"]>;
   check: CheckResult | null;
@@ -74,6 +78,7 @@ export function buildReport(args: {
     },
     stoppedBy: args.stoppedBy,
     requestsUsed: budget.used,
+    clientConnectRetries: metrics.connectRetries,
     counts: {
       tokens: state.tokens.size,
       joinsOk: sum(state.joinsOk),
@@ -83,6 +88,8 @@ export function buildReport(args: {
       fullRejections: state.fullRejections,
       mapPolls: state.mapPolls,
       consoleResponses: state.consoleSnapshots.length,
+      joinRetriesRecovered: state.joinRetries.recovered,
+      joinRetriesAlreadyInQueue: state.joinRetries.viaAlreadyInQueue,
     },
     endpoints: metrics.summary(),
     check,
@@ -103,10 +110,10 @@ function markdown(r: RunReport): string {
     `- ${r.config.businesses} businesses × ${r.config.queuesPerBusiness} queues, ${r.config.customers} customers, ${r.config.durationS} s load, ${r.config.mapClients} map clients, WS share ${r.config.wsShare}`,
   );
   lines.push(
-    `- Requests used: ${r.requestsUsed} / ${r.config.budget} (load phase stopped by: ${r.stoppedBy})`,
+    `- Requests used: ${r.requestsUsed} / ${r.config.budget} (load phase stopped by: ${r.stoppedBy}); client connect retries ${r.clientConnectRetries} (never reached the server)`,
   );
   lines.push(
-    `- Tokens ${r.counts.tokens} (joins ${r.counts.joinsOk}, triage ${r.counts.triageOk}), probes ${r.counts.probes}, paused rejections ${r.counts.pausedRejections}, full ${r.counts.fullRejections}, map polls ${r.counts.mapPolls}, console responses ${r.counts.consoleResponses}`,
+    `- Tokens ${r.counts.tokens} (joins ${r.counts.joinsOk}, triage ${r.counts.triageOk}), probes ${r.counts.probes}, paused rejections ${r.counts.pausedRejections}, full ${r.counts.fullRejections}, map polls ${r.counts.mapPolls}, console responses ${r.counts.consoleResponses}; lost join answers recovered by a retry ${r.counts.joinRetriesRecovered} (${r.counts.joinRetriesAlreadyInQueue} via already_in_queue)`,
   );
   if (r.error) lines.push(`- **Run error:** ${r.error}`);
   lines.push("");

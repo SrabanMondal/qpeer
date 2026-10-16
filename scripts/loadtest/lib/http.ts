@@ -40,6 +40,8 @@ export interface EndpointStats {
 
 export class Metrics {
   readonly endpoints = new Map<string, EndpointStats>();
+  /** Requests re-sent because the connection failed (never reached the server). */
+  connectRetries = 0;
 
   record(endpoint: string, status: number, ms: number): void {
     let s = this.endpoints.get(endpoint);
@@ -95,9 +97,38 @@ export interface ApiResult<T = unknown> {
   /** `error` code of an error body, if any. */
   code: string | null;
   ms: number;
+  /**
+   * Why status is 0: `timeout` (sent, no answer in TIMEOUT_MS), `connect`
+   * (no connection after the retries, so never sent) or `network:<code>`
+   * (connection broke; the request may or may not have reached the server).
+   */
+  error: string | null;
 }
 
+/** Whole-request timeout (the request may have reached the server). */
 const TIMEOUT_MS = 20_000;
+/**
+ * Connection failures mean the request was never sent (Node's fetch gives up
+ * connecting after 10 s: `UND_ERR_CONNECT_TIMEOUT`), so any method is safe to
+ * retry. Step 3.5 F2: all ~10 s "timeouts" were these, on the client's side.
+ */
+const CONNECT_RETRIES = 2;
+const CONNECT_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "ECONNREFUSED",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+]);
+
+/** Classifies a fetch failure (undici puts the socket error in `cause`). */
+export function fetchErrorKind(e: unknown): string {
+  if (e instanceof Error && e.name === "TimeoutError") return "timeout";
+  if (e instanceof SyntaxError) return "bad_json";
+  const cause = e instanceof Error ? (e.cause as { code?: unknown }) : null;
+  const code = typeof cause?.code === "string" ? cause.code : null;
+  if (code && CONNECT_CODES.has(code)) return "connect";
+  return `network:${code ?? (e instanceof Error ? e.name : "unknown")}`;
+}
 
 export class Api {
   readonly base: URL;
@@ -122,25 +153,42 @@ export class Api {
     token: string | null,
     body?: unknown,
   ): Promise<ApiResult<T>> {
-    this.budget.take(this.phase);
     const headers: Record<string, string> = {};
     if (token) headers.Authorization = `Bearer ${token}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     const start = performance.now();
     let status = 0;
     let parsed: unknown = null;
-    try {
-      const res = await fetch(new URL(path, this.base), {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-      status = res.status;
-      const text = await res.text();
-      parsed = text ? JSON.parse(text) : null;
-    } catch {
-      // network error / timeout / non-JSON: status stays 0 unless set
+    let error: string | null = null;
+    for (let attempt = 0; ; attempt++) {
+      this.budget.take(this.phase);
+      status = 0;
+      error = null;
+      try {
+        const res = await fetch(new URL(path, this.base), {
+          method,
+          headers,
+          body: body === undefined ? undefined : JSON.stringify(body),
+          signal: AbortSignal.timeout(TIMEOUT_MS),
+        });
+        status = res.status;
+        const text = await res.text();
+        parsed = text ? JSON.parse(text) : null;
+      } catch (e) {
+        error = fetchErrorKind(e);
+        if (status !== 0) {
+          // Headers arrived but the body didn't (timeout or reset while
+          // reading) or wasn't JSON. Report it as no answer: a 200 with a
+          // null body crashed the staff loop (Step 3.5 F4).
+          error = `bad_body:${status}:${error}`;
+          status = 0;
+          parsed = null;
+        }
+      }
+      if (status !== 0 || error !== "connect" || attempt >= CONNECT_RETRIES) {
+        break;
+      }
+      this.metrics.connectRetries++;
     }
     const ms = performance.now() - start;
     this.metrics.record(`${method} ${endpoint}`, status, ms);
@@ -148,7 +196,7 @@ export class Api {
       parsed && typeof parsed === "object" && "error" in parsed
         ? String((parsed as { error: unknown }).error)
         : null;
-    return { status, body: parsed as T, code, ms };
+    return { status, body: parsed as T, code, ms, error };
   }
 
   wsUrl(path: string): string {
