@@ -26,6 +26,8 @@ export interface RunReport {
   requestsUsed: number;
   /** Requests re-sent after a failed connection (they never reached the server). */
   clientConnectRetries: number;
+  /** GETs re-sent once after a broken connection. */
+  clientNetworkRetries: number;
   counts: {
     tokens: number;
     joinsOk: number;
@@ -79,6 +81,7 @@ export function buildReport(args: {
     stoppedBy: args.stoppedBy,
     requestsUsed: budget.used,
     clientConnectRetries: metrics.connectRetries,
+    clientNetworkRetries: metrics.networkRetries,
     counts: {
       tokens: state.tokens.size,
       joinsOk: sum(state.joinsOk),
@@ -110,7 +113,7 @@ function markdown(r: RunReport): string {
     `- ${r.config.businesses} businesses × ${r.config.queuesPerBusiness} queues, ${r.config.customers} customers, ${r.config.durationS} s load, ${r.config.mapClients} map clients, WS share ${r.config.wsShare}`,
   );
   lines.push(
-    `- Requests used: ${r.requestsUsed} / ${r.config.budget} (load phase stopped by: ${r.stoppedBy}); client connect retries ${r.clientConnectRetries} (never reached the server)`,
+    `- Requests used: ${r.requestsUsed} / ${r.config.budget} (load phase stopped by: ${r.stoppedBy}); client connect retries ${r.clientConnectRetries} (never reached the server), GET retries after a broken connection ${r.clientNetworkRetries}`,
   );
   lines.push(
     `- Tokens ${r.counts.tokens} (joins ${r.counts.joinsOk}, triage ${r.counts.triageOk}), probes ${r.counts.probes}, paused rejections ${r.counts.pausedRejections}, full ${r.counts.fullRejections}, map polls ${r.counts.mapPolls}, console responses ${r.counts.consoleResponses}; lost join answers recovered by a retry ${r.counts.joinRetriesRecovered} (${r.counts.joinRetriesAlreadyInQueue} via already_in_queue)`,

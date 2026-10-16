@@ -30,6 +30,33 @@ export function allocateSortKey(store: QueueStore, cls: TokenClass): number {
  * from its own place; a CALLED token re-enters behind the first N waiting.
  */
 export function skipSortKey(store: QueueStore, tokenId: string): number {
+  const me = store.token(tokenId);
+  const key = placeBehind(store, tokenId);
+  if (!me) return key;
+  // A skip only ever moves a token back: it may land behind lower classes
+  // (a skipped triage token goes behind the next 3 people, whoever they are),
+  // but never inside a higher class's range, or later arrivals of that class
+  // would queue behind it (Step 3.5 G1).
+  const floor = CLASS_RANK[me.cls] * RANK_SPAN;
+  if (key >= floor) return key;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const next = store
+      .waitingAfter(floor - 1, 2)
+      .find((t) => t.id !== tokenId)?.sort_key;
+    if (next === undefined) {
+      const seq = store.get("seq") + 1;
+      store.set("seq", seq);
+      return floor + seq * SEQ_STEP;
+    }
+    // Head of its own class, behind every higher-class token.
+    if (next - floor >= 1) return Math.floor((floor + next - 1) / 2);
+    store.renumberWaiting();
+  }
+  throw new Error("skip: could not find a sort key");
+}
+
+/** "Behind the next SKIP_BEHIND waiting tokens, or the end", ignoring class. */
+function placeBehind(store: QueueStore, tokenId: string): number {
   for (let attempt = 0; attempt < 2; attempt++) {
     const me = store.token(tokenId);
     const from = me?.state === "WAITING" ? me.sort_key : BEFORE_ALL;

@@ -29,7 +29,6 @@ import {
   applyOutboxItem,
   applyOutboxPushes,
   applyOutboxRows,
-  isRowItem,
   type SnapshotPayload,
   type TokenUpsertPayload,
 } from "./outbox";
@@ -61,6 +60,7 @@ import {
   HOURLY_FIELDS,
   type HourlyCounts,
   type HourlyRow,
+  type OutboxKind,
   type OutboxRow,
   QueueStore,
   type TokenRow,
@@ -151,6 +151,26 @@ export const UNDO_WINDOW_MS = 30_000;
 const MIN_ALARM_DELAY_MS = 250;
 /** Safety-net alarm for outbox items an inline drain is about to apply. */
 const OUTBOX_INLINE_SAFETY_MS = OUTBOX_BACKOFF_MS[0];
+/** RPCs and drains slower than this log their phase timings. */
+const SLOW_RPC_MS = 1_000;
+/** A D1 row batch that takes longer is treated as failed (retried later). */
+const ROW_BATCH_TIMEOUT_MS = 8_000;
+/** Longest a mutating RPC waits for its D1 rows before answering anyway. */
+const ROWS_WAIT_MS = 5_000;
+const ROW_KINDS: OutboxKind[] = ["token_upsert", "snapshot"];
+const SIDE_KINDS: OutboxKind[] = ["push", "analytics", "strike"];
+
+/** Rejects after `ms`; the underlying call keeps running (callers are idempotent). */
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${what} timed out after ${ms} ms`)),
+      ms,
+    );
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 /** How many waiting tokens are checked for head-back alerts. */
 const HEAD_BACK_SCAN = 50;
 
@@ -185,7 +205,8 @@ const newFx = (): Fx => ({
  */
 export class QueueDO extends DurableObject<Env> {
   private readonly store: QueueStore;
-  private drainChain: Promise<void> = Promise.resolve();
+  private rowChain: Promise<void> = Promise.resolve();
+  private sideChain: Promise<void> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -208,7 +229,7 @@ export class QueueDO extends DurableObject<Env> {
 
   /** Stores identity, labels and settings. Idempotent; older settings are ignored. */
   async init(input: InitInput): Promise<void> {
-    await this.mutate((_now, fx) => {
+    await this.mutate("init", (_now, fx) => {
       const s = this.store;
       if (s.get("queue_id") === null) {
         s.set("queue_id", input.queueId);
@@ -233,7 +254,7 @@ export class QueueDO extends DurableObject<Env> {
     settings: QueueSettings,
     version: number,
   ): Promise<{ applied: boolean }> {
-    const r = await this.mutate((_now, fx) =>
+    const r = await this.mutate("updateSettings", (_now, fx) =>
       ok(this.applySettings(settings, version, fx)),
     );
     return { applied: r.ok && r.value };
@@ -270,6 +291,7 @@ export class QueueDO extends DurableObject<Env> {
   /** BIZ-13: starts a session (numbers restart at 1). Idempotent while open. */
   async open(): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "open",
       (now, fx) => {
         const s = this.store;
         if (s.get("queue_id") === null) {
@@ -308,6 +330,7 @@ export class QueueDO extends DurableObject<Env> {
   > {
     const paidTokens: { tokenId: string; paymentOrderId: string }[] = [];
     return this.mutate(
+      "close",
       (now, fx) => {
         const s = this.store;
         if (s.get("status") === "closed") return ok(null);
@@ -337,6 +360,7 @@ export class QueueDO extends DurableObject<Env> {
   /** QUE-07: pause (no joins, no Next; paused time is excluded from the ETA). */
   async pause(): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "pause",
       (now, fx) => {
         const s = this.store;
         const status = s.get("status");
@@ -357,6 +381,7 @@ export class QueueDO extends DurableObject<Env> {
 
   async resume(): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "resume",
       (now, fx) => {
         const s = this.store;
         const status = s.get("status");
@@ -419,6 +444,7 @@ export class QueueDO extends DurableObject<Env> {
     input: AllocateInput,
   ): Promise<DoResult<{ token: TokenView; created: boolean }>> {
     return this.mutate(
+      "allocate",
       (now, fx) => this.allocateCore(input, now, fx),
       (now, v) => {
         const row = this.store.token(v.id);
@@ -433,6 +459,7 @@ export class QueueDO extends DurableObject<Env> {
     DoResult<{ token: TokenView; console: ConsoleState }>
   > {
     return this.mutate(
+      "insertTriage",
       (now, fx) => {
         const s = this.store;
         const day = istDay(now);
@@ -570,6 +597,7 @@ export class QueueDO extends DurableObject<Env> {
    */
   async next(counter = 1): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "next",
       (now, fx) => {
         const s = this.store;
         const status = s.get("status");
@@ -664,6 +692,7 @@ export class QueueDO extends DurableObject<Env> {
   /** QUE-12: undo the last Next within 30 s (staff mis-tap). */
   async undoNext(): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "undoNext",
       (now, fx) => {
         const s = this.store;
         const u = s.get("undo");
@@ -730,6 +759,7 @@ export class QueueDO extends DurableObject<Env> {
   /** QUE-06: the token goes behind the next 3 waiting tokens (or to the end). */
   async skip(tokenId: string): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "skip",
       (now, fx) => {
         const t = this.store.token(tokenId);
         if (!t) return fail("not_found", "Token not found");
@@ -760,6 +790,7 @@ export class QueueDO extends DurableObject<Env> {
   /** QUE-08: called token didn't show → grace period (default 10 min). */
   async noShow(tokenId: string): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "noShow",
       (now, fx) => {
         const t = this.store.token(tokenId);
         if (!t) return fail("not_found", "Token not found");
@@ -782,6 +813,7 @@ export class QueueDO extends DurableObject<Env> {
   /** QUE-08: late arrival in grace is admitted as the one being served. */
   async admit(tokenId: string): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "admit",
       (now, fx) => {
         const t = this.store.token(tokenId);
         if (!t) return fail("not_found", "Token not found");
@@ -802,6 +834,7 @@ export class QueueDO extends DurableObject<Env> {
 
   async served(tokenId: string): Promise<DoResult<ConsoleState>> {
     return this.mutate(
+      "served",
       (now, fx) => {
         const t = this.store.token(tokenId);
         if (!t) return fail("not_found", "Token not found");
@@ -826,6 +859,7 @@ export class QueueDO extends DurableObject<Env> {
     userId: string | null,
   ): Promise<DoResult<TokenView>> {
     return this.mutate(
+      "leave",
       (now, fx) => {
         const t = this.store.token(tokenId);
         if (!t || (userId !== null && t.user_id !== userId)) {
@@ -853,6 +887,7 @@ export class QueueDO extends DurableObject<Env> {
   ): Promise<DoResult<{ token: TokenView; refund: boolean }>> {
     let refund = false;
     return this.mutate(
+      "cancel",
       (now, fx) => {
         const t = this.store.token(tokenId);
         if (!t || (userId !== null && t.user_id !== userId)) {
@@ -1035,6 +1070,7 @@ export class QueueDO extends DurableObject<Env> {
     }
     this.broadcast(now, fx);
     await this.reschedule(true);
+    // The alarm owns its drain end to end (the platform retries a failed alarm).
     await this.drainOutbox();
   }
 
@@ -1058,13 +1094,18 @@ export class QueueDO extends DurableObject<Env> {
 
   /**
    * Runs `op` in one synchronous storage transaction, then (on success)
-   * broadcasts, reschedules the alarm and drains the outbox. `view` builds the
+   * broadcasts, reschedules the alarm and applies the D1 rows (token rows,
+   * snapshot) before returning, so the caller can read its own write from D1.
+   * Pushes, analytics and strikes drain in the background (G2): an Expo call
+   * or a slow push batch never delays a join or a Next. `view` builds the
    * returned value after the change is committed.
    */
   private async mutate<V, R = V>(
+    name: string,
     op: (now: number, fx: Fx) => DoResult<V>,
     view?: (now: number, value: V) => R,
   ): Promise<DoResult<R>> {
+    const t0 = Date.now();
     const now = this.now();
     const fx = newFx();
     let result: DoResult<V>;
@@ -1081,15 +1122,55 @@ export class QueueDO extends DurableObject<Env> {
       throw e;
     }
     if (fx.changed) this.broadcast(now, fx);
+    const t1 = Date.now();
+    let t2 = t1;
+    let rows = 0;
     if (fx.changed) {
       await this.reschedule(true);
-      await this.drainOutbox();
+      t2 = Date.now();
+      // Bounded: if D1 is slow, answer anyway after ROWS_WAIT_MS (the rows
+      // land shortly after; the alarm is the safety net). -1 in the log.
+      rows = await withTimeout(this.drainRows(), ROWS_WAIT_MS, "rows").catch(
+        () => -1,
+      );
+      this.ctx.waitUntil(this.drainSide());
+    }
+    const t3 = Date.now();
+    if (t3 - t0 >= SLOW_RPC_MS) {
+      this.logTiming("rpc", name, {
+        txMs: t1 - t0,
+        alarmMs: t2 - t1,
+        rowsMs: t3 - t2,
+        totalMs: t3 - t0,
+        rows,
+      });
     }
     if (!result.ok) return result;
     const value = view
       ? view(this.now(), result.value)
       : (result.value as unknown as R);
     return ok(value);
+  }
+
+  /**
+   * Timing of a slow RPC or drain (≥ SLOW_RPC_MS): op name, queue id and
+   * durations/counts only — never user ids, tokens' owners or locations.
+   */
+  private logTiming(
+    kind: "rpc" | "drain",
+    name: string,
+    fields: Record<string, number>,
+  ): void {
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "warn",
+        where: `queue-do.slow-${kind}`,
+        op: name,
+        queueId: this.store.get("queue_id"),
+        ...fields,
+      }),
+    );
   }
 
   /** Updates a token, bumps its rev, records the D1 upsert and marks it touched. */
@@ -1323,49 +1404,108 @@ export class QueueDO extends DurableObject<Env> {
   }
 
   /**
-   * Applies due outbox items. Drains are chained, so a caller's drain always
-   * starts after its own items were written, and two drains never overlap.
+   * Applies every due outbox item: rows, then the rest. Used by the alarm and
+   * `flushOutbox`; mutations await only `drainRows` (see `mutate`).
    */
-  private drainOutbox(): Promise<void> {
-    const run = this.drainChain.then(() => this.drainOnce());
-    this.drainChain = run.catch(() => undefined);
-    return this.drainChain;
+  private async drainOutbox(): Promise<void> {
+    await this.drainRows();
+    await this.drainSide();
   }
 
-  private async drainOnce(): Promise<void> {
+  /**
+   * Token rows and snapshots, batched (one D1 round trip per ≤ 50 items).
+   * Row drains are chained: one at a time, and a caller's drain starts after
+   * its own items were written. Each batch is bounded by a timeout so a stuck
+   * D1 call can't hold every later mutation of this queue (G2); the rows are
+   * idempotent, so a late success plus a retry is harmless.
+   */
+  private drainRows(): Promise<number> {
+    const run = this.rowChain.then(() => this.drainRowsOnce());
+    this.rowChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.catch(() => 0);
+  }
+
+  /**
+   * Pushes, analytics and strikes. Chained (one at a time, so a push item is
+   * never applied by two drains at once: no duplicates from concurrency), and
+   * each run starts after the row drain queued before it, so a push ticket or
+   * strike always finds its token row.
+   */
+  private drainSide(): Promise<void> {
+    const rowsBefore = this.rowChain;
+    const run = this.sideChain
+      .then(() => rowsBefore)
+      .then(() => this.drainSideOnce());
+    this.sideChain = run.catch(() => undefined);
+    return this.sideChain;
+  }
+
+  /** Test/debug: waits until every drain queued so far has finished. */
+  async flushOutbox(): Promise<number> {
+    await this.drainOutbox();
+    return this.store.outboxCount();
+  }
+
+  private async drainRowsOnce(): Promise<number> {
+    const t0 = Date.now();
     const deps = { d1: this.env.DB, push: pushTransport(this.env) };
+    let applied = 0;
     for (let round = 0; round < 10; round++) {
       const now = this.now();
-      const due = this.store.dueOutbox(now, 25);
+      const rows = this.store.dueOutboxKinds(now, 50, ROW_KINDS);
+      if (rows.length === 0) break;
+      try {
+        await withTimeout(
+          applyOutboxRows(rows, deps),
+          ROW_BATCH_TIMEOUT_MS,
+          "D1 row batch",
+        );
+        for (const item of rows) this.store.deleteOutbox(item.id);
+        applied += rows.length;
+      } catch (e) {
+        for (const item of rows) this.outboxFailed(item, now, e);
+        break;
+      }
+    }
+    // A side drain always follows a row drain, so fresh side items only need
+    // the safety-net alarm here (keeps F1's superseded alarms away).
+    await this.reschedule(true);
+    const ms = Date.now() - t0;
+    if (ms >= SLOW_RPC_MS) this.logTiming("drain", "rows", { ms, applied });
+    return applied;
+  }
+
+  private async drainSideOnce(): Promise<void> {
+    const t0 = Date.now();
+    const deps = { d1: this.env.DB, push: pushTransport(this.env) };
+    let pushed = 0;
+    let other = 0;
+    for (let round = 0; round < 10; round++) {
+      const now = this.now();
+      const due = this.store.dueOutboxKinds(now, 25, SIDE_KINDS);
       if (due.length === 0) break;
       let progressed = false;
-      // Token rows and snapshots first, in one D1 round trip (F2), so pushes
-      // and strikes that refer to a token always find its row.
-      const rows = due.filter(isRowItem);
-      if (rows.length > 0) {
-        try {
-          await applyOutboxRows(rows, deps);
-          for (const item of rows) this.store.deleteOutbox(item.id);
-          progressed = true;
-        } catch (e) {
-          for (const item of rows) this.outboxFailed(item, now, e);
-        }
-      }
+      // Pushes together: one device lookup, one Expo call, one ticket write.
       const pushes = due.filter((i) => i.kind === "push");
       if (pushes.length > 0) {
         try {
           await applyOutboxPushes(pushes, deps, now);
           for (const item of pushes) this.store.deleteOutbox(item.id);
+          pushed += pushes.length;
           progressed = true;
         } catch (e) {
           for (const item of pushes) this.outboxFailed(item, now, e);
         }
       }
       for (const item of due) {
-        if (isRowItem(item) || item.kind === "push") continue;
+        if (item.kind === "push") continue;
         try {
           await applyOutboxItem(item, deps, now);
           this.store.deleteOutbox(item.id);
+          other++;
           progressed = true;
         } catch (e) {
           this.outboxFailed(item, now, e);
@@ -1374,6 +1514,10 @@ export class QueueDO extends DurableObject<Env> {
       if (!progressed) break;
     }
     await this.reschedule();
+    const ms = Date.now() - t0;
+    if (ms >= SLOW_RPC_MS) {
+      this.logTiming("drain", "side", { ms, pushed, other });
+    }
   }
 
   private outboxFailed(item: OutboxRow, now: number, e: unknown): void {
