@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S2 |
 | Area | mobile |
-| Status | open |
+| Status | fixed-unverified-on-device |
 | Original ID | B13 |
 
 ## Summary
@@ -30,24 +30,22 @@ The app has a shared `ConnectionBanner`, but each screen adds its own loading an
 
 ## Fix
 
-Not done. The agreed direction is to degrade, not block:
+Branch `feat/fix-batch-rebuild`, commits b26237c (storage module in the native rebuild) and b691163 (offline screens). Degrade, do not block:
 
-1. One slim offline banner on every screen.
-2. The ticket screen keeps the last known view and shows "Last updated N min ago".
-3. The map screen shows a calm card: "The map needs internet", with a link to the active tickets.
-4. Actions that need the server (Join, Leave, NEXT, Skip, saves) are disabled with a short reason.
-5. The console keeps the last state, greyed, with "Offline — actions paused".
-
-The app keeps tickets in memory only. A cold start while offline therefore has nothing to show. Saving the ticket on the phone needs a storage module and a native rebuild (see the "Finish" list in `NOTES.md`).
+1. `ConnectionBanner` is now one slim strip on every screen: "Offline — showing saved info" with Retry (or "Connecting…").
+2. A new `lib/storage.ts` (AsyncStorage, typed keys with versions) saves every ticket view. The ticket screen shows the saved view when the server can't answer, also on a cold start, with "Last updated N min ago · offline".
+3. Home shows a calm card, "The map needs internet", with the saved active tickets one tap away, instead of a spinner and a black map (also when the map style fails, INC-041).
+4. Server actions are disabled with "You're offline. This needs internet.": Join, Leave, every console action, and the save buttons (`Button needsNetwork`).
+5. The console keeps the last state, greyed, under "Offline — actions paused".
+6. The Queue tab lists the saved active tickets when the server can't answer.
 
 ## Verification
 
-Not yet.
+`npm run check` (types, Biome, API and shared tests). The screens are app code without unit tests; checked by a JS bundle build (`expo export`). Not yet checked on a phone.
 
 ## Follow-ups
 
-1. Build the offline states above.
-2. Save the last ticket view on the phone in the batched native rebuild.
+Device check on the rebuilt app: airplane mode on the ticket, on Home and on the console; then a cold start in airplane mode.
 
 ## Lessons
 

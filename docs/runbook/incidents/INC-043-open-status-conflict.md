@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S2 |
 | Area | mobile, api |
-| Status | open |
+| Status | fixed-unverified-on-device |
 | Original ID | B16 |
 
 ## Summary
@@ -30,15 +30,15 @@ Two rules exist. The map card, the join screen and the queue badge use the queue
 
 ## Fix
 
-Not done. Proposed rule: the queue state decides if a customer can join. The hours are information. When a queue is open outside the hours, show "Open (after usual hours)". The `openNow` filter uses the same rule as the badge. The auto-close in INC-047 makes the conflict rare.
+Branch `feat/fix-batch-rebuild`, commits 8e17550 (shared `openLook`), 0d93a29 (`openNow` SQL) and 9627e5f (screens). The owner agreed the rule on 2026-10-16: the queue state decides if a customer can join; the hours are information. One shared function gives the words: "Open now", "Open (after usual hours)", "Paused", "Queue not open" (inside hours, no queue open) and "Closed now". The map card, list row, business page banner and queue badges, and the join screen use it. `GET /v1/map?openNow=1` now keeps businesses with a queue that is open and not paused, whatever the hours. `GET /v1/queues/:id` gives the join screen `isOpenNow` and today's hours. The auto-close (INC-047) makes a queue open long after hours rare.
 
 ## Verification
 
-Not yet.
+`openLook` unit tests; `map.test.ts` "MAP-04/B16" (open after hours is kept, paused and not-opened are not, the limit applies after the filter); the API test of `business.isOpenNow` on the queue info. Not yet checked on a phone.
 
 ## Follow-ups
 
-Fix together with INC-047.
+Device check with the demo seed after 18:00 IST: card, list, page and join screen all say "Open (after usual hours)".
 
 ## Lessons
 

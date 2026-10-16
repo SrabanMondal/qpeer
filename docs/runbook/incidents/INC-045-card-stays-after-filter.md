@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S3 |
 | Area | mobile |
-| Status | open |
+| Status | fixed-unverified-on-device |
 | Original ID | B18 |
 
 ## Summary
@@ -30,11 +30,11 @@ The selected business in `screens/discover/` is not cleared when the filtered da
 
 ## Fix
 
-Not done. Close the card when the selected business is not in the current results.
+Branch `feat/fix-batch-rebuild`, commit b691163 (`discover-screen.tsx`). Once the current results have arrived (not the previous box's placeholder data) and no longer hold the selected business, the card closes.
 
 ## Verification
 
-Not yet.
+Types and a JS bundle build. Not yet checked on a phone.
 
 ## Follow-ups
 

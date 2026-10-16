@@ -19,6 +19,9 @@ Each rule comes from an incident in this runbook. The link after each rule goes 
 2. If a client gets one object over a socket and over HTTP, keep the view with the highest server `rev`, not the last to arrive. ([INC-032](incidents/INC-032-left-to-waiting-out-of-order.md), [INC-033](incidents/INC-033-app-ticket-out-of-order-view.md))
 3. A start gate must not depend on a query that can return to `pending`. ([INC-005](incidents/INC-005-offline-launch-stuck-starting.md))
 4. A network call at app launch needs a retry with backoff. ([INC-001](incidents/INC-001-first-launch-sign-in-failed.md))
+5. Design the offline state of every screen together: keep the last view, show its age, disable server actions with a reason. Never block a screen on the network. ([INC-040](incidents/INC-040-offline-experience-inconsistent.md))
+6. Every native view that loads from the network needs an error state and a retry. ([INC-041](incidents/INC-041-raw-mapbox-error.md))
+7. One user-visible word or number ("open", the wait) has one rule and one shared function on every screen and in every API filter. A cached duration carries the time it was measured. ([INC-043](incidents/INC-043-open-status-conflict.md), [INC-049](incidents/INC-049-three-different-waits.md))
 
 ## Queue engine
 
@@ -27,6 +30,8 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 1. Do not make an RPC wait without a limit for a shared drain. Batch D1 writes, and send pushes and analytics in the background. ([INC-023](incidents/INC-023-serial-outbox-drain.md), [INC-030](incidents/INC-030-slow-join-after-allocation.md))
 2. A skip never moves a token into the range of a higher class. Test the edge where everybody in range has a higher class. ([INC-029](incidents/INC-029-skipped-regular-in-triage-range.md))
 3. A flag that schedules work must clear when no work is left. Otherwise the alarm runs in a loop. ([INC-025](incidents/INC-025-far-fanout-alarm-spin.md))
+4. Recompute a value derived from state (like "now serving") after every change, not in one action only. ([INC-048](incidents/INC-048-now-serving-after-leave.md))
+5. A safety job that a step defers becomes a visible bug once data lives longer than a day. Build it with the feature. ([INC-047](incidents/INC-047-queue-open-overnight.md))
 
 ## Migrations
 
@@ -51,3 +56,5 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 4. If a new `workers.dev` URL fails with a TLS error right after the first deploy, retry after a short wait. ([INC-036](incidents/INC-036-workers-dev-tls-after-deploy.md))
 5. If a slow DO and D1 integration test fails at random, raise its timeout. The API `testTimeout` is 20 s. ([INC-018](incidents/INC-018-flaky-dev-seed-test-timeout.md))
 6. Act on a rename or deprecation notice before the next feature task. ([INC-003](incidents/INC-003-vitest-pool-workers-renamed.md), [INC-004](incidents/INC-004-biome-recommended-deprecated.md))
+7. Link to a route added in the same change with a string `Href`: typed routes (`.expo/types`) are written only by `expo start`. A fresh worktree needs `apps/mobile/expo-env.d.ts` and `.expo/types` before `npm run check`. ([INC-050](incidents/INC-050-stale-typed-routes.md))
+8. After a local `expo prebuild`, revert its `android`/`ios` script changes in `apps/mobile/package.json` and delete `android/`. ([INC-051](incidents/INC-051-prebuild-rewrites-scripts.md))

@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S3 |
 | Area | mobile |
-| Status | open |
+| Status | fixed-unverified-on-device |
 | Original ID | B17 |
 
 ## Summary
@@ -26,19 +26,19 @@ Unknown.
 
 ## Root cause
 
-Unknown. The long description text next to the switch probably takes the full row width, and the switch gets too little space.
+Probable, not proven on the phone: the long description took the row's width (`flex: 1` text next to a switch that may shrink), so Android drew the switch narrow. The off track used the `border` colour, which is almost the card colour in dark mode, and the knob used the card colour.
 
 ## Fix
 
-Not done. Give the switch a fixed width that does not shrink, and make sure that the off track has enough contrast in dark mode.
+Branch `feat/fix-batch-rebuild`, commit 03b4107. New `AppSwitch` (labelled row: the text takes the free width and wraps, the switch sits in a box that never shrinks; the whole row toggles) and `ThemedSwitch` (bare switch, same colours). Off track `inkMuted` in both themes, knob white when on and `ink`/`card` when off. Used by "Show public stats" and the hours editor's day switches, the only two switches in the app.
 
 ## Verification
 
-Not yet.
+Types and Biome. Not yet checked on a phone.
 
 ## Follow-ups
 
-Check every other switch in the app (for example the hours "Closed" switch) for the same layout.
+Device check in dark and light theme and at the largest font size.
 
 ## Lessons
 
