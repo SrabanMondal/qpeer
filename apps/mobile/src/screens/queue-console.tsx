@@ -1,6 +1,11 @@
-import type { ConsoleState, ConsoleToken } from "@qpeer/shared";
+import {
+  AUTO_CLOSE_WARNING_MS,
+  type ConsoleState,
+  type ConsoleToken,
+  waitText,
+} from "@qpeer/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { useFocusEffect, useRouter } from "expo-router";
+import { type Href, useFocusEffect, useRouter } from "expo-router";
 import {
   type ReactNode,
   useCallback,
@@ -20,6 +25,7 @@ import {
   ConfirmDialog,
   EmptyState,
   ErrorState,
+  HeaderButton,
   Icon,
   LoadingState,
   Screen,
@@ -39,18 +45,17 @@ import {
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useLiveSocket } from "@/lib/live";
+import { useOffline } from "@/lib/network";
 import {
   formatClock,
   formatCountdown,
-  formatWaitRange,
+  formatDateTime,
   liveStatusLook,
   METHOD_LABELS,
   useNow,
 } from "@/lib/queue-format";
+import { useStored } from "@/lib/storage";
 import { showErrorToast, showToast } from "@/lib/toast";
-
-/** The console's chosen queue, kept for this app run (no storage module yet). */
-let rememberedQueueId: string | null = null;
 
 /** Waiting rows drawn at most; the rest is summarised. */
 const MAX_WAITING_ROWS = 50;
@@ -86,13 +91,24 @@ function useConsoleQueues() {
 export function QueueConsole() {
   const router = useRouter();
   const { list, queues } = useConsoleQueues();
-  const [selected, setSelected] = useState<string | null>(rememberedQueueId);
+  // C1: the chosen queue is remembered across restarts.
+  const remembered = useStored("consoleQueue");
+  const offline = useOffline();
+  const selected = remembered.value ?? null;
   const current = queues.find((q) => q.id === selected) ?? queues[0] ?? null;
 
   if (list.isPending) {
     return (
       <Screen bottomInset={false}>
-        <LoadingState label="Loading your queues…" />
+        {offline ? (
+          <EmptyState
+            icon="cloud_off"
+            title="The console needs internet"
+            message="Your queues show as soon as you're online."
+          />
+        ) : (
+          <LoadingState label="Loading your queues…" />
+        )}
       </Screen>
     );
   }
@@ -165,10 +181,7 @@ export function QueueConsole() {
                   ? `${q.name} · ${q.businessName}`
                   : q.name,
             }))}
-            onChange={(id) => {
-              rememberedQueueId = id;
-              setSelected(id);
-            }}
+            onChange={(id) => remembered.set(id)}
           />
         ) : null
       }
@@ -189,6 +202,8 @@ function ConsoleBody({
   refreshList: () => void;
 }) {
   const uid = useAuth().user?.uid ?? null;
+  const router = useRouter();
+  const offline = useOffline();
   const queryClient = useQueryClient();
   const consoleQ = useConsole(queue.id);
   const command = useConsoleCommand(queue.id);
@@ -239,7 +254,10 @@ function ConsoleBody({
   }, [state]);
 
   const undoActive = state?.undoUntil != null;
-  const now = useNow(Boolean(undoActive || (state && state.grace.length > 0)));
+  // Ticks every second for undo/grace countdowns, else every 30 s (the
+  // auto-close warning only needs minutes).
+  const fast = Boolean(undoActive || (state && state.grace.length > 0));
+  const now = useNow(true, fast ? 1000 : 30_000);
 
   if (!state) {
     return (
@@ -259,9 +277,10 @@ function ConsoleBody({
     );
   }
 
-  const busy = command.isPending;
+  // B13: offline, the console keeps the last state, greyed, and pauses actions.
+  const busy = command.isPending || offline;
   const run = async (cmd: ConsoleCommand, errorTitle: string) => {
-    if (command.isPending) return false;
+    if (command.isPending || offline) return false;
     if (cmd.kind === "token" && cmd.action === "no-show") {
       ownNoShows.current.add(cmd.tokenId);
     }
@@ -297,16 +316,32 @@ function ConsoleBody({
         ]}
       >
         {picker}
-        <ConsoleView
-          state={state}
-          queue={queue}
-          live={live === "live"}
-          busy={busy}
-          now={now}
-          counter={Math.min(counter, state.counters)}
-          setCounter={setCounter}
-          run={run}
-        />
+        {offline ? (
+          <StatusBanner
+            tone="paused"
+            title="Offline — actions paused"
+            detail={`Showing the queue as of ${formatClock(state.updatedAt)}. Actions come back when you're online.`}
+          />
+        ) : null}
+        <View style={offline ? styles.greyed : undefined}>
+          <ConsoleView
+            state={state}
+            queue={queue}
+            live={live === "live"}
+            busy={busy}
+            now={now}
+            counter={Math.min(counter, state.counters)}
+            setCounter={setCounter}
+            run={run}
+            onVerify={() =>
+              // A plain string: the typed-routes file (.expo/types, made by
+              // `expo start`) may not list this new route yet on a checkout.
+              router.push(
+                `/queue/${encodeURIComponent(queue.id)}/verify` as Href,
+              )
+            }
+          />
+        </View>
       </Screen>
       {showUndo ? (
         <UndoBar
@@ -389,6 +424,7 @@ function ConsoleView({
   counter,
   setCounter,
   run,
+  onVerify,
 }: {
   state: ConsoleState;
   queue: ConsoleQueue;
@@ -398,9 +434,18 @@ function ConsoleView({
   counter: number;
   setCounter: (c: number) => void;
   run: (cmd: ConsoleCommand, errorTitle: string) => Promise<boolean>;
+  /** C3: open the ticket scanner. */
+  onVerify: () => void;
 }) {
   const status = liveStatusLook(state.status);
   const closed = state.status === "closed";
+  // B20: warn 15 min before the auto-close; "Keep open" adds an hour.
+  const autoCloseAt = state.autoCloseAt ?? null;
+  const closingSoon =
+    !closed &&
+    autoCloseAt !== null &&
+    now >= autoCloseAt - AUTO_CLOSE_WARNING_MS;
+  const carried = state.waiting.filter((t) => t.carriedOver);
   const paused = state.status === "paused";
   const multi = state.counters > 1;
   const atCounter =
@@ -423,13 +468,21 @@ function ConsoleView({
   };
 
   const onClose = async () => {
-    const left = state.counts.total;
+    // C4: waiting tickets still valid after now carry over instead of ending.
+    const keep = state.waiting.filter(
+      (t) => t.expiresAt != null && t.expiresAt > now,
+    ).length;
+    const left = state.counts.total - keep;
+    const keepText =
+      keep > 0
+        ? ` ${keep} ${keep === 1 ? "ticket is" : "tickets are"} valid beyond today and will be served first next time.`
+        : "";
     const ok = await ConfirmDialog.show({
       title: "Close for the day?",
       message:
         left > 0
-          ? `${left} ${left === 1 ? "ticket is" : "tickets are"} still active. They will expire and those customers are told the queue closed. Numbers start again at 1 when you open next time.`
-          : "Nobody can join until you open the queue again. Numbers start again at 1 next time.",
+          ? `${left} ${left === 1 ? "ticket is" : "tickets are"} still active. They will expire and those customers are told the queue closed. Numbers start again at 1 when you open next time.${keepText}`
+          : `Nobody can join until you open the queue again. Numbers start again at 1 next time.${keepText}`,
       confirmLabel: "Close queue",
     });
     if (ok) await run({ kind: "queue", action: "close" }, "Could not close");
@@ -514,6 +567,37 @@ function ConsoleView({
         }
       />
 
+      {closingSoon && autoCloseAt !== null ? (
+        <StatusBanner
+          tone="paused"
+          title={
+            now >= autoCloseAt
+              ? "Closing now"
+              : `Closes by itself at ${formatClock(autoCloseAt)}`
+          }
+          detail="After the day's opening hours the queue closes automatically. Remaining tickets end as on Close."
+          right={
+            <HeaderButton
+              title="Keep open"
+              disabled={busy}
+              onPress={() =>
+                void run(
+                  { kind: "queue", action: "keep-open" },
+                  "Could not keep the queue open",
+                ).then((ok) => {
+                  if (ok) {
+                    showToast({
+                      title: "Kept open for another hour",
+                      tone: "success",
+                    });
+                  }
+                })
+              }
+            />
+          }
+        />
+      ) : null}
+
       {closed ? (
         <>
           <Card style={styles.centreCard}>
@@ -523,8 +607,9 @@ function ConsoleView({
               themeColor="inkMuted"
               style={styles.centreText}
             >
-              Open it to start today's session. Customers can then scan the QR
-              code and join.
+              {carried.length > 0
+                ? `Open it to start a new session. ${carried.length} ${carried.length === 1 ? "ticket is" : "tickets are"} still valid and will be served first.`
+                : "Open it to start today's session. Customers can then scan the QR code and join."}
             </ThemedText>
             <Button
               title="Open queue"
@@ -538,6 +623,20 @@ function ConsoleView({
             />
           </Card>
           {calledSection}
+          {carried.length > 0 ? (
+            <>
+              <SectionHeader
+                title={`Kept for next session (${carried.length})`}
+              />
+              {carried.slice(0, MAX_WAITING_ROWS).map((t) => (
+                <TokenRow
+                  key={t.id}
+                  token={t}
+                  detail={`joined ${formatDateTime(t.joinedAt)}${t.expiresAt ? ` · valid until ${formatDateTime(t.expiresAt)}` : ""}`}
+                />
+              ))}
+            </>
+          ) : null}
         </>
       ) : (
         <>
@@ -703,12 +802,19 @@ function ConsoleView({
           { label: "Total", value: state.counts.total, icon: "groups" },
         ]}
       />
-      {!closed &&
-      state.eta.waitLowMs !== null &&
-      state.eta.waitHighMs !== null ? (
+      {!closed ? (
         <ThemedText type="small" themeColor="inkMuted">
-          Someone joining now waits{" "}
-          {formatWaitRange(state.eta.waitLowMs, state.eta.waitHighMs)}
+          Someone joining now:{" "}
+          {waitText(
+            {
+              waiting: state.counts.waiting,
+              inService: state.counts.inService,
+              waitLowMs: state.eta.waitLowMs,
+              waitHighMs: state.eta.waitHighMs,
+              updatedAt: state.updatedAt,
+            },
+            now,
+          ) ?? "wait not known yet"}
           {state.eta.coldStart ? " (estimate from your settings)" : ""}.
         </ThemedText>
       ) : null}
@@ -727,7 +833,7 @@ function ConsoleView({
               <TokenRow
                 key={t.id}
                 token={t}
-                detail={`${t.position !== null ? `${t.position}. ` : ""}joined ${formatClock(t.joinedAt)}`}
+                detail={`${t.position !== null ? `${t.position}. ` : ""}joined ${t.carriedOver ? formatDateTime(t.joinedAt) : formatClock(t.joinedAt)}`}
                 onLongPress={() => waitingMenu(t)}
                 trailing={
                   <Pressable
@@ -763,6 +869,15 @@ function ConsoleView({
           />
         </>
       ) : null}
+
+      {/* C3: works offline (signature check on the phone). */}
+      <Button
+        title="Verify a ticket"
+        icon="qr_code_scanner"
+        variant="secondary"
+        onPress={onVerify}
+        accessibilityLabel="Verify a customer's ticket code"
+      />
     </>
   );
 }
@@ -785,12 +900,14 @@ function TokenRow({
   onLongPress?: () => void;
 }) {
   const theme = useTheme();
-  const tag =
+  const base =
     token.cls === "triage"
       ? "Triage"
       : token.cls === "priority"
         ? "Priority"
         : METHOD_LABELS[token.method];
+  // C4: carried over from an earlier session (same number, served first).
+  const tag = token.carriedOver ? `${base} · Kept` : base;
   return (
     <Pressable
       onLongPress={onLongPress}
@@ -827,6 +944,7 @@ function TokenRow({
 
 const styles = StyleSheet.create({
   fill: { flex: 1 },
+  greyed: { opacity: 0.5, gap: Spacing.twoHalf },
   compact: { paddingTop: Spacing.twoHalf, gap: Spacing.twoHalf },
   centreCard: { alignItems: "center" },
   centreText: { textAlign: "center" },

@@ -8,20 +8,27 @@ export function HeaderButton({
   onPress,
   accessibilityLabel,
   color = "primary",
+  disabled = false,
 }: {
   title: string;
   onPress: () => void;
   accessibilityLabel?: string;
   color?: ThemeColor;
+  disabled?: boolean;
 }) {
   const theme = useTheme();
   return (
     <Pressable
       onPress={onPress}
+      disabled={disabled}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
+      accessibilityState={{ disabled }}
       hitSlop={8}
-      style={({ pressed }) => [styles.button, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.button,
+        (pressed || disabled) && styles.pressed,
+      ]}
     >
       <Text style={[styles.text, { color: theme[color] }]}>{title}</Text>
     </Pressable>
