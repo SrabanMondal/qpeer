@@ -14,6 +14,8 @@ export interface TokenObservation {
   peopleAhead: number;
   queueStatus: string;
   nowServing: string | null;
+  /** TokenView.rev: clients keep the highest (Step 3.5 H1). */
+  rev: number;
 }
 
 export interface LiveStats {
@@ -120,8 +122,11 @@ export class LiveClient {
           peopleAhead: Number(t.peopleAhead),
           queueStatus: String(t.queueStatus),
           nowServing: (t.nowServing as string | null) ?? null,
+          rev: Number(t.rev),
         };
-        this.last = o;
+        // Every message is recorded; like the app, the socket's "shown"
+        // view is the newest one (a lower rev is ignored, H1).
+        if (!this.last || o.rev >= this.last.rev) this.last = o;
         this.onObservation(o);
       }
     });

@@ -38,6 +38,36 @@ export interface SimToken {
   leftOk: boolean;
 }
 
+/**
+ * What the app shows over time: observations in arrival order, minus those
+ * older (lower `rev`) than one already shown — the app ignores them (H1).
+ * Returns the shown ones and how many were ignored.
+ */
+export function shownViews(obs: TokenObservation[]): {
+  shown: TokenObservation[];
+  ignored: number;
+} {
+  const sorted = [...obs].sort((a, b) => a.at - b.at);
+  const shown: TokenObservation[] = [];
+  let maxRev = Number.NEGATIVE_INFINITY;
+  let ignored = 0;
+  for (const o of sorted) {
+    if (o.rev < maxRev) {
+      ignored++;
+      continue;
+    }
+    maxRev = o.rev;
+    shown.push(o);
+  }
+  return { shown, ignored };
+}
+
+/** The view the app currently shows (newest rev; latest arrival on ties). */
+export function shownLast(obs: TokenObservation[]): TokenObservation | null {
+  const { shown } = shownViews(obs);
+  return shown[shown.length - 1] ?? null;
+}
+
 export type QueueEventKind =
   | "open"
   | "next"
@@ -62,6 +92,8 @@ export interface QueueEvent {
   ok: boolean;
   status: number;
   code: string | null;
+  /** Why status is 0 (`ApiResult.error`), if it is. */
+  error?: string | null;
 }
 
 export type ProbeKind = "too_far" | "mock_location" | "no_location_fix";

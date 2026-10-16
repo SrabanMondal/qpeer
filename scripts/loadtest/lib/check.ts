@@ -7,6 +7,7 @@ import {
   type QueueEvent,
   type SimState,
   type SimToken,
+  shownViews,
   TERMINAL_STATES,
 } from "./model.ts";
 import { MAP_BOX } from "./sim.ts";
@@ -459,7 +460,12 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
     inv(
       "Terminal states never move backwards",
       backwardsFailures(state, auditB),
-      "observed terminal → other state only via Undo (SERVED → CALLED within 30 s)",
+      `shown terminal → other state only via Undo (SERVED → CALLED within 30 s); one state per rev; ${[
+        ...state.tokens.values(),
+      ].reduce(
+        (n, t) => n + shownViews(t.observations).ignored,
+        0,
+      )} late views with an older rev ignored, as the app does`,
     ),
   );
 
@@ -554,17 +560,35 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
   }
 
   {
-    const grouped = new Map<string, number>();
-    for (const u of state.unexpected) {
-      const k =
-        `${u.endpoint} → ${u.status} ${u.code ?? ""}${u.error ? ` (${u.error})` : ""}`.trim();
-      grouped.set(k, (grouped.get(k) ?? 0) + 1);
-    }
+    // H2: requests that never got a connection (after the client's retries)
+    // never reached the server. They are the client's network, reported on
+    // their own line, and only fail the run above CLIENT_NETWORK_MAX_SHARE.
+    const isClientNetwork = (u: SimState["unexpected"][number]) =>
+      u.status === 0 && u.error === "connect";
+    const group = (list: SimState["unexpected"]) => {
+      const grouped = new Map<string, number>();
+      for (const u of list) {
+        const k =
+          `${u.endpoint} → ${u.status} ${u.code ?? ""}${u.error ? ` (${u.error})` : ""}`.trim();
+        grouped.set(k, (grouped.get(k) ?? 0) + 1);
+      }
+      return [...grouped].map(([k, n]) => `${k} × ${n}`);
+    };
+    const network = state.unexpected.filter(isClientNetwork);
+    const sent = Math.max(1, api.budget.used);
+    const share = network.length / sent;
     invariants.push(
       inv(
         "No unexpected responses",
-        [...grouped].map(([k, n]) => `${k} × ${n}`),
-        "5xx, timeouts (status 0) and unexpected error codes",
+        group(state.unexpected.filter((u) => !isClientNetwork(u))),
+        "5xx, timeouts (status 0), broken connections on non-idempotent calls, bad bodies and unexpected error codes",
+      ),
+    );
+    invariants.push(
+      inv(
+        "Client network failures stay rare",
+        share > CLIENT_NETWORK_MAX_SHARE ? group(network) : [],
+        `${network.length} requests never reached the server after retries (${(share * 100).toFixed(2)} % of ${sent}, limit ${CLIENT_NETWORK_MAX_SHARE * 100} %)${network.length > 0 ? `: ${group(network).join("; ")}` : ""}`,
       ),
     );
   }
@@ -689,7 +713,11 @@ function disturbedTokens(state: SimState): Set<string> {
   const s = new Set<string>();
   for (const list of state.events.values()) {
     for (const e of list) {
-      if ((e.kind === "skip" || e.kind === "undo") && e.tokenId) {
+      if (
+        (e.kind === "skip" || e.kind === "undo") &&
+        e.tokenId &&
+        mayHaveHappened(e)
+      ) {
         s.add(e.tokenId);
       }
     }
@@ -745,11 +773,21 @@ function orderFailures(
 
 const CAUSES = new Set(["skip", "triage", "undo"]);
 const SLACK_MS = 2_000;
+/** Share of requests that may fail to connect (client network) before RED. */
+const CLIENT_NETWORK_MAX_SHARE = 0.01;
+
+/**
+ * A staff action whose answer was lost (status 0) may or may not have been
+ * applied, so it can explain what clients saw (H2) — unless it never got a
+ * connection (`connect`): then it certainly didn't happen.
+ */
+const mayHaveHappened = (e: QueueEvent) =>
+  e.ok || (e.status === 0 && e.error !== "connect");
 
 function monotonicFailures(state: SimState): string[] {
   const f: string[] = [];
   for (const t of state.tokens.values()) {
-    const obs = [...t.observations].sort((a, b) => a.at - b.at);
+    const obs = shownViews(t.observations).shown;
     const events = state.events.get(t.queueId) ?? [];
     for (let i = 1; i < obs.length; i++) {
       const a = obs[i - 1];
@@ -758,7 +796,7 @@ function monotonicFailures(state: SimState): string[] {
       if (b.peopleAhead <= a.peopleAhead) continue;
       const explained = events.some(
         (e: QueueEvent) =>
-          e.ok &&
+          mayHaveHappened(e) &&
           CAUSES.has(e.kind) &&
           e.doneAt >= a.at - SLACK_MS &&
           e.at <= b.at + SLACK_MS,
@@ -783,15 +821,26 @@ function backwardsFailures(
     for (const t of a.do.tokens) finalState.set(t.id, t.state);
   }
   for (const t of state.tokens.values()) {
-    const obs = [...t.observations].sort((a, b) => a.at - b.at);
+    // What the app shows: late views with a lower rev are ignored (H1).
+    const obs = shownViews(t.observations).shown;
     const events = state.events.get(t.queueId) ?? [];
+    // Server side of H1: one rev must mean one token state, or the client's
+    // "keep the highest rev" rule can't work.
+    const byRev = new Map<number, string>();
+    for (const o of t.observations) {
+      const seen = byRev.get(o.rev);
+      if (seen !== undefined && seen !== o.state) {
+        f.push(`${t.id}: rev ${o.rev} seen as ${seen} and ${o.state}`);
+      }
+      byRev.set(o.rev, o.state);
+    }
     let terminal: { state: string; at: number } | null = null;
     for (const o of obs) {
       if (terminal && o.state !== terminal.state) {
         const term = terminal;
         const undo = events.some(
           (e) =>
-            e.ok &&
+            mayHaveHappened(e) &&
             e.kind === "undo" &&
             e.doneAt >= term.at - SLACK_MS &&
             e.at <= o.at + SLACK_MS &&
@@ -841,7 +890,7 @@ function pushFailures(
   const requeues = new Map<string, { skips: number; undos: number }>();
   for (const list of state.events.values()) {
     for (const e of list) {
-      if (!e.ok || !e.tokenId) continue;
+      if (!mayHaveHappened(e) || !e.tokenId) continue;
       const r = requeues.get(e.tokenId) ?? { skips: 0, undos: 0 };
       if (e.kind === "skip") r.skips++;
       if (e.kind === "undo") r.undos++;
