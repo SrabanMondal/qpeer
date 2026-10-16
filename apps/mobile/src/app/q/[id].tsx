@@ -135,13 +135,9 @@ export default function JoinScreen() {
     );
   }
 
-  const { queue, business, live, myRole } = info.data;
+  const { queue, business, live, myRole, joinRadiusM } = info.data;
   const status = liveStatusLook(live.status);
-  const radius = queue.settings?.joinRadiusM;
-  const walkInLine =
-    radius !== undefined
-      ? `Walk-in check: you must be within ${radius} m`
-      : "Walk-in check: you must be at the business";
+  const walkInLine = `Walk-in check: you must be within ${joinRadiusM} m`;
   const busy = phase !== "idle";
   const open = live.status === "open";
 

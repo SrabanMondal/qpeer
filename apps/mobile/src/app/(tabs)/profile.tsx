@@ -18,11 +18,12 @@ import {
   TextField,
 } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
-import { useUpdateMe } from "@/lib/api";
+import { useDevMapSeed, useUpdateMe } from "@/lib/api";
 import { authErrorMessage, providerOf, useAuth } from "@/lib/auth";
 import { errorText } from "@/lib/error-messages";
 import { type FieldErrors, useFieldErrors } from "@/lib/form";
 import { goHome, useAppMode, useModeToggle } from "@/lib/mode";
+import { showErrorToast, showToast } from "@/lib/toast";
 import { useBackPressGuard } from "@/lib/unsaved-changes";
 
 function validateDisplayName(name: string): FieldErrors {
@@ -208,7 +209,75 @@ export default function ProfileTab() {
         subtitle="Mapbox test map on Jammu"
         onPress={() => router.push("/map-check")}
       />
+      {__DEV__ ? <DemoMapTools /> : null}
     </Screen>
+  );
+}
+
+/**
+ * Dev builds only: add/remove the 8 "Demo · " businesses around Jammu on the
+ * dev Worker (POST /v1/dev/seed-map, /unseed-map). Needs a signed-in account.
+ */
+function DemoMapTools() {
+  const { seed, unseed } = useDevMapSeed();
+  const busy = seed.isPending || unseed.isPending;
+
+  const onSeed = async () => {
+    const ok = await ConfirmDialog.show({
+      title: "Add demo businesses?",
+      message:
+        "Adds 8 “Demo · ” businesses with open queues around Jammu on the dev server. Everyone using the dev server sees them.",
+      confirmLabel: "Add",
+      destructive: false,
+    });
+    if (!ok) return;
+    try {
+      const r = await seed.mutateAsync();
+      showToast({
+        title: "Demo businesses added",
+        message: `${r.businesses} businesses, ${r.queues} queues (${r.created} new).`,
+        tone: "success",
+      });
+    } catch (e) {
+      showErrorToast("Could not add demo businesses", e);
+    }
+  };
+
+  const onUnseed = async () => {
+    const ok = await ConfirmDialog.show({
+      title: "Remove demo businesses?",
+      message:
+        "Deletes every “Demo · ” business, its queues and tickets from the dev server.",
+      confirmLabel: "Remove",
+    });
+    if (!ok) return;
+    try {
+      const r = await unseed.mutateAsync();
+      showToast({
+        title: "Demo businesses removed",
+        message: `${r.businesses} removed.`,
+        tone: "success",
+      });
+    } catch (e) {
+      showErrorToast("Could not remove demo businesses", e);
+    }
+  };
+
+  return (
+    <>
+      <ListItem
+        icon="add_location_alt"
+        title="Add demo businesses"
+        subtitle={seed.isPending ? "Adding…" : "8 demo places around Jammu"}
+        onPress={busy ? undefined : () => void onSeed()}
+      />
+      <ListItem
+        icon="wrong_location"
+        title="Remove demo businesses"
+        subtitle={unseed.isPending ? "Removing…" : "Deletes the demo places"}
+        onPress={busy ? undefined : () => void onUnseed()}
+      />
+    </>
   );
 }
 

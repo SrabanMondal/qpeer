@@ -14,6 +14,10 @@ export const queryKeys = {
   console: (uid: string | null, queueId: string) =>
     ["console", uid, queueId] as const,
   token: (uid: string | null, id: string) => ["token", uid, id] as const,
+  /** Prefix for every `/v1/map` box (Step 3). */
+  mapAll: (uid: string | null) => ["map", uid] as const,
+  /** One `/v1/map` request: its query string carries the box and filters. */
+  map: (uid: string | null, query: string) => ["map", uid, query] as const,
   /** Prefix for both "My tokens" lists. */
   myTokensAll: (uid: string | null) => ["tokens", uid, "mine"] as const,
   myTokens: (uid: string | null, status: "active" | "recent") =>

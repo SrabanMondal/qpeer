@@ -96,6 +96,10 @@ export default function RootLayout() {
                 options={{ title: "Opening hours" }}
               />
               <Stack.Screen
+                name="business/[id]/public"
+                options={{ title: "Business" }}
+              />
+              <Stack.Screen
                 name="business/[id]/new-queue"
                 options={{ title: "New queue" }}
               />

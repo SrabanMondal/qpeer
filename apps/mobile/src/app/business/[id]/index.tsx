@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { Alert } from "react-native";
+import { Alert, StyleSheet, Switch, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import {
@@ -16,7 +16,13 @@ import {
   SectionHeader,
   StatusBanner,
 } from "@/components/ui";
-import { useBusiness, useSetBusinessStatus } from "@/lib/api";
+import { Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
+import {
+  useBusiness,
+  useSetBusinessStatus,
+  useUpdateBusiness,
+} from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
 import {
   categoryLabel,
@@ -24,13 +30,16 @@ import {
   listingStatus,
   todayText,
 } from "@/lib/format";
+import { showErrorToast } from "@/lib/toast";
 
 /** One business: summary, listing status (BIZ-07) and every section to edit. */
 export default function BusinessScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
+  const theme = useTheme();
   const business = useBusiness(id);
   const setStatus = useSetBusinessStatus(id);
+  const update = useUpdateBusiness(id);
 
   if (!business.data) {
     return (
@@ -66,6 +75,14 @@ export default function BusinessScreen() {
       await setStatus.mutateAsync(false);
     } catch (e) {
       Alert.alert("Could not deactivate", errorText(e));
+    }
+  };
+
+  const onPublicStats = async (publicStats: boolean) => {
+    try {
+      await update.mutateAsync({ publicStats });
+    } catch (e) {
+      showErrorToast("Could not change public stats", e);
     }
   };
 
@@ -166,6 +183,39 @@ export default function BusinessScreen() {
         }
       />
 
+      {b.myRole === "owner" ? (
+        <>
+          <SectionHeader title="Public stats" />
+          <Card>
+            <View style={styles.switchRow}>
+              <View style={styles.flex}>
+                <ThemedText type="body">Show public stats</ThemedText>
+                <ThemedText type="small" themeColor="inkMuted">
+                  Average wait and service time on your public page. Shown
+                  automatically after 14 days on the map.
+                </ThemedText>
+              </View>
+              <Switch
+                value={b.publicStats === true}
+                onValueChange={(v) => void onPublicStats(v)}
+                disabled={update.isPending}
+                accessibilityLabel="Show public stats"
+                trackColor={{ true: theme.brand, false: theme.border }}
+                thumbColor={theme.card}
+              />
+            </View>
+          </Card>
+        </>
+      ) : null}
+      <ListItem
+        icon="storefront"
+        title="View public page"
+        subtitle="What customers see on the map"
+        onPress={() =>
+          router.push({ pathname: "/business/[id]/public", params: { id } })
+        }
+      />
+
       <SectionHeader title="Status" />
       {b.status === "active" ? (
         <Button
@@ -185,3 +235,12 @@ export default function BusinessScreen() {
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.twoHalf,
+  },
+  flex: { flex: 1, gap: Spacing.one },
+});

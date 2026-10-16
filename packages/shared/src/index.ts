@@ -4,6 +4,7 @@ export * from "./eta";
 export * from "./geo";
 export * from "./hours";
 export * from "./map";
+export * from "./map-view";
 export * from "./queue";
 export * from "./queue-settings";
 export * from "./schemas";

@@ -9,6 +9,7 @@ import type {
 
 import type { BadgeTone } from "@/components/ui/badge";
 import type { Choice } from "@/components/ui/choice-chips";
+import type { IconName } from "@/components/ui/icon";
 import type { StatusTone } from "@/components/ui/status-banner";
 import { serverNow } from "@/lib/clock";
 
@@ -22,6 +23,19 @@ export const CATEGORY_CHOICES: readonly Choice<BusinessCategory>[] = [
 
 export function categoryLabel(category: BusinessCategory): string {
   return CATEGORY_CHOICES.find((c) => c.value === category)?.label ?? category;
+}
+
+const CATEGORY_ICONS: Record<BusinessCategory, IconName> = {
+  clinic: "local_hospital",
+  lab: "biotech",
+  service_centre: "build",
+  salon: "content_cut",
+  other: "storefront",
+};
+
+/** Material Symbol for a business category (map card, list, detail). */
+export function categoryIcon(category: BusinessCategory): IconName {
+  return CATEGORY_ICONS[category];
 }
 
 const MISSING_TEXT: Record<ListingRequirement, string> = {

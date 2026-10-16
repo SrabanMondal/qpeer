@@ -36,6 +36,7 @@ import {
   useToken,
 } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
+import { openDirections } from "@/lib/directions";
 import { useLiveSocket } from "@/lib/live";
 import { goHome, useAppMode } from "@/lib/mode";
 import {
@@ -55,18 +56,6 @@ import { showErrorToast, showToast } from "@/lib/toast";
 
 /** ALR-06 tip: dismissed for this app run (no storage module installed yet). */
 let batteryTipDismissed = false;
-
-function openDirections(lat: number, lng: number, name: string) {
-  const web = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
-  if (Platform.OS === "android") {
-    const geo = `geo:${lat},${lng}?q=${lat},${lng}(${encodeURIComponent(name)})`;
-    Linking.openURL(geo).catch(() => {
-      void Linking.openURL(web);
-    });
-    return;
-  }
-  void Linking.openURL(web);
-}
 
 function endCard(t: TokenView): {
   icon: IconName;

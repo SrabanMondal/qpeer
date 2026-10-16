@@ -86,6 +86,8 @@ export default function TabsLayout() {
         options={{
           title: "Home",
           href: customerOnly,
+          // Full-screen map with its own top bar (map-interface.jpg).
+          headerShown: false,
           tabBarIcon: tabIcon("home"),
         }}
       />
