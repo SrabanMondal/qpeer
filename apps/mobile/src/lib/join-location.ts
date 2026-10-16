@@ -24,7 +24,8 @@ export type JoinLocationResult =
 
 class FixTimeout extends Error {}
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+/** Rejects with a timeout error when `p` takes longer than `ms`. */
+export function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => reject(new FixTimeout()), ms);
     p.then(

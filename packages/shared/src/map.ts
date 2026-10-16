@@ -112,3 +112,20 @@ export const MapResponse = z.object({
 });
 
 export type MapResponse = z.infer<typeof MapResponse>;
+
+/** POST /v1/dev/seed-map (dev only): demo businesses around Jammu. */
+export const DevSeedMapResponse = z.object({
+  businesses: z.number().int(),
+  queues: z.number().int(),
+  /** Businesses inserted by this call (0 when they already existed). */
+  created: z.number().int(),
+});
+
+export type DevSeedMapResponse = z.infer<typeof DevSeedMapResponse>;
+
+/** POST /v1/dev/unseed-map (dev only). */
+export const DevUnseedMapResponse = z.object({
+  businesses: z.number().int(),
+});
+
+export type DevUnseedMapResponse = z.infer<typeof DevUnseedMapResponse>;

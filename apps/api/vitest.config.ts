@@ -23,6 +23,8 @@ export default defineConfig(async () => {
     ],
     test: {
       setupFiles: ["./test/setup.ts"],
+      // Durable Object + D1 integration tests (e.g. the dev map seed) can exceed 5 s on this laptop.
+      testTimeout: 20_000,
     },
   };
 });
