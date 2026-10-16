@@ -1,0 +1,105 @@
+# QPeer runbook: incident log
+
+This folder is the audit trail of the problems that we found while we built QPeer, and of how we fixed each one. An incident is any problem that we found: a product bug, a load-test finding, or a tooling or process failure. Each incident has one file in `incidents/`. The standing rules that we learned are in [lessons.md](lessons.md).
+
+The first 39 incidents come from five sources:
+
+1. `NOTES.md`: device checks, Step 0 follow-ups, Step 3.5 findings and load-test results.
+2. The git history.
+3. The load-test reports in `scripts/loadtest/reports/`.
+4. The run output in `.orch/` (gitignored).
+5. The orchestrator's own records of tooling problems.
+
+The architecture doc `docs/QPeer_v1_Backend_Architecture.md` describes the outbox (§9.8), live updates (§9.9), the load test (§19.1) and the open questions (§23).
+
+## Add a new incident
+
+1. Copy [TEMPLATE.md](TEMPLATE.md) to `incidents/INC-NNN-short-slug.md`. Use the next free number and a slug of two to five words.
+2. Fill in every section. If a fact is not known, write "unknown". Do not guess dates, numbers or causes.
+3. Link the fix commit and the merge commit by their short hashes.
+4. Add a row to the index below.
+5. If the incident gives a new standing rule, add the rule to [lessons.md](lessons.md) with a link to the incident.
+6. Add a line to `NOTES.md` only if the incident changes the next steps.
+
+## Severity scale
+
+| Level | Meaning |
+|---|---|
+| S1 | Wrong or lost data. |
+| S2 | Wrong behavior that a customer or business user sees. |
+| S3 | Minor UX problem or slow performance. |
+| S4 | Developer tooling or process only. No user sees it. |
+
+## Status values
+
+| Status | Meaning |
+|---|---|
+| fixed | We merged the fix, and a test, a device check or a load-test run proved it. A process fix is a rule in [lessons.md](lessons.md). |
+| fixed-unverified-on-device | We merged and tested the fix in code, but nobody checked it on a phone yet. |
+| open | No fix yet. |
+| watch | Seen once and not reproduced. We wait for it to happen again. |
+| benign | The finding was not a product bug, or it did no harm. The incident file gives the proof. |
+
+## Numbering and dates
+
+We number the incidents in the order that we found them. INC-035 to INC-039 are tooling and process incidents from 2026-10-14 to 2026-10-16 with no known exact date, so they come last. Times in load-test incidents are in UTC, as in the report file names.
+
+## Index
+
+| ID | Date | Title | Severity | Area | Status | Original ID | Link |
+|---|---|---|---|---|---|---|---|
+| INC-001 | 2026-10-15 | First launch showed "No internet connection" at sign-in | S2 | mobile | fixed | Step 0 follow-up | [file](incidents/INC-001-first-launch-sign-in-failed.md) |
+| INC-002 | 2026-10-15 | Google link left the display name empty | S3 | mobile | fixed-unverified-on-device | Step 0 follow-up | [file](incidents/INC-002-google-link-empty-display-name.md) |
+| INC-003 | 2026-10-15 | Cloudflare renamed `@cloudflare/vitest-pool-workers` | S4 | tooling | fixed | Step 0 follow-up | [file](incidents/INC-003-vitest-pool-workers-renamed.md) |
+| INC-004 | 2026-10-15 | Biome `recommended` field deprecated | S4 | tooling | fixed | Step 0 follow-up | [file](incidents/INC-004-biome-recommended-deprecated.md) |
+| INC-005 | 2026-10-15 | Offline launch stuck on "Starting…" with a token refresh loop | S2 | mobile | fixed-unverified-on-device | B1 | [file](incidents/INC-005-offline-launch-stuck-starting.md) |
+| INC-006 | 2026-10-15 | Keyboard covered the Save button | S3 | mobile | fixed | B2 | [file](incidents/INC-006-keyboard-covers-save.md) |
+| INC-007 | 2026-10-15 | Business header was cramped | S3 | mobile | fixed | B3 | [file](incidents/INC-007-business-header-cramped.md) |
+| INC-008 | 2026-10-15 | Field errors stayed after the value became valid | S3 | mobile | fixed | B4 | [file](incidents/INC-008-field-errors-stay-visible.md) |
+| INC-009 | 2026-10-15 | Location off with no "turn on location" path | S3 | mobile | fixed-unverified-on-device | B5 | [file](incidents/INC-009-location-off-no-path.md) |
+| INC-010 | 2026-10-15 | Hours editor is long | S3 | mobile | open | B6 | [file](incidents/INC-010-hours-editor-long.md) |
+| INC-011 | 2026-10-15 | Invalid hours save did not scroll to the bad day | S3 | mobile | fixed | B7 | [file](incidents/INC-011-invalid-hours-no-scroll.md) |
+| INC-012 | 2026-10-15 | Leaving a form discarded unsaved edits | S2 | mobile | fixed | B8 | [file](incidents/INC-012-unsaved-edits-lost.md) |
+| INC-013 | 2026-10-15 | `am force-stop` blocked alert delivery during tests | S4 | process | benign | Step 2 device-check note | [file](incidents/INC-013-force-stop-blocks-alerts.md) |
+| INC-014 | 2026-10-15 | Fast phone clock broke countdowns | S2 | mobile | fixed-unverified-on-device | B9 | [file](incidents/INC-014-phone-clock-skew.md) |
+| INC-015 | 2026-10-15 | Console Undo bar and lists below the fold | S3 | mobile | fixed-unverified-on-device | B10 | [file](incidents/INC-015-console-below-fold.md) |
+| INC-016 | 2026-10-15 | App process killed after quick taps | S2 | mobile | watch | B11 | [file](incidents/INC-016-process-killed-quick-taps.md) |
+| INC-017 | 2026-10-15 | Dev-build "Tools" gear overlaps the header pill | S4 | mobile | open | B12 | [file](incidents/INC-017-dev-tools-gear-overlaps-pill.md) |
+| INC-018 | 2026-10-16 | Dev-seed API test hit the 5 s timeout | S4 | tooling | fixed | none | [file](incidents/INC-018-flaky-dev-seed-test-timeout.md) |
+| INC-019 | 2026-10-16 | `npx expo lint` tried to add eslint | S4 | process | fixed | none | [file](incidents/INC-019-expo-lint-added-eslint.md) |
+| INC-020 | 2026-10-16 | PowerShell dropped the `--` in a loadtest script | S4 | tooling | fixed | none | [file](incidents/INC-020-powershell-eats-double-dash.md) |
+| INC-021 | 2026-10-16 | `canceled` DO alarms under load | S3 | queue engine | benign | F1 | [file](incidents/INC-021-canceled-do-alarms.md) |
+| INC-022 | 2026-10-16 | Client timeouts that never reached the Worker | S4 | loadtest harness | fixed | F2 | [file](incidents/INC-022-client-connect-timeouts.md) |
+| INC-023 | 2026-10-16 | Serial outbox drain made bursts and close slow | S3 | queue engine | fixed | F2 | [file](incidents/INC-023-serial-outbox-drain.md) |
+| INC-024 | 2026-10-16 | Socket EXPIRED against audit GRACE (checker race) | S4 | loadtest harness | benign | F3 | [file](incidents/INC-024-socket-expired-checker-race.md) |
+| INC-025 | 2026-10-16 | Far fan-out flag made the alarm spin | S3 | queue engine | fixed | none (found with F3) | [file](incidents/INC-025-far-fanout-alarm-spin.md) |
+| INC-026 | 2026-10-16 | Staff actor crashed on a null body | S4 | loadtest harness | fixed | F4 | [file](incidents/INC-026-staff-actor-null-body.md) |
+| INC-027 | 2026-10-16 | `wrangler tail` processes kept the log locked | S4 | tooling | fixed | none | [file](incidents/INC-027-wrangler-tail-file-lock.md) |
+| INC-028 | 2026-10-16 | Checker flagged a skipped triage token | S4 | loadtest harness | benign | G1 | [file](incidents/INC-028-triage-order-checker-rule.md) |
+| INC-029 | 2026-10-16 | A skip put a regular token in the triage range | S2 | queue engine | fixed | none (found with G1) | [file](incidents/INC-029-skipped-regular-in-triage-range.md) |
+| INC-030 | 2026-10-16 | A join took 20 s after the DO made the token | S3 | queue engine | fixed | G2 | [file](incidents/INC-030-slow-join-after-allocation.md) |
+| INC-031 | 2026-10-16 | Two full load-test runs overlapped | S4 | process | benign | none (07:32Z run) | [file](incidents/INC-031-loadtest-run-collision.md) |
+| INC-032 | 2026-10-16 | Load test saw LEFT go back to WAITING | S4 | loadtest harness | fixed | H1 | [file](incidents/INC-032-left-to-waiting-out-of-order.md) |
+| INC-033 | 2026-10-16 | Ticket screen kept the last view, not the newest | S2 | mobile | fixed-unverified-on-device | none (found with H1) | [file](incidents/INC-033-app-ticket-out-of-order-view.md) |
+| INC-034 | 2026-10-16 | Client connect failures failed the run | S4 | loadtest harness | fixed | H2 | [file](incidents/INC-034-client-network-failures.md) |
+| INC-035 | unknown | Filtered migration output hid a pending migration | S4 | tooling | fixed | none | [file](incidents/INC-035-filtered-migration-output.md) |
+| INC-036 | unknown | workers.dev TLS failure after the first deploy | S4 | tooling | benign | none | [file](incidents/INC-036-workers-dev-tls-after-deploy.md) |
+| INC-037 | unknown | `expo install` failed with EALLOWSCRIPTS | S4 | tooling | fixed | none | [file](incidents/INC-037-npm-eallowscripts.md) |
+| INC-038 | unknown | Metro kept running after its task stopped | S4 | tooling | fixed | none | [file](incidents/INC-038-metro-kept-running.md) |
+| INC-039 | unknown | Chained adb taps nearly hit Deactivate | S4 | process | fixed | none | [file](incidents/INC-039-adb-tap-drift.md) |
+
+## Load-test runs
+
+All cloud runs were on 2026-10-16 against the `loadtest` Worker. Each report is in `scripts/loadtest/reports/`.
+
+| Run (UTC) | Preset | Result | Incidents |
+|---|---|---|---|
+| 06:21Z | baseline | RED | INC-021, INC-022, INC-023 |
+| 06:26Z | full | RED | INC-021 to INC-026 |
+| 06:56Z | baseline | RED | INC-028, INC-029 |
+| 06:59Z | full | RED | INC-030 |
+| 07:29Z | baseline | green | none |
+| 07:32Z | full | RED | INC-031 |
+| 07:39Z | full | RED | INC-032, INC-033, INC-034 |
+| 07:58Z | baseline | green | none |
+| 08:03Z | full | green | none |
