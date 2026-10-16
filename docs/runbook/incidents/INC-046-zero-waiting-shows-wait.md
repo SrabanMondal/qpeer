@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S3 |
 | Area | mobile, shared |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B19 |
 
 ## Summary
@@ -34,7 +34,7 @@ Branch `feat/fix-batch-rebuild`, commits 8e17550 (shared `live-text.ts`), 610e9e
 
 ## Verification
 
-`live-text.test.ts` and `map-view.test.ts` (B19 cases); DO test of `inService`. Not yet checked on a phone.
+`live-text.test.ts` and `map-view.test.ts` (B19 cases); DO test of `inService`. Device check on 2026-10-16 with the preview APK: with nobody waiting and nobody called, the map pill, the card, the business page and the join screen showed "No wait", and the console showed "Someone joining now: No wait." A related gap after joining is INC-053.
 
 ## Follow-ups
 

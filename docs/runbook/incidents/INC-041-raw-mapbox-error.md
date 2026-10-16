@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S3 |
 | Area | mobile |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B14 |
 
 ## Summary
@@ -34,7 +34,7 @@ Branch `feat/fix-batch-rebuild`, commit b691163. `queue-map.tsx` handles `onMapL
 
 ## Verification
 
-Types and a JS bundle build. Not yet checked on a phone.
+Types and a JS bundle build. Device check on 2026-10-16 with the preview APK: a cold start in airplane mode showed the offline card and no raw error. The dev-build LogBox path is not checked on a phone.
 
 ## Follow-ups
 

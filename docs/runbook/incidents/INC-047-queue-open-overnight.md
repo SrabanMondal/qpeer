@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S2 |
 | Area | queue engine |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B20 |
 
 ## Summary
@@ -34,7 +34,7 @@ Branch `feat/fix-batch-rebuild`, commits 8e17550 (shared `autoCloseAt`), 610e9e8
 
 ## Verification
 
-`apps/api/test/fix-batch.test.ts`: alarm auto-close, Keep open twice, carry-over on auto-close, the cron closing a DO that had no hours, keep-open route auth, hours edit moves the time; `hours.test.ts` for the rule. Not yet checked on a phone.
+`apps/api/test/fix-batch.test.ts`: alarm auto-close, Keep open twice, carry-over on auto-close, the cron closing a DO that had no hours, keep-open route auth, hours edit moves the time; `hours.test.ts` for the rule. On 2026-10-16 after the deploy, the forgotten OPD queue of Demo Clinic was closed by the safety net: at 21:13 IST the map pill showed "Closed" and the console showed "OPD is closed". The 15-minute warning and Keep open are not checked on a phone.
 
 ## Follow-ups
 

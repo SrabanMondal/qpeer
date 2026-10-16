@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S2 |
 | Area | mobile |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B13 |
 
 ## Summary
@@ -41,7 +41,7 @@ Branch `feat/fix-batch-rebuild`, commits b26237c (storage module in the native r
 
 ## Verification
 
-`npm run check` (types, Biome, API and shared tests). The screens are app code without unit tests; checked by a JS bundle build (`expo export`). Not yet checked on a phone.
+`npm run check` (types, Biome, API and shared tests). The screens are app code without unit tests; checked by a JS bundle build (`expo export`). Device check on 2026-10-16 with the preview APK (EAS build `35f3efbb-…`, Samsung A9). A cold start in airplane mode showed the strip "Offline — showing saved info", the card "The map needs internet" and the saved ticket "#1 · OPD · Demo Clinic · updated 1 min ago". The saved ticket opened with "Last updated 1 min ago · offline". Back online, the ticket showed "Live" again within 20 s. One gap remains: see INC-052.
 
 ## Follow-ups
 

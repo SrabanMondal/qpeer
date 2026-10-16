@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S2 |
 | Area | mobile, api |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B16 |
 
 ## Summary
@@ -34,7 +34,7 @@ Branch `feat/fix-batch-rebuild`, commits 8e17550 (shared `openLook`), 0d93a29 (`
 
 ## Verification
 
-`openLook` unit tests; `map.test.ts` "MAP-04/B16" (open after hours is kept, paused and not-opened are not, the limit applies after the filter); the API test of `business.isOpenNow` on the queue info. Not yet checked on a phone.
+`openLook` unit tests; `map.test.ts` "MAP-04/B16" (open after hours is kept, paused and not-opened are not, the limit applies after the filter); the API test of `business.isOpenNow` on the queue info. Device check on 2026-10-16 at 21:14 IST with the preview APK (hours 9:00 AM – 9:00 PM, OPD opened by staff): the map card, the business page banner, the queue badge and the join screen all showed "Open (after usual hours)".
 
 ## Follow-ups
 
