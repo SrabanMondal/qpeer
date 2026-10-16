@@ -323,29 +323,60 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
   }
 
   // Live sockets: the last message each socket got matches the DO.
+  // auditA is a snapshot taken seconds before the sockets are read, and the DO
+  // keeps changing after the load stops (grace expiries on the alarm). Step
+  // 3.5 F3: a GRACE token expired between the two reads, so its socket was
+  // (correctly) ahead of the snapshot. Convergence = equal once both are read
+  // again: mismatching queues are re-audited after a short wait.
   {
-    const f: string[] = [];
-    let checked = 0;
-    for (const t of state.tokens.values()) {
-      if (!t.live) continue;
-      const doTok = auditA.get(t.queueId)?.do.tokens.find((x) => x.id === t.id);
-      const last = t.live.last;
-      if (!doTok) continue;
-      checked++;
-      if (!last) {
-        f.push(`${t.id}: socket got no token message`);
-        continue;
-      }
+    const compareSocket = (
+      t: SimToken,
+      audit: Map<string, Audit>,
+    ): string | null | undefined => {
+      const doTok = audit.get(t.queueId)?.do.tokens.find((x) => x.id === t.id);
+      const last = t.live?.last;
+      if (!doTok) return undefined; // not checked
+      if (!last) return `${t.id}: socket got no token message`;
       if (last.state !== doTok.state) {
-        f.push(`${t.id}: socket state ${last.state} != DO ${doTok.state}`);
-      } else if (
-        doTok.state === "WAITING" &&
-        last.peopleAhead !== doTok.peopleAhead
-      ) {
-        f.push(
-          `${t.id}: socket peopleAhead ${last.peopleAhead} != DO ${doTok.peopleAhead}`,
-        );
+        return `${t.id}: socket state ${last.state} != DO ${doTok.state}`;
       }
+      if (doTok.state === "WAITING" && last.peopleAhead !== doTok.peopleAhead) {
+        return `${t.id}: socket peopleAhead ${last.peopleAhead} != DO ${doTok.peopleAhead}`;
+      }
+      return null;
+    };
+    const live = [...state.tokens.values()].filter((t) => t.live);
+    let checked = 0;
+    let suspects: SimToken[] = [];
+    for (const t of live) {
+      const r = compareSocket(t, auditA);
+      if (r === undefined) continue;
+      checked++;
+      if (r !== null) suspects.push(t);
+    }
+    const f: string[] = [];
+    for (let round = 0; round < 2 && suspects.length > 0; round++) {
+      await sleep(3_000);
+      const again = new Map<string, Audit>();
+      for (const id of new Set(suspects.map((t) => t.queueId))) {
+        const r = await api.req<Audit>(
+          "GET",
+          `/v1/loadtest/queues/${id}/audit`,
+          "/loadtest/queues/:id/audit",
+          token,
+        );
+        if (r.status === 200) again.set(id, r.body);
+      }
+      const still: SimToken[] = [];
+      for (const t of suspects) {
+        const r = compareSocket(t, again);
+        if (r === undefined || r !== null) still.push(t);
+        if (round === 1 && r) f.push(r);
+        if (round === 1 && r === undefined) {
+          f.push(`${t.id}: queue audit unavailable on re-check`);
+        }
+      }
+      suspects = still;
     }
     invariants.push(
       inv(
@@ -525,7 +556,8 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
   {
     const grouped = new Map<string, number>();
     for (const u of state.unexpected) {
-      const k = `${u.endpoint} → ${u.status} ${u.code ?? ""}`.trim();
+      const k =
+        `${u.endpoint} → ${u.status} ${u.code ?? ""}${u.error ? ` (${u.error})` : ""}`.trim();
       grouped.set(k, (grouped.get(k) ?? 0) + 1);
     }
     invariants.push(

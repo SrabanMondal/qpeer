@@ -27,6 +27,9 @@ import { allocateSortKey, skipSortKey } from "./ordering";
 import {
   type AnalyticsPayload,
   applyOutboxItem,
+  applyOutboxPushes,
+  applyOutboxRows,
+  isRowItem,
   type SnapshotPayload,
   type TokenUpsertPayload,
 } from "./outbox";
@@ -50,6 +53,7 @@ import {
   HOUR_MS,
   istDay,
   istHourStart,
+  OUTBOX_BACKOFF_MS,
   outboxBackoff,
   SNAPSHOT_MIN_INTERVAL_MS,
 } from "./scheduler";
@@ -57,6 +61,7 @@ import {
   HOURLY_FIELDS,
   type HourlyCounts,
   type HourlyRow,
+  type OutboxRow,
   QueueStore,
   type TokenRow,
   type UndoRecord,
@@ -144,6 +149,8 @@ export interface AuditDump {
 export const UNDO_WINDOW_MS = 30_000;
 /** Minimum delay before an alarm fires, so "due now" can't spin. */
 const MIN_ALARM_DELAY_MS = 250;
+/** Safety-net alarm for outbox items an inline drain is about to apply. */
+const OUTBOX_INLINE_SAFETY_MS = OUTBOX_BACKOFF_MS[0];
 /** How many waiting tokens are checked for head-back alerts. */
 const HEAD_BACK_SCAN = 50;
 
@@ -1027,7 +1034,7 @@ export class QueueDO extends DurableObject<Env> {
       throw e;
     }
     this.broadcast(now, fx);
-    await this.reschedule();
+    await this.reschedule(true);
     await this.drainOutbox();
   }
 
@@ -1075,7 +1082,7 @@ export class QueueDO extends DurableObject<Env> {
     }
     if (fx.changed) this.broadcast(now, fx);
     if (fx.changed) {
-      await this.reschedule();
+      await this.reschedule(true);
       await this.drainOutbox();
     }
     if (!result.ok) return result;
@@ -1264,8 +1271,9 @@ export class QueueDO extends DurableObject<Env> {
   // Internals: alarm scheduling + outbox drain
   // =====================================================================
 
-  private dueTimes(now: number): DueTimes {
+  private dueTimes(now: number, inlineDrain = false): DueTimes {
     const s = this.store;
+    const outbox = s.nextOutboxAttempt();
     const snap = s.get("snapshot");
     const far = s.get("far");
     const hour = s.earliestHour();
@@ -1281,7 +1289,12 @@ export class QueueDO extends DurableObject<Env> {
       snapshotFlush: snap.dirty
         ? (snap.lastAt ?? now) + SNAPSHOT_MIN_INTERVAL_MS
         : null,
-      outboxRetry: s.nextOutboxAttempt(),
+      // While the caller is about to drain inline, items due now only need a
+      // safety-net alarm (if this drain dies) after the first backoff step.
+      outboxRetry:
+        outbox !== null && inlineDrain
+          ? Math.max(outbox, now + OUTBOX_INLINE_SAFETY_MS)
+          : outbox,
       headBackAlert: headBack,
       hourlyFlush: hour === null ? null : hour + HOUR_MS,
       farFanout: far.dirty
@@ -1290,10 +1303,15 @@ export class QueueDO extends DurableObject<Env> {
     };
   }
 
-  /** QUE-16: one alarm at the earliest due time (in real time, minus the test offset). */
-  private async reschedule(): Promise<void> {
+  /**
+   * QUE-16: one alarm at the earliest due time (in real time, minus the test
+   * offset). `inlineDrain`: the caller drains the outbox right after this, so
+   * fresh items don't pull the alarm to "now" (F1: such an alarm was usually
+   * superseded by the drain's own reschedule and reported as `canceled`).
+   */
+  private async reschedule(inlineDrain = false): Promise<void> {
     const now = this.now();
-    const at = earliestDue(this.dueTimes(now));
+    const at = earliestDue(this.dueTimes(now, inlineDrain));
     if (at === null) {
       await this.ctx.storage.deleteAlarm();
       return;
@@ -1321,34 +1339,57 @@ export class QueueDO extends DurableObject<Env> {
       const due = this.store.dueOutbox(now, 25);
       if (due.length === 0) break;
       let progressed = false;
+      // Token rows and snapshots first, in one D1 round trip (F2), so pushes
+      // and strikes that refer to a token always find its row.
+      const rows = due.filter(isRowItem);
+      if (rows.length > 0) {
+        try {
+          await applyOutboxRows(rows, deps);
+          for (const item of rows) this.store.deleteOutbox(item.id);
+          progressed = true;
+        } catch (e) {
+          for (const item of rows) this.outboxFailed(item, now, e);
+        }
+      }
+      const pushes = due.filter((i) => i.kind === "push");
+      if (pushes.length > 0) {
+        try {
+          await applyOutboxPushes(pushes, deps, now);
+          for (const item of pushes) this.store.deleteOutbox(item.id);
+          progressed = true;
+        } catch (e) {
+          for (const item of pushes) this.outboxFailed(item, now, e);
+        }
+      }
       for (const item of due) {
+        if (isRowItem(item) || item.kind === "push") continue;
         try {
           await applyOutboxItem(item, deps, now);
           this.store.deleteOutbox(item.id);
           progressed = true;
         } catch (e) {
-          const attempts = item.attempts + 1;
-          this.store.retryOutbox(
-            item.id,
-            attempts,
-            now + outboxBackoff(attempts),
-          );
-          console.error(
-            JSON.stringify({
-              ts: new Date().toISOString(),
-              level: "error",
-              where: "queue-do.outbox",
-              queueId: this.store.get("queue_id"),
-              kind: item.kind,
-              attempts,
-              message: e instanceof Error ? e.message : String(e),
-            }),
-          );
+          this.outboxFailed(item, now, e);
         }
       }
       if (!progressed) break;
     }
     await this.reschedule();
+  }
+
+  private outboxFailed(item: OutboxRow, now: number, e: unknown): void {
+    const attempts = item.attempts + 1;
+    this.store.retryOutbox(item.id, attempts, now + outboxBackoff(attempts));
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        where: "queue-do.outbox",
+        queueId: this.store.get("queue_id"),
+        kind: item.kind,
+        attempts,
+        message: e instanceof Error ? e.message : String(e),
+      }),
+    );
   }
 
   // =====================================================================
@@ -1406,6 +1447,11 @@ export class QueueDO extends DurableObject<Env> {
     if (farSent) s.set("far", { dirty: false, lastAt: now });
     else if (farPending && !far.dirty) {
       s.set("far", { dirty: true, lastAt: far.lastAt ?? now });
+    } else if (far.dirty && farDue && !farPending) {
+      // The held-back sockets moved near (already updated) or closed: nothing
+      // is owed. Without this the flag stayed set with a due time in the past
+      // and the alarm re-fired every 250 ms (Step 3.5 finding, F3 queue).
+      s.set("far", { dirty: false, lastAt: far.lastAt });
     }
   }
 

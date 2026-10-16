@@ -130,33 +130,59 @@ export async function sendAlert(
   alert: AlertPush,
   now: number,
 ): Promise<number> {
-  const { results } = await d1
-    .prepare("SELECT expo_push_token FROM devices WHERE user_id = ?")
-    .bind(alert.userId)
-    .all<{ expo_push_token: string }>();
-  const targets = results.map((r) => r.expo_push_token);
-  if (targets.length === 0) return 0;
+  return sendAlerts(d1, transport, [alert], now);
+}
 
-  let sent = 0;
-  for (let i = 0; i < targets.length; i += EXPO_BATCH) {
-    const chunk = targets.slice(i, i + EXPO_BATCH);
-    const messages: ExpoMessage[] = chunk.map((to) => ({
-      to,
-      title: alert.title,
-      body: alert.body,
-      data: {
-        tokenId: alert.tokenId,
-        queueId: alert.queueId,
-        kind: alert.kind,
-      },
-      channelId: PUSH_CHANNEL_ID,
-      priority: "high",
-      sound: "default",
-    }));
-    const tickets = await transport.send(messages);
+/**
+ * Sends several alerts with one device lookup, one Expo call per ≤ 100
+ * messages and one ticket write per call, instead of two D1 round trips per
+ * alert (a close or pause alerts every waiting token: Step 3.5 F2).
+ */
+export async function sendAlerts(
+  d1: D1Database,
+  transport: PushTransport,
+  alerts: AlertPush[],
+  now: number,
+): Promise<number> {
+  if (alerts.length === 0) return 0;
+  const userIds = [...new Set(alerts.map((a) => a.userId))];
+  const { results } = await d1
+    .prepare(
+      `SELECT user_id, expo_push_token FROM devices WHERE user_id IN (${userIds.map(() => "?").join(", ")})`,
+    )
+    .bind(...userIds)
+    .all<{ user_id: string; expo_push_token: string }>();
+  const devices = new Map<string, string[]>();
+  for (const r of results) {
+    const list = devices.get(r.user_id) ?? [];
+    list.push(r.expo_push_token);
+    devices.set(r.user_id, list);
+  }
+  const messages: ExpoMessage[] = [];
+  for (const alert of alerts) {
+    for (const to of devices.get(alert.userId) ?? []) {
+      messages.push({
+        to,
+        title: alert.title,
+        body: alert.body,
+        data: {
+          tokenId: alert.tokenId,
+          queueId: alert.queueId,
+          kind: alert.kind,
+        },
+        channelId: PUSH_CHANNEL_ID,
+        priority: "high",
+        sound: "default",
+      });
+    }
+  }
+
+  for (let i = 0; i < messages.length; i += EXPO_BATCH) {
+    const chunk = messages.slice(i, i + EXPO_BATCH);
+    const tickets = await transport.send(chunk);
     const stmts: D1PreparedStatement[] = [];
     tickets.forEach((t, j) => {
-      const to = chunk[j];
+      const m = chunk[j];
       if (t.status === "ok") {
         stmts.push(
           d1
@@ -164,18 +190,19 @@ export async function sendAlert(
               `INSERT INTO push_tickets (id, token_id, expo_push_token, kind, sent_at, receipt_checked_at, status, created_at, updated_at)
                VALUES (?, ?, ?, ?, ?, NULL, 'sent', ?, ?) ON CONFLICT(id) DO NOTHING`,
             )
-            .bind(t.id, alert.tokenId, to, alert.kind, now, now, now),
+            .bind(t.id, m.data.tokenId, m.to, m.data.kind, now, now, now),
         );
       } else if (t.details?.error === "DeviceNotRegistered") {
         stmts.push(
-          d1.prepare("DELETE FROM devices WHERE expo_push_token = ?").bind(to),
+          d1
+            .prepare("DELETE FROM devices WHERE expo_push_token = ?")
+            .bind(m.to),
         );
       }
     });
     if (stmts.length > 0) await d1.batch(stmts);
-    sent += messages.length;
   }
-  return sent;
+  return messages.length;
 }
 
 export const RECEIPT_DELAY_MS = 15 * 60_000;

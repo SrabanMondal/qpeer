@@ -97,7 +97,15 @@ export interface SimState {
   consoleSnapshots: ConsoleSnapshot[];
   /** Join coordinates, kept in memory only for the log scan (never written out). */
   coordinates: { lat: number; lng: number }[];
-  unexpected: { endpoint: string; status: number; code: string | null }[];
+  unexpected: {
+    endpoint: string;
+    status: number;
+    code: string | null;
+    /** Why status is 0 (see `ApiResult.error`). */
+    error?: string | null;
+  }[];
+  /** Joins whose first answer was lost and that a retry recovered (F2). */
+  joinRetries: { recovered: number; viaAlreadyInQueue: number };
   joinsOk: Map<string, number>;
   triageOk: Map<string, number>;
   pausedRejections: number;
@@ -117,6 +125,7 @@ export function newState(runId: string): SimState {
     consoleSnapshots: [],
     coordinates: [],
     unexpected: [],
+    joinRetries: { recovered: 0, viaAlreadyInQueue: 0 },
     joinsOk: new Map(),
     triageOk: new Map(),
     pausedRejections: 0,

@@ -294,16 +294,16 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
     hasDevice: false,
   };
   if (p.device) {
-    const r = await api.req(
-      "POST",
-      "/v1/me/devices",
-      "/me/devices",
-      user.token,
-      {
+    const register = () =>
+      api.req("POST", "/v1/me/devices", "/me/devices", user.token, {
         expoPushToken: `ExponentPushToken[lt-${state.runId}-${p.i}]`,
         platform: "android",
-      },
-    );
+      });
+    let r = await register();
+    if (r.status === 0) {
+      lostAnswer(state, "POST /me/devices", r);
+      r = await register(); // idempotent upsert: the app re-registers too
+    }
     user.hasDevice = r.status === 200;
     if (r.status !== 200) unexpected(state, "POST /me/devices", r);
   }
@@ -351,15 +351,51 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
   state.coordinates.push(point);
   const body = { ...point, accuracyM: p.accuracy, mocked: false };
   let view: TokenView | null = null;
+  // First answer lost (status 0): the request may have created a token. The
+  // app's "Try again" re-sends the join; the server answers 409
+  // already_in_queue with the token id, and the app opens that ticket. Do the
+  // same, once, so a lost answer never leaves a token the simulator can't see.
+  let lostRetry = false;
   for (let attempt = 0; attempt < 3 && !stop.aborted; attempt++) {
-    const at = Date.now();
-    const r = await api.req<TokenView>(
+    const at = Date.now(); // the lost request's start, when retried below
+    let r = await api.req<TokenView>(
       "POST",
       `/v1/queues/${p.queue.id}/join`,
       "/queues/:id/join",
       user.token,
       body,
     );
+    if (r.status === 0 && !lostRetry) {
+      lostRetry = true;
+      lostAnswer(state, "POST /queues/:id/join", r);
+      r = await api.req<TokenView>(
+        "POST",
+        `/v1/queues/${p.queue.id}/join`,
+        "/queues/:id/join",
+        user.token,
+        body,
+      );
+      if (r.status === 201) state.joinRetries.recovered++;
+      if (r.code === "already_in_queue") {
+        const tokenId = (r.body as { details?: { tokenId?: unknown } } | null)
+          ?.details?.tokenId;
+        const g =
+          typeof tokenId === "string"
+            ? await api.req<TokenView>(
+                "GET",
+                `/v1/tokens/${tokenId}`,
+                "/tokens/:id",
+                user.token,
+              )
+            : null;
+        if (g?.status === 200) {
+          state.joinRetries.recovered++;
+          state.joinRetries.viaAlreadyInQueue++;
+          // The token was created by the first (lost) request.
+          r = { ...g, status: 201 };
+        }
+      }
+    }
     if (r.status === 201) {
       view = r.body;
       logEvent(state, p.queue.id, {
@@ -484,9 +520,27 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
 function unexpected(
   state: SimState,
   endpoint: string,
-  r: { status: number; code: string | null },
+  r: { status: number; code: string | null; error?: string | null },
 ) {
-  state.unexpected.push({ endpoint, status: r.status, code: r.code });
+  state.unexpected.push({
+    endpoint,
+    status: r.status,
+    code: r.code,
+    error: r.error ?? null,
+  });
+}
+
+/**
+ * A request sent without an answer before a retry. A timeout still counts as
+ * unexpected (the server was too slow, even if the retry recovers); a broken
+ * connection is the client's network and is only visible through the retry.
+ */
+function lostAnswer(
+  state: SimState,
+  endpoint: string,
+  r: { status: number; code: string | null; error?: string | null },
+) {
+  if (r.error === "timeout") unexpected(state, endpoint, r);
 }
 
 /** Staff loop of one queue: Next at random 5–40 s (scaled), with the other console actions mixed in. */
@@ -512,7 +566,10 @@ async function staffLoop(
     const r = await api.req<
       ConsoleState & { console?: ConsoleState; token?: TokenView }
     >(method, path, endpoint, q.ownerToken, body);
-    const ok = r.status === 200 || r.status === 201;
+    const ok =
+      (r.status === 200 || r.status === 201) &&
+      r.body !== null &&
+      typeof r.body === "object";
     const cs: ConsoleState | null = ok
       ? (r.body.console ?? (r.body as ConsoleState))
       : null;
