@@ -15,6 +15,13 @@ export interface Bindings {
    * Ignored unless `ENVIRONMENT` is exactly `loadtest` (see middleware/auth.ts).
    */
   LOADTEST_JWKS?: string;
+  /**
+   * C3: Ed25519 private JWK (secret) that signs offline tickets. Optional:
+   * without it no ticket is signed (local, tests) and nothing breaks.
+   */
+  TICKET_SIGNING_KEY?: string;
+  /** C3: extra public JWK set accepted during a key rotation (var, optional). */
+  TICKET_PUBLIC_KEYS?: string;
 }
 
 export type AuthSource = "firebase" | "loadtest";

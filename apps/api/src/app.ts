@@ -1,7 +1,8 @@
-import type { HealthResponse } from "@qpeer/shared";
+import type { HealthResponse, TicketKeysResponse } from "@qpeer/shared";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
 import { errorBody, onError } from "./lib/errors";
+import { ticketPublicKeys } from "./lib/ticket-sign";
 import { type Clock, systemClock } from "./lib/time";
 import {
   authMiddleware,
@@ -51,6 +52,14 @@ export function createApp(deps?: AppDeps) {
       serverTime: c.get("clock").now(),
     } satisfies HealthResponse),
   );
+
+  // C3: public keys that verify offline tickets (public, cacheable).
+  app.get("/v1/ticket-keys", async (c) => {
+    c.header("Cache-Control", "public, max-age=3600");
+    return c.json({
+      keys: await ticketPublicKeys(c.env),
+    } satisfies TicketKeysResponse);
+  });
 
   // Everything else under /v1 needs a valid Firebase ID token.
   app.use(

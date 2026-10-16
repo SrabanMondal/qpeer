@@ -80,6 +80,7 @@ export function snapshotSummary(s: QueueSnapshot): QueueLiveSummary {
     waitLowMs: s.etaLowMs,
     waitHighMs: s.etaHighMs,
     updatedAt: toMs(s.updatedAt),
+    inService: s.inService,
   };
 }
 
@@ -414,9 +415,16 @@ export async function updateBusiness(
       .where(eq(queueSnapshots.businessId, businessId));
     await markFirstListed(db, businessId, now);
   }
-  if (patch.name !== undefined) {
+  if (patch.name !== undefined || patch.hours !== undefined) {
     for (const q of await loadQueues(db, [businessId])) {
-      await queueStub(env, q.id).setLabels({ businessName: patch.name });
+      const stub = queueStub(env, q.id);
+      if (patch.name !== undefined) {
+        await stub.setLabels({ businessName: patch.name });
+      }
+      // B20: the auto-close follows the new hours at once.
+      if (patch.hours !== undefined && q.status === "active") {
+        await stub.setHours(patch.hours);
+      }
     }
   }
   return viewFor(db, businessId, "owner", now);
@@ -491,7 +499,8 @@ export async function initQueueDO(
   q: Queue,
 ): Promise<void> {
   const b = await loadBusiness(db, q.businessId);
-  await queueStub(env, q.id).init({
+  const stub = queueStub(env, q.id);
+  await stub.init({
     queueId: q.id,
     businessId: q.businessId,
     settings: QueueSettings.parse(q.settingsJson),
@@ -499,6 +508,8 @@ export async function initQueueDO(
     queueName: q.name,
     businessName: b.name,
   });
+  // B20: the DO needs the hours for its auto-close.
+  await stub.setHours(b.hoursJson);
 }
 
 export async function loadQueue(db: Db, queueId: string): Promise<Queue> {
@@ -597,7 +608,7 @@ export async function archiveQueue(
  * its business is listed.
  */
 export async function getQueueInfo(
-  { db, env }: Pick<ServiceCtx, "db" | "env">,
+  { db, env, now }: ServiceCtx,
   queueId: string,
   userId: string,
 ): Promise<QueueInfoResponse> {
@@ -617,6 +628,8 @@ export async function getQueueInfo(
       location: location(b),
       status: b.status,
       listed,
+      isOpenNow: isOpenAt(b.hoursJson, now),
+      todayHours: todayHours(b.hoursJson, now),
     },
     myRole: role,
     live: await queueStub(env, q.id).getSummary(),

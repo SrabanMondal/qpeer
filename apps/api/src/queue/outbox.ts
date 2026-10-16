@@ -39,6 +39,9 @@ export interface TokenUpsertPayload {
   paymentId: string | null;
   rev: number;
   at: number;
+  /** Absent in items queued before the fix batch. */
+  deviceHash?: string | null;
+  expiresAt?: number | null;
 }
 
 export interface SnapshotPayload {
@@ -51,6 +54,7 @@ export interface SnapshotPayload {
   etaHighMs: number | null;
   nowServing: string | null;
   updatedAt: number;
+  inService?: number;
 }
 
 export interface AnalyticsPayload {
@@ -64,6 +68,8 @@ export interface StrikePayload {
   userId: string;
   tokenId: string;
   at: number;
+  /** C2: strikes count per device hash too (absent for older items/builds). */
+  deviceHash?: string | null;
 }
 
 /** Free-lane rule (JON-07): 3 no-shows within 30 days block free joins for 7 days. */
@@ -159,8 +165,9 @@ function upsertTokenStmt(d1: D1Database, t: TokenUpsertPayload) {
   return d1
     .prepare(
       `INSERT INTO tokens (id, queue_id, session_id, business_id, user_id, number, series, class, method,
-         state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev, created_at, updated_at,
+         device_hash, expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          state = excluded.state, called_at = excluded.called_at, served_at = excluded.served_at,
          ended_at = excluded.ended_at, end_reason = excluded.end_reason, payment_id = excluded.payment_id,
@@ -187,6 +194,8 @@ function upsertTokenStmt(d1: D1Database, t: TokenUpsertPayload) {
       t.rev,
       t.at,
       t.at,
+      t.deviceHash ?? null,
+      t.expiresAt ?? null,
     );
 }
 
@@ -195,12 +204,12 @@ function upsertSnapshotStmt(d1: D1Database, s: SnapshotPayload) {
   return d1
     .prepare(
       `INSERT INTO queue_snapshots (queue_id, business_id, lat, lng, is_open, is_paused, waiting,
-         eta_low_ms, eta_high_ms, now_serving, updated_at)
-       SELECT ?, ?, b.lat, b.lng, ?, ?, ?, ?, ?, ?, ? FROM businesses b WHERE b.id = ?
+         eta_low_ms, eta_high_ms, now_serving, updated_at, in_service)
+       SELECT ?, ?, b.lat, b.lng, ?, ?, ?, ?, ?, ?, ?, ? FROM businesses b WHERE b.id = ?
        ON CONFLICT(queue_id) DO UPDATE SET
          lat = excluded.lat, lng = excluded.lng, is_open = excluded.is_open, is_paused = excluded.is_paused,
          waiting = excluded.waiting, eta_low_ms = excluded.eta_low_ms, eta_high_ms = excluded.eta_high_ms,
-         now_serving = excluded.now_serving, updated_at = excluded.updated_at
+         now_serving = excluded.now_serving, updated_at = excluded.updated_at, in_service = excluded.in_service
        WHERE excluded.updated_at >= queue_snapshots.updated_at`,
     )
     .bind(
@@ -213,6 +222,7 @@ function upsertSnapshotStmt(d1: D1Database, s: SnapshotPayload) {
       s.etaHighMs,
       s.nowServing,
       s.updatedAt,
+      s.inService ?? 0,
       s.businessId,
     );
 }
@@ -288,9 +298,9 @@ async function addStrike(
   await d1.batch([
     d1
       .prepare(
-        "INSERT INTO free_lane_strikes (id, user_id, token_id, at, created_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
+        "INSERT INTO free_lane_strikes (id, user_id, token_id, at, created_at, device_hash) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING",
       )
-      .bind(outboxId, s.userId, s.tokenId, s.at, now),
+      .bind(outboxId, s.userId, s.tokenId, s.at, now, s.deviceHash ?? null),
     d1
       .prepare(
         `UPDATE users SET free_lane_blocked_until = ?, updated_at = ?

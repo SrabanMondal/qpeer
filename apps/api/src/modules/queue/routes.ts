@@ -18,7 +18,7 @@ const ctx = (c: Context<AppEnv>): service.QueueCtx => ({
 const staffOfQueue = requireBusinessRole("staff", "queue");
 
 const tokenActions = ["skip", "no-show", "admit", "served"] as const;
-const queueActions = ["pause", "resume", "undo-next"] as const;
+const queueActions = ["pause", "resume", "undo-next", "keep-open"] as const;
 
 const routes = new Hono<AppEnv>()
   // ----- console -----
