@@ -1,3 +1,4 @@
+import type { HealthResponse } from "@qpeer/shared";
 import { Hono } from "hono";
 import type { AppEnv } from "./env";
 import { errorBody, onError } from "./lib/errors";
@@ -31,7 +32,14 @@ export function createApp(deps?: AppDeps) {
   app.use("*", requestContext(deps?.clock ?? systemClock));
 
   // Public routes (no token).
-  app.get("/v1/health", (c) => c.json({ ok: true, env: c.env.ENVIRONMENT }));
+  // `serverTime` lets the app measure the phone's clock offset (B9).
+  app.get("/v1/health", (c) =>
+    c.json({
+      ok: true,
+      env: c.env.ENVIRONMENT,
+      serverTime: c.get("clock").now(),
+    } satisfies HealthResponse),
+  );
 
   // Everything else under /v1 needs a valid Firebase ID token.
   app.use("/v1/*", authMiddleware(deps?.verifier));

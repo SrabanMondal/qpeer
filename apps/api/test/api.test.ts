@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { ErrorResponse, MeResponse } from "@qpeer/shared";
+import { ErrorResponse, HealthResponse, MeResponse } from "@qpeer/shared";
 import { eq } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/d1";
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT } from "jose";
@@ -81,6 +81,28 @@ describe("API Skeleton and Auth", () => {
     expect(body.ok).toBe(true);
     expect(body.env).toBe(env.ENVIRONMENT);
     expect(res.headers.get("x-request-id")).toBeDefined();
+  });
+
+  it("1b. health reports the server clock (B9)", async () => {
+    const fixed = 1_760_000_000_000;
+    const clocked = createApp({ clock: { now: () => fixed } });
+    const res = await clocked.fetch(
+      new Request("http://localhost/v1/health"),
+      env,
+    );
+    expect(res.status).toBe(200);
+    const body = HealthResponse.parse(await res.json());
+    expect(body.serverTime).toBe(fixed);
+    expect(body.ok).toBe(true);
+
+    const before = Date.now();
+    const live = HealthResponse.parse(
+      await (
+        await app.fetch(new Request("http://localhost/v1/health"), env)
+      ).json(),
+    );
+    expect(live.serverTime).toBeGreaterThanOrEqual(before);
+    expect(live.serverTime).toBeLessThanOrEqual(Date.now());
   });
 
   it("2. missing header -> 401", async () => {

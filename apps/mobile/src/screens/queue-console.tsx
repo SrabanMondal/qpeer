@@ -9,6 +9,7 @@ import {
   useState,
 } from "react";
 import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
 import {
@@ -274,27 +275,108 @@ function ConsoleBody({
     }
   };
 
+  // `now` is server-corrected (B9), so the undo window matches the server's.
+  const undoLeft =
+    state.undoUntil !== null ? Math.max(0, state.undoUntil - now) : 0;
+  const showUndo = undoLeft > 0 && state.status !== "closed";
+
   return (
-    <Screen
-      bottomInset={false}
-      refreshing={consoleQ.isRefetching}
-      onRefresh={() => {
-        void consoleQ.refetch();
-        refreshList();
-      }}
+    <View style={styles.fill}>
+      <Screen
+        bottomInset={false}
+        refreshing={consoleQ.isRefetching}
+        onRefresh={() => {
+          void consoleQ.refetch();
+          refreshList();
+        }}
+        // B10: compact spacing for small screens; room under the content
+        // for the floating Undo bar so it never hides the last row.
+        contentStyle={[
+          styles.compact,
+          showUndo && { paddingBottom: UNDO_BAR_SPACE },
+        ]}
+      >
+        {picker}
+        <ConsoleView
+          state={state}
+          queue={queue}
+          live={live === "live"}
+          busy={busy}
+          now={now}
+          counter={Math.min(counter, state.counters)}
+          setCounter={setCounter}
+          run={run}
+        />
+      </Screen>
+      {showUndo ? (
+        <UndoBar
+          label={state.nowServing}
+          undoLeft={undoLeft}
+          busy={busy}
+          onUndo={() =>
+            void run({ kind: "queue", action: "undo-next" }, "Could not undo")
+          }
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/** Height kept free under the scroll content while the Undo bar floats. */
+const UNDO_BAR_HEIGHT = 52;
+const UNDO_BAR_SPACE = UNDO_BAR_HEIGHT + Spacing.twoHalf * 2;
+
+/**
+ * B10: the Undo bar floats just above the tab bar, so it is visible after
+ * NEXT on any screen height, whatever the scroll position.
+ */
+function UndoBar({
+  label,
+  undoLeft,
+  busy,
+  onUndo,
+}: {
+  label: string | null;
+  undoLeft: number;
+  busy: boolean;
+  onUndo: () => void;
+}) {
+  const theme = useTheme();
+  const insets = useSafeAreaInsets();
+  return (
+    <View
+      style={[
+        styles.undo,
+        styles.undoFloating,
+        {
+          backgroundColor: theme.header,
+          shadowColor: theme.shadow,
+          left: insets.left + Spacing.three,
+          right: insets.right + Spacing.three,
+        },
+      ]}
+      accessibilityLiveRegion="polite"
     >
-      {picker}
-      <ConsoleView
-        state={state}
-        queue={queue}
-        live={live === "live"}
-        busy={busy}
-        now={now}
-        counter={Math.min(counter, state.counters)}
-        setCounter={setCounter}
-        run={run}
-      />
-    </Screen>
+      <ThemedText type="body" themeColor="onPrimary" style={styles.flex}>
+        Called #{label ?? "?"} · undo in {formatCountdown(undoLeft)}
+      </ThemedText>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Undo the last Next"
+        disabled={busy}
+        hitSlop={8}
+        onPress={onUndo}
+        style={({ pressed }) => [
+          styles.undoButton,
+          (pressed || busy) && styles.dim,
+        ]}
+      >
+        <Icon name="undo" color="onPrimary" />
+        <ThemedText type="body" themeColor="onPrimary">
+          UNDO
+        </ThemedText>
+      </Pressable>
+    </View>
   );
 }
 
@@ -317,7 +399,6 @@ function ConsoleView({
   setCounter: (c: number) => void;
   run: (cmd: ConsoleCommand, errorTitle: string) => Promise<boolean>;
 }) {
-  const theme = useTheme();
   const status = liveStatusLook(state.status);
   const closed = state.status === "closed";
   const paused = state.status === "paused";
@@ -327,8 +408,6 @@ function ConsoleView({
     (multi ? undefined : state.serving[0]);
   const canNext =
     !closed && !paused && (state.counts.waiting > 0 || atCounter !== undefined);
-  const undoLeft =
-    state.undoUntil !== null ? Math.max(0, state.undoUntil - now) : 0;
 
   const onTriage = async () => {
     const ok = await ConfirmDialog.show({
@@ -370,6 +449,51 @@ function ConsoleView({
     ]);
   };
 
+  // B10: Served / No-show sit right under Now Serving.
+  const calledSection =
+    state.serving.length > 0 ? (
+      <>
+        <SectionHeader title={`Called (${state.serving.length})`} />
+        {state.serving.map((t) => (
+          <TokenRow
+            key={t.id}
+            token={t}
+            detail={`${t.counter !== null ? `Counter ${t.counter} · ` : ""}called ${t.calledAt ? formatClock(t.calledAt) : ""}`}
+            actions={
+              <>
+                <Button
+                  title="Served"
+                  icon="check"
+                  variant="secondary"
+                  disabled={busy}
+                  onPress={() =>
+                    void run(
+                      { kind: "token", action: "served", tokenId: t.id },
+                      "Could not mark served",
+                    )
+                  }
+                  style={styles.rowButton}
+                />
+                <Button
+                  title="No-show"
+                  icon="person_off"
+                  variant="danger-soft"
+                  disabled={busy}
+                  onPress={() =>
+                    void run(
+                      { kind: "token", action: "no-show", tokenId: t.id },
+                      "Could not mark no-show",
+                    )
+                  }
+                  style={styles.rowButton}
+                />
+              </>
+            }
+          />
+        ))}
+      </>
+    ) : null;
+
   return (
     <>
       <StatusBanner
@@ -391,42 +515,57 @@ function ConsoleView({
       />
 
       {closed ? (
-        <Card style={styles.centreCard}>
-          <ThemedText type="heading">{queue.name} is closed</ThemedText>
-          <ThemedText
-            type="small"
-            themeColor="inkMuted"
-            style={styles.centreText}
-          >
-            Open it to start today's session. Customers can then scan the QR
-            code and join.
-          </ThemedText>
-          <Button
-            title="Open queue"
-            icon="lock_open"
-            variant="brand"
-            loading={busy}
-            onPress={() =>
-              void run({ kind: "queue", action: "open" }, "Could not open")
-            }
-            style={styles.stretch}
-          />
-        </Card>
-      ) : (
         <>
           <Card style={styles.centreCard}>
-            <ThemedText type="heading">Now Serving</ThemedText>
-            <ThemedText type="display" accessibilityLiveRegion="polite">
-              {state.nowServing ? `#${state.nowServing}` : "—"}
+            <ThemedText type="heading">{queue.name} is closed</ThemedText>
+            <ThemedText
+              type="small"
+              themeColor="inkMuted"
+              style={styles.centreText}
+            >
+              Open it to start today's session. Customers can then scan the QR
+              code and join.
             </ThemedText>
-            {multi && state.serving.length > 0 ? (
-              <ThemedText type="small" themeColor="inkMuted">
-                {state.serving
-                  .map((s) => `Counter ${s.counter ?? "?"}: #${s.label}`)
-                  .join(" · ")}
-              </ThemedText>
-            ) : null}
+            <Button
+              title="Open queue"
+              icon="lock_open"
+              variant="brand"
+              loading={busy}
+              onPress={() =>
+                void run({ kind: "queue", action: "open" }, "Could not open")
+              }
+              style={styles.stretch}
+            />
           </Card>
+          {calledSection}
+        </>
+      ) : (
+        <>
+          {/* B10: one compact row, so Called and NEXT fit above the fold. */}
+          <Card style={styles.servingCard}>
+            <View style={styles.servingRow}>
+              <View style={styles.flex}>
+                <ThemedText type="heading">Now Serving</ThemedText>
+                {multi && state.serving.length > 0 ? (
+                  <ThemedText type="small" themeColor="inkMuted">
+                    {state.serving
+                      .map((s) => `Counter ${s.counter ?? "?"}: #${s.label}`)
+                      .join(" · ")}
+                  </ThemedText>
+                ) : null}
+              </View>
+              <ThemedText
+                type="display"
+                accessibilityLiveRegion="polite"
+                numberOfLines={1}
+                adjustsFontSizeToFit
+              >
+                {state.nowServing ? `#${state.nowServing}` : "—"}
+              </ThemedText>
+            </View>
+          </Card>
+
+          {calledSection}
 
           {multi ? (
             <ChoiceChips
@@ -460,43 +599,6 @@ function ConsoleView({
             }
             style={styles.next}
           />
-
-          {undoLeft > 0 ? (
-            <View
-              style={[styles.undo, { backgroundColor: theme.header }]}
-              accessibilityLiveRegion="polite"
-            >
-              <ThemedText
-                type="body"
-                themeColor="onPrimary"
-                style={styles.flex}
-              >
-                Called #{state.nowServing ?? "?"} · undo in{" "}
-                {formatCountdown(undoLeft)}
-              </ThemedText>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Undo the last Next"
-                disabled={busy}
-                hitSlop={8}
-                onPress={() =>
-                  void run(
-                    { kind: "queue", action: "undo-next" },
-                    "Could not undo",
-                  )
-                }
-                style={({ pressed }) => [
-                  styles.undoButton,
-                  (pressed || busy) && styles.dim,
-                ]}
-              >
-                <Icon name="undo" color="onPrimary" />
-                <ThemedText type="body" themeColor="onPrimary">
-                  UNDO
-                </ThemedText>
-              </Pressable>
-            </View>
-          ) : null}
 
           <View style={styles.grid}>
             <Button
@@ -559,70 +661,6 @@ function ConsoleView({
         </>
       )}
 
-      <StatRow
-        stats={[
-          { label: "Waiting", value: state.counts.waiting, icon: "groups" },
-          {
-            label: "In service",
-            value: state.counts.inService,
-            icon: "person",
-          },
-          { label: "Total", value: state.counts.total, icon: "groups" },
-        ]}
-      />
-      {!closed &&
-      state.eta.waitLowMs !== null &&
-      state.eta.waitHighMs !== null ? (
-        <ThemedText type="small" themeColor="inkMuted">
-          Someone joining now waits{" "}
-          {formatWaitRange(state.eta.waitLowMs, state.eta.waitHighMs)}
-          {state.eta.coldStart ? " (estimate from your settings)" : ""}.
-        </ThemedText>
-      ) : null}
-
-      {state.serving.length > 0 ? (
-        <>
-          <SectionHeader title={`Called (${state.serving.length})`} />
-          {state.serving.map((t) => (
-            <TokenRow
-              key={t.id}
-              token={t}
-              detail={`${t.counter !== null ? `Counter ${t.counter} · ` : ""}called ${t.calledAt ? formatClock(t.calledAt) : ""}`}
-              actions={
-                <>
-                  <Button
-                    title="Served"
-                    icon="check"
-                    variant="secondary"
-                    disabled={busy}
-                    onPress={() =>
-                      void run(
-                        { kind: "token", action: "served", tokenId: t.id },
-                        "Could not mark served",
-                      )
-                    }
-                    style={styles.rowButton}
-                  />
-                  <Button
-                    title="No-show"
-                    icon="person_off"
-                    variant="danger-soft"
-                    disabled={busy}
-                    onPress={() =>
-                      void run(
-                        { kind: "token", action: "no-show", tokenId: t.id },
-                        "Could not mark no-show",
-                      )
-                    }
-                    style={styles.rowButton}
-                  />
-                </>
-              }
-            />
-          ))}
-        </>
-      ) : null}
-
       {state.grace.length > 0 ? (
         <>
           <SectionHeader title={`Late — grace (${state.grace.length})`} />
@@ -652,6 +690,27 @@ function ConsoleView({
             />
           ))}
         </>
+      ) : null}
+
+      <StatRow
+        stats={[
+          { label: "Waiting", value: state.counts.waiting, icon: "groups" },
+          {
+            label: "In service",
+            value: state.counts.inService,
+            icon: "person",
+          },
+          { label: "Total", value: state.counts.total, icon: "groups" },
+        ]}
+      />
+      {!closed &&
+      state.eta.waitLowMs !== null &&
+      state.eta.waitHighMs !== null ? (
+        <ThemedText type="small" themeColor="inkMuted">
+          Someone joining now waits{" "}
+          {formatWaitRange(state.eta.waitLowMs, state.eta.waitHighMs)}
+          {state.eta.coldStart ? " (estimate from your settings)" : ""}.
+        </ThemedText>
       ) : null}
 
       {!closed ? (
@@ -767,9 +826,17 @@ function TokenRow({
 }
 
 const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  compact: { paddingTop: Spacing.twoHalf, gap: Spacing.twoHalf },
   centreCard: { alignItems: "center" },
   centreText: { textAlign: "center" },
   stretch: { alignSelf: "stretch" },
+  servingCard: { paddingVertical: Spacing.two },
+  servingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.three,
+  },
   next: { minHeight: 72 },
   undo: {
     flexDirection: "row",
@@ -778,7 +845,15 @@ const styles = StyleSheet.create({
     borderRadius: Radius.button,
     paddingLeft: Spacing.three,
     paddingRight: Spacing.one,
-    minHeight: 52,
+    minHeight: UNDO_BAR_HEIGHT,
+  },
+  undoFloating: {
+    position: "absolute",
+    bottom: Spacing.twoHalf,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 6,
   },
   undoButton: {
     flexDirection: "row",

@@ -145,6 +145,8 @@ One phone in both roles (procedure at the top of this file). Signed in with a Fi
 
 ### Bugs found in the Step 2 device check
 - **B9 (bug):** the phone's clock is ~11.5 min fast vs the server; the app computes countdowns with the phone clock → a fresh 10-min grace showed "Time is up — expiring" at once, the ticket's grace countdown was missing, and server times ("Joined") disagree with the status bar. Fix: estimate the server clock offset (HTTP `Date` header or a `serverTime` field) and use server-corrected time for every countdown.
+  - **Fixed:** `/v1/health` returns `serverTime`; the app measures the offset (startup, foreground, "Check again"), uses `serverNow()` for all countdowns, and blocks with a "Your phone's time is wrong" popup when off by > 2 min.
 - **B10 (minor):** on a small screen the console's Undo bar and lists sit below the fold.
+  - **Fixed:** compact Now Serving row, Called (Served / No-show) right under it, and the Undo bar floats above the tab bar.
 - **B11 (watch):** once, a burst of quick taps on the hours screen ended with the app process killed by the system (no crash in logcat). Not reproduced.
 - **B12 (dev only):** the dev-build "Tools" gear overlaps the Business header pill.

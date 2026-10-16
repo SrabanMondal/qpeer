@@ -10,6 +10,7 @@ import type {
 import type { BadgeTone } from "@/components/ui/badge";
 import type { Choice } from "@/components/ui/choice-chips";
 import type { StatusTone } from "@/components/ui/status-banner";
+import { serverNow } from "@/lib/clock";
 
 export const CATEGORY_CHOICES: readonly Choice<BusinessCategory>[] = [
   { value: "clinic", label: "Clinic" },
@@ -102,7 +103,7 @@ const BY_JS_DAY: readonly Weekday[] = [
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
 /** Today's weekday in India (business hours are Asia/Kolkata in v1). */
-export function todayInIndia(now = Date.now()): Weekday {
+export function todayInIndia(now = serverNow()): Weekday {
   return BY_JS_DAY[new Date(now + IST_OFFSET_MS).getUTCDay()];
 }
 
@@ -125,7 +126,7 @@ export function formatDay(ranges: DayHours): string {
 }
 
 /** "Open today 09:00–18:00" or "Closed today" (BIZ-05). */
-export function todayText(hours: WeeklyHours, now = Date.now()): string {
+export function todayText(hours: WeeklyHours, now = serverNow()): string {
   const ranges = hours[todayInIndia(now)];
   return ranges.length === 0
     ? "Closed today"

@@ -9,6 +9,7 @@ import {
 } from "expo-router";
 import { useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { ClockGuard } from "@/components/clock-guard";
 import { ToastHost } from "@/components/ui";
 import { config } from "@/config";
 import { Type } from "@/constants/theme";
@@ -115,6 +116,7 @@ export default function RootLayout() {
             </Stack>
             <PushSetup />
             <ToastHost />
+            <ClockGuard />
           </ThemeProvider>
         </AuthProvider>
       </QueryClientProvider>
