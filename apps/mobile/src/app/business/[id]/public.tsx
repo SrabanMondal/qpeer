@@ -1,11 +1,16 @@
-import { type QueueView, statsSummary } from "@qpeer/shared";
+import {
+  type OpenLook,
+  openLook,
+  type QueueView,
+  statsSummary,
+  waitSummary,
+} from "@qpeer/shared";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import {
   Badge,
-  type BadgeTone,
   Button,
   Card,
   EmptyState,
@@ -15,13 +20,14 @@ import {
   Screen,
   SectionHeader,
   StatusBanner,
+  type StatusTone,
 } from "@/components/ui";
 import { Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useBusiness } from "@/lib/api";
 import { openDirections } from "@/lib/directions";
 import { categoryIcon, categoryLabel } from "@/lib/format";
-import { formatWaitRange } from "@/lib/queue-format";
+import { useNow } from "@/lib/queue-format";
 
 /**
  * Public business page (MAP-05), opened from the map card or the list:
@@ -33,6 +39,7 @@ export default function PublicBusinessScreen() {
   const theme = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
   const business = useBusiness(id ?? "");
+  const now = useNow(true, 30_000);
 
   if (!business.data) {
     return (
@@ -54,6 +61,15 @@ export default function PublicBusinessScreen() {
 
   const b = business.data;
   const queues = b.queues.filter((q) => q.status === "active");
+  // B16: the queues decide (same rule as the map badge), the hours inform.
+  const open = queues.filter((q) => q.live && q.live.status !== "closed");
+  const bizStatus =
+    open.length === 0
+      ? "closed"
+      : open.every((q) => q.live?.status === "paused")
+        ? "paused"
+        : "open";
+  const bizLook = openLook(bizStatus, b.isOpenNow);
   const stats = b.stats ?? null;
   const summary = stats ? statsSummary(stats) : null;
 
@@ -99,8 +115,8 @@ export default function PublicBusinessScreen() {
       </Card>
 
       <StatusBanner
-        tone={b.isOpenNow ? "active" : "closed"}
-        title={b.isOpenNow ? "Open now" : "Closed now"}
+        tone={TONE_BANNER[bizLook.tone]}
+        title={bizLook.label}
         detail={`Today: ${b.todayHours.text}`}
       />
 
@@ -116,6 +132,8 @@ export default function PublicBusinessScreen() {
           <QueueCard
             key={q.id}
             queue={q}
+            withinHours={b.isOpenNow}
+            now={now}
             onJoin={() =>
               router.push({ pathname: "/q/[id]", params: { id: q.id } })
             }
@@ -166,31 +184,26 @@ export default function PublicBusinessScreen() {
   );
 }
 
-function queueLook(q: QueueView): { label: string; tone: BadgeTone } {
-  switch (q.live?.status) {
-    case "open":
-      return { label: "Open", tone: "success" };
-    case "paused":
-      return { label: "Paused", tone: "warning" };
-    default:
-      return { label: "Closed", tone: "neutral" };
-  }
-}
+const TONE_BANNER: Record<OpenLook["tone"], StatusTone> = {
+  success: "active",
+  warning: "paused",
+  neutral: "closed",
+};
 
 function QueueCard({
   queue: q,
+  withinHours,
+  now,
   onJoin,
 }: {
   queue: QueueView;
+  withinHours: boolean;
+  now: number;
   onJoin: () => void;
 }) {
-  const look = queueLook(q);
   const live = q.live ?? null;
+  const look = openLook(live?.status ?? "closed", withinHours);
   const open = live?.status === "open";
-  const wait =
-    live && live.waitLowMs !== null && live.waitHighMs !== null
-      ? formatWaitRange(live.waitLowMs, live.waitHighMs)
-      : null;
   return (
     <Card>
       <View style={styles.queueTop}>
@@ -201,7 +214,7 @@ function QueueCard({
       </View>
       <ThemedText type="body">
         {live && live.status !== "closed"
-          ? `${live.waiting} waiting${wait ? ` · ${wait}` : ""}`
+          ? waitSummary(live, now)
           : "Not taking people right now"}
       </ThemedText>
       <Button

@@ -56,6 +56,7 @@ export default function NewQueueScreen() {
         icon="add"
         onPress={submit}
         loading={create.isPending}
+        needsNetwork
       />
     </Screen>
   );

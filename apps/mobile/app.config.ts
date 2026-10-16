@@ -77,6 +77,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
     "expo-notifications",
+    // Save the queue QR code to the gallery (write only; photos only).
+    [
+      "expo-media-library",
+      {
+        photosPermission: "Qpeer saves the queue QR code to your photos.",
+        savePhotosPermission: "Qpeer saves the queue QR code to your photos.",
+        isAccessMediaLocationEnabled: false,
+        granularPermissions: ["photo"],
+      },
+    ],
     "expo-dev-client",
   ],
   experiments: {

@@ -5,7 +5,7 @@
 | Date found | 2026-10-16 |
 | Severity | S3 |
 | Area | mobile, shared |
-| Status | open |
+| Status | fixed-unverified-on-device |
 | Original ID | B19 |
 
 ## Summary
@@ -30,11 +30,11 @@ The wait range includes the service time of the person at the counter. The label
 
 ## Fix
 
-Not done. Decide the text: for example "No wait" when nobody waits and nobody is called, and "Next in ~5 min" when somebody is at the counter. Use the same text on the pill, the card, the list and the page.
+Branch `feat/fix-batch-rebuild`, commits 8e17550 (shared `live-text.ts`), 610e9e8 (`inService` in the live summary, snapshot column `in_service`, map summary) and 9627e5f / b691163 (screens). With 0 waiting: "No wait" when nobody is at a counter, "Next in ~N min" when someone is. Otherwise "N waiting · ~N min" (map pill: "N · ~N min"). The pill, card, list, business page, join screen and console use the same helper. See INC-049 for the formula.
 
 ## Verification
 
-Not yet.
+`live-text.test.ts` and `map-view.test.ts` (B19 cases); DO test of `inService`. Not yet checked on a phone.
 
 ## Follow-ups
 

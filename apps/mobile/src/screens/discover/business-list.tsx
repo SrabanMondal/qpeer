@@ -1,4 +1,10 @@
-import { type ListedBusiness, type MapSort, markerStatus } from "@qpeer/shared";
+import {
+  type ListedBusiness,
+  type MapSort,
+  markerStatus,
+  summaryWait,
+  waitSummary,
+} from "@qpeer/shared";
 import type { ReactElement, ReactNode } from "react";
 import {
   FlatList,
@@ -14,7 +20,7 @@ import { Icon } from "@/components/ui";
 import { Radius, Spacing, Type } from "@/constants/theme";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
 import { categoryIcon, categoryLabel } from "@/lib/format";
-import { formatDistance, formatWaitRange } from "@/lib/queue-format";
+import { formatDistance, useNow } from "@/lib/queue-format";
 import { StatusPill } from "@/screens/discover/status-pill";
 
 const SORTS: { value: MapSort; label: string }[] = [
@@ -54,6 +60,7 @@ export function BusinessList({
   bottomPadding: number;
 }) {
   const theme = useTheme();
+  const now = useNow(true, 30_000);
   const sorts = SORTS.filter(
     (s) => s.value !== "distance" || canSortByDistance,
   );
@@ -61,6 +68,7 @@ export function BusinessList({
   return (
     <FlatList
       data={rows}
+      extraData={now}
       keyExtractor={(b) => b.id}
       contentContainerStyle={[
         styles.content,
@@ -116,7 +124,11 @@ export function BusinessList({
       }
       ListEmptyComponent={empty}
       renderItem={({ item }) => (
-        <BusinessRow business={item} onPress={() => onOpen(item.id)} />
+        <BusinessRow
+          business={item}
+          onPress={() => onOpen(item.id)}
+          now={now}
+        />
       )}
     />
   );
@@ -125,17 +137,16 @@ export function BusinessList({
 function BusinessRow({
   business: b,
   onPress,
+  now,
 }: {
   business: ListedBusiness;
   onPress: () => void;
+  /** Server-corrected time: snapshot waits are shown as of now (B19). */
+  now: number;
 }) {
   const theme = useTheme();
   const dark = useIsDark();
   const status = markerStatus(b);
-  const wait =
-    b.summary.waitLowMs !== null && b.summary.waitHighMs !== null
-      ? formatWaitRange(b.summary.waitLowMs, b.summary.waitHighMs)
-      : null;
   const sub = [
     categoryLabel(b.category),
     b.distanceM !== null ? formatDistance(b.distanceM) : null,
@@ -143,9 +154,7 @@ function BusinessRow({
     .filter(Boolean)
     .join(" · ");
   const queueLine =
-    status === "closed"
-      ? null
-      : `${b.summary.waiting} waiting${wait ? ` · ${wait}` : ""}`;
+    status === "closed" ? null : waitSummary(summaryWait(b), now);
 
   return (
     <Pressable

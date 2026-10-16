@@ -65,6 +65,19 @@ export function formatDateTime(ms: number): string {
   return `${days[d.getDay()]} ${d.getDate()} ${months[d.getMonth()]}, ${formatClock(ms)}`;
 }
 
+/**
+ * How old a saved view is, by the phone's clock (both ends are phone time):
+ * "just now", "3 min ago", "2 h ago", "yesterday".
+ */
+export function formatAge(savedAt: number, now = Date.now()): string {
+  const min = Math.floor(Math.max(0, now - savedAt) / MINUTE_MS);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min} min ago`;
+  const h = Math.floor(min / 60);
+  if (h < 24) return `${h} h ago`;
+  return h < 48 ? "yesterday" : `${Math.floor(h / 24)} days ago`;
+}
+
 /** Remaining ms → "4:05" (never negative). */
 export function formatCountdown(ms: number): string {
   const s = Math.max(0, Math.ceil(ms / 1000));

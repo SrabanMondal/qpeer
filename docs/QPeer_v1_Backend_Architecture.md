@@ -164,7 +164,8 @@ All errors are `{ error: <code>, message?: <fallback text>, requestId, details? 
 | 403 | `registration_required` | anonymous user tried a registered-only action |
 | 404 | `not_found` | entity missing **or** not visible to this user (no existence leaks) |
 | 409 | `conflict` | generic state conflict |
-| 409 | `already_in_queue` | user already holds an active token in this queue |
+| 409 | `already_in_queue` | user already holds an active token in this queue (`details.tokenId`) |
+| 409 | `device_in_queue` | another account on the same phone (device hash) holds an active free walk-in token in this queue (C2; no token id is returned) |
 | 409 | `queue_closed` / `queue_paused` / `queue_full` | joins rejected by queue state |
 | 409 | `quota_full` | remote reservations quota reached for this hour |
 | 409 | `invalid_state` | action not allowed in the token's/queue's current state |
@@ -188,11 +189,11 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `businesses` | id, owner_user_id, name, category, address, phone, lat (nullable until pinned), lng, geohash, hours_json, status (`active`/`inactive`, owner toggle), public_stats (owner opt-in, Step 3), first_listed_at (set once, Step 3) | idx(status, lat, lng), idx(owner_user_id) | 1 |
 | `business_members` | business_id, user_id, role (`owner`/`staff`) | pk(business_id, user_id), idx(user_id) | 1 |
 | `queues` | id, business_id, name, status (`active`/`archived`), settings_json, settings_version | idx(business_id) | 1 |
-| `queue_snapshots` | queue_id (pk), business_id, lat, lng, is_open, is_paused, waiting, eta_low_ms, eta_high_ms, now_serving, updated_at | idx(lat, lng) | 2 |
-| `tokens` | id, queue_id, session_id, business_id, user_id (null for triage), number, series (`R`/`P`/`T`), class, method (`walkin`/`remote`/`staff`), state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev | idx(user_id, state), idx(queue_id, session_id), unique(queue_id, session_id, series, number) | 2 |
-| `devices` | user_id, expo_push_token, platform, last_seen_at | pk(expo_push_token), idx(user_id) | 2 |
+| `queue_snapshots` | queue_id (pk), business_id, lat, lng, is_open, is_paused, waiting, eta_low_ms, eta_high_ms, now_serving, in_service (fix batch), updated_at | idx(lat, lng) | 2 |
+| `tokens` | id, queue_id, session_id, business_id, user_id (null for triage), number, series (`R`/`P`/`T`), class, method (`walkin`/`remote`/`staff`), state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev, device_hash (C2), expires_at (C4) | idx(user_id, state), idx(queue_id, session_id), unique(queue_id, session_id, series, number) | 2 |
+| `devices` | user_id, expo_push_token, platform, device_hash (C2, optional), last_seen_at | pk(expo_push_token), idx(user_id) | 2 |
 | `push_tickets` | id (Expo ticket id), token_id, expo_push_token, kind, sent_at, receipt_checked_at, status | idx(receipt_checked_at) | 2 |
-| `free_lane_strikes` | id (outbox id), user_id, token_id, at (one row per no-show) | idx(user_id, at) | 2 |
+| `free_lane_strikes` | id (outbox id), user_id, token_id, device_hash (C2), at (one row per no-show) | idx(user_id, at), idx(device_hash, at) | 2 |
 | `outbox_receipts` | id (QueueDO outbox id), kind, applied_at — dedupe for additive analytics upserts | pk(id) | 2 |
 | `payments` | id, user_id, queue_id, business_id, token_id, kind (`reservation`/`priority`), amount_paise, razorpay_order_id, razorpay_payment_id, status, refund_id, expires_at | unique(razorpay_order_id), unique(razorpay_payment_id), idx(user_id), idx(status, expires_at) | 4 |
 | `ledger_entries` | id, payment_id, business_id, kind (`capture`/`refund`/`forfeit`/`business_share`/`platform_share`), amount_paise, at | idx(business_id, at), idx(payment_id) — **append-only** | 4 |
@@ -200,7 +201,9 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `analytics_hourly` | queue_id, business_id, hour_start (IST hour, epoch ms), joins, leaves, served, no_shows, cancels, sum_wait_ms, waits, sum_interval_ms, intervals, eta_hits, eta_total | pk(queue_id, hour_start), idx(business_id, hour_start) | 2 (written), 5 (read) |
 | `reviews` *(x)* | id, token_id, business_id, user_id, stars, text | unique(token_id) | 6 |
 
-**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, `priorityFeePaise` 10000, `priorityPerRegular` 0 (off), `businessSharePct` 70, `graceMinutes` 10, `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2. Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only.
+**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, `priorityFeePaise` 10000, `priorityPerRegular` 0 (off), `businessSharePct` 70, `graceMinutes` 10, `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2, `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
+
+**Migration 0005 (fix batch):** `tokens.device_hash`, `tokens.expires_at`, `free_lane_strikes.device_hash` (+ index), `devices.device_hash`, `queue_snapshots.in_service`. All nullable or defaulted, so the old Worker keeps working against the migrated D1 (migrate first, then deploy).
 
 **Listed on the map** is derived, not stored: `status = active` AND the business has a pin AND at least one non-archived queue (BIZ-07). Responses include `listed: boolean` and, for owners, `missingForListing: ("pin" | "queue")[]`.
 
@@ -218,12 +221,18 @@ One Durable Object per queue, addressed by `idFromName(queueId)`. All operations
 
 A **session** is one open→close cycle (normally one day). Opening a queue starts a session (`sessionId`), numbers restart at 1, and closing ends it (remaining tokens expire, paid ones are refunded). Analytics and history keep the `sessionId`.
 
+**Auto-close (B20, INC-047).** An open (or paused) session closes by itself at `autoCloseAt(hours, openedAt)` (shared `hours.ts`): 30 min after the end of the **last** hours range of the IST day the session opened; if it opened after that (or on a closed day), at 23:59 IST of that day; never sooner than 30 min after opening. The DO keeps the business hours in `meta.hours` (sent by the Worker on open/queue create, on every hours edit, and by the 15-min cron) and closes on its own alarm; the cron (`modules/queue/auto-close.ts`, ≤ 40 open queues per run, stalest snapshot first) hands each open queue its hours and closes overdue sessions — the safety net for DOs that never got the hours (sessions opened before this code). The console shows a warning from 15 min before (`ConsoleState.autoCloseAt`); each **Keep open** (`POST /v1/queues/:id/keep-open`, staff) sets `keep_open_until = max(autoCloseAt, now) + 1 h`. Auto-close runs exactly the manual close (`closeCore`), including the C4 carry-over. Paid-token refunds on auto-close are a Step 4 TODO (logged count only).
+
+**Ticket validity and carry-over (C4).** With `ticketValidityMin > 0` a token gets `expires_at = joinedAt + validity`. The alarm ends WAITING tokens whose validity ran out as `EXPIRED` / `validity` (also while the queue is closed). On close (manual or auto) a WAITING token with `expires_at > now` is **not** ended: it is marked `carried`, keeps its number, its old `sessionId` and its sort key, and stays WAITING in the DO (and in D1) while the queue is closed. Because sort keys only grow, carried tokens are at the front of their class when the next session opens, in their original order; triage still goes first. New tokens of the new session start at #1 (no clash: the D1 unique key includes the session). The console and ticket show a "Kept" marker; a carried token's overnight wait is not counted as a wait/ETA sample. CALLED and GRACE tokens end on close as before. Until-close tickets (`ticketValidityMin = 0`, the default) behave exactly as before.
+
 ### 9.2 DO storage (its own SQLite)
 
 | Table | Contents |
 |---|---|
-| `meta` | key/value: queueId, businessId, sessionId, status (`closed`/`open`/`paused`), nextNumber per series, nowServing, settings JSON + version, EWMA mean/variance, lastCallAt, pausedSince, pausedTotalMs, lastNextUndo |
-| `tokens` | id, number, series, class, method, userId, state, sortKey, joinedAt, calledAt, counter, graceUntil, paymentOrderId, alertFlags |
+| `meta` | key/value: queueId, businessId, sessionId, status (`closed`/`open`/`paused`), nextNumber per series, nowServing, lastServed, settings JSON + version, EWMA mean/variance, lastCallAt, pausedSince, pausedTotalMs, lastNextUndo, hours (B20), keepOpenUntil (B20) |
+| `tokens` | id, number, series, class, method, userId, state, sortKey, joinedAt, calledAt, counter, graceUntil, paymentOrderId, alertFlags, deviceHash (C2), expiresAt (C4), carried (C4) — schema v2 adds the last three with `ALTER`s |
+
+**Now serving** (coordinator report 2026-10-16, INC-048): the CALLED token called last; when nobody is at a counter, the last token SERVED this session (`lastServed`); null when closed. It is recomputed after every change, so a called token that leaves, is skipped, misses its turn or is undone stops showing at once. Snapshot, token views and console all read the same value.
 | `intervals` | recent Next-to-Next intervals (last ~50) for the median used in outlier capping |
 | `outbox` | id, kind (`d1_write` / `push`), payload JSON, attempts, nextAttemptAt |
 | `hourly` | counters for the current IST hour (flushed through the outbox) |
@@ -236,7 +245,8 @@ WAITING ─next─► CALLED ─served─► SERVED
    │                              └─timer─► EXPIRED
    ├─leave───────► LEFT
    ├─cancel──────► CANCELLED (refund decided by the Worker)
-   └─queue closed► EXPIRED
+   ├─validity ran out (C4) ► EXPIRED (end reason `validity`)
+   └─queue closed► EXPIRED   (unless still valid: carried over, stays WAITING)
 ```
 
 Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while `WAITING`, `CALLED` or `GRACE`.
@@ -256,7 +266,8 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 | `updateSettings(settings, version)` | New settings for new tokens | Ignores older versions |
 | `open()` / `close()` | Start/end a session | `close` returns paid tokens to refund |
 | `pause()` / `resume()` | Pause state, paused time excluded from ETA | |
-| `allocate({ method, userId, cls, paymentOrderId? })` | New token at the end of its class | Checks: open, not full, one active free token per user, paid cap per user, walk-in quota for `remote`. **Idempotent by `paymentOrderId`.** |
+| `allocate({ method, userId, cls, paymentOrderId?, deviceHash? })` | New token at the end of its class | Checks: open, not full, one active free token per user, paid cap per user, **one active free walk-in per device hash (C2, `device_in_queue`)**, walk-in quota for `remote`. **Idempotent by `paymentOrderId`.** |
+| `setHours(hours)` · `keepOpen()` · `autoCloseCheck(hours)` | B20 auto-close: store hours; push the auto-close 1 h later; cron safety net | `keepOpen` fails `invalid_state` when closed or hours unknown |
 | `checkQuota(userId)` | Can a remote reservation be made right now? | Used before creating a Razorpay order |
 | `next(counter)` / `undoNext()` | Call the next token; undo within 30 s | Records interval |
 | `skip(tokenId)` / `noShow(tokenId)` / `admit(tokenId)` / `served(tokenId)` | Staff actions | |
@@ -276,6 +287,7 @@ Every mutating method updates the token row, recalculates the wait estimate, enq
 - **Be-back-by** = expected call − 5 min buffer. **Leave-home-by** = expected call − (straight-line distance ÷ 20 km/h) − 10 min buffer.
 - The math lives in `packages/shared` (pure functions) so the app can display consistent values; the DO is the source of the numbers it sends.
 - ETA accuracy for analytics: when a token is called, record whether the call time fell inside the range shown at join.
+- **One wait text everywhere (B19, INC-046/049).** Every surface (map pill, card, list, business page, join screen, console; the ticket for its own range) formats the DO's range with the shared `live-text.ts`: the midpoint as "~N min". A summary's durations are measured at its `updatedAt`, so `waitRangeAt` subtracts the snapshot's age (the DO's estimate falls linearly between changes): a 30 s old snapshot and the live summary give the same text. With 0 waiting: "No wait" when nobody is at a counter, "Next in ~N min" when someone is (`inService`, now in `QueueLiveSummary`, `MapQueue` and `queue_snapshots.in_service`).
 
 ### 9.7 Single-alarm scheduler
 
@@ -285,6 +297,8 @@ A DO has one alarm. The scheduler computes the earliest of:
 - the next outbox retry,
 - the next "head back now" alert time for any token,
 - the hourly analytics flush (top of the IST hour),
+- the next ticket validity end (C4),
+- the auto-close time of the open session (B20),
 
 and calls `setAlarm(earliest)`. `alarm()` handles everything due, then reschedules. Alarms survive DO restarts.
 
@@ -372,7 +386,7 @@ created ──(captured, verified)──► captured ──► allocated
 
 ## 12. Map and Discovery
 
-- `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` (any signed-in user) → **one** D1 statement (`modules/map/service.ts`): a CTE picks listed businesses (status `active`, has pin, ≥ 1 active queue) inside the box through `idx(status, lat, lng)`, nearest to the box centre first, `limit + 1` rows; the outer select joins their active queues and `queue_snapshots`. `limit` defaults to 200 (max 300); `truncated: true` tells the app to zoom in. Each box side may be at most 1.5° (else 400 `invalid_input`). `openNow` is evaluated in SQL (`json_each` over the IST weekday's ranges, `from <= now < to`), the same rule as the shared `isOpenAt()`, so the limit applies after the filter. Response `MapResponse { items: MapBusiness[], truncated, serverTime }`; no user-specific data. The request log records the path only, never the box.
+- `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` (any signed-in user) → **one** D1 statement (`modules/map/service.ts`): a CTE picks listed businesses (status `active`, has pin, ≥ 1 active queue) inside the box through `idx(status, lat, lng)`, nearest to the box centre first, `limit + 1` rows; the outer select joins their active queues and `queue_snapshots`. `limit` defaults to 200 (max 300); `truncated: true` tells the app to zoom in. Each box side may be at most 1.5° (else 400 `invalid_input`). `openNow` is evaluated in SQL with **the same rule as the badge** (B16, INC-043): some active queue's snapshot is open and not paused, whatever the hours; so the limit applies after the filter. `isOpenNow` in responses still reports the hours (information only); the app shows "Open (after usual hours)" when a queue is open outside them (shared `openLook`). `GET /v1/queues/:id` adds `business.isOpenNow` and `business.todayHours` for the join screen. Response `MapResponse { items: MapBusiness[], truncated, serverTime }`; no user-specific data. The request log records the path only, never the box.
 - Business detail `GET /v1/businesses/:id` → profile + queues with snapshots + `isOpenNow` + `todayHours` + `stats` (MAP-05: `servedCount`, `avgWaitMs` = Σwait/waits, `avgServiceMs` = Σinterval/intervals, `etaAccuracyPct` = eta_hits/eta_total, over the last 28 days of `analytics_hourly`; each average null below 20 samples). **MAP-06 visibility:** members always get `stats`; non-members get it once the business has been listed for 14 days (`businesses.first_listed_at`) or when the owner set `publicStats` (`PATCH /v1/businesses/:id { publicStats }`), otherwise `stats: null`.
 - `GET /v1/queues/:id` exposes `joinRadiusM` to everyone (the only public queue setting).
 - Snapshots are at most ~30 s old (MAP-02); the app polls the visible area every 30 s while the map is visible.
@@ -393,7 +407,7 @@ created ──(captured, verified)──► captured ──► allocated
 
 | Schedule | Job |
 |---|---|
-| every 15 min | expire unpaid orders; close queues past their business closing time (if auto-close is on) |
+| every 15 min | `auto_close` (B20): hand open queues their hours, close overdue sessions (safety net for the DO alarm, §9.1); Step 4: expire unpaid orders |
 | hourly | check Expo push receipts; prune dead push tokens |
 | daily 03:00 IST | payment reconciliation; delete `webhook_events` older than 30 days |
 
@@ -428,6 +442,8 @@ Cron handlers are thin and call the same services as the API, so they are tested
 | `RAZORPAY_WEBHOOK_SECRET` | **secret** | same |
 | `EXPO_ACCESS_TOKEN` | **secret** (optional) | only if Expo push security is enabled |
 | `LOADTEST_JWKS` | **secret** (`loadtest` env only) | public JWK set of the load-test signing key; ignored unless `ENVIRONMENT` is exactly `loadtest` |
+| `TICKET_SIGNING_KEY` | **secret** (optional, per env) | C3: Ed25519 private JWK with `kid` (`npm run ticket-keys:gen` → gitignored `secrets/ticket-signing-key.json`). Without it nothing is signed (`signedTicket: null`, empty `/v1/ticket-keys`); a broken value logs `ticket-sign` errors and also disables signing — joins never fail because of it. Never logged. |
+| `TICKET_PUBLIC_KEYS` | var (optional) | C3 rotation: extra public JWK set still served by `/v1/ticket-keys` |
 | `DB` | D1 binding | per env |
 | `QUEUE` | DO binding | per env |
 
@@ -480,6 +496,7 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 | Module | Method + path | Auth | Purpose (checklist) |
 |---|---|---|---|
 | Platform | `GET /v1/health` | P | PLT-02 |
+| Platform | `GET /v1/ticket-keys` (public JWK set, `Cache-Control: max-age=3600`) | P | C3 offline ticket check |
 | Identity | `GET /v1/me` · `PATCH /v1/me` (displayName) | A | IDN-06 |
 | Identity | `POST /v1/me/devices` · `DELETE /v1/me/devices/:pushToken` | A | ALR-02 |
 | Business | `POST /v1/businesses` · `GET /v1/me/businesses` | R | BIZ-01, BIZ-09, BIZ-15 |
@@ -488,10 +505,10 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 | Business | `POST /v1/businesses/:id/deactivate` · `/activate` | O | BIZ-08 |
 | Queues | `POST /v1/businesses/:id/queues` · `PATCH /v1/queues/:id` (name, settings) · `POST /v1/queues/:id/archive` | O | BIZ-10–12 |
 | Queues | `GET /v1/queues/:id` (public info + live summary + `joinRadiusM`) | A | JON-03 |
-| Console | `POST /v1/queues/:id/{open,close,pause,resume,next,undo-next,triage}` | S | BIZ-13, QUE-05–12 |
+| Console | `POST /v1/queues/:id/{open,close,pause,resume,next,undo-next,triage,keep-open}` | S | BIZ-13, QUE-05–12, B20 |
 | Console | `POST /v1/queues/:id/tokens/:tid/{skip,no-show,admit,served}` | S | QUE-06, QUE-08 |
 | Console | `GET /v1/queues/:id/console` (full live state) | S | console screen |
-| Join | `POST /v1/queues/:id/join` `{ lat, lng, accuracyM, mocked }` | A | JON-04–07 |
+| Join | `POST /v1/queues/:id/join` `{ lat, lng, accuracyM, mocked, deviceHash? }` → `TokenView` with `signedTicket` | A | JON-04–07, C2, C3 |
 | Tokens | `GET /v1/me/tokens?status=active\|recent` | A | TOK-06 |
 | Tokens | `GET /v1/tokens/:id` · `POST /v1/tokens/:id/leave` · `POST /v1/tokens/:id/cancel` | A (owner of token) | TOK-01, TOK-05 |
 | Live | `GET /v1/queues/:id/live` (WebSocket) | A | TOK-02 |
@@ -578,3 +595,17 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Skip across classes (G1) | A skip only moves a token back. A skipped triage token may go behind lower classes ("behind the next 3 people"); a skipped regular/priority token never lands inside a higher class's range (it goes to the head of its own class at most), so later triage arrivals still go ahead of it. |
 | `canceled` alarm events | Benign: an alarm the platform had started to dispatch was overridden by a later `setAlarm`/`deleteAlarm` before our handler ran (CPU 0). The alarm is re-derived from durable storage on every reschedule and every handler step is atomic + idempotent, so nothing is lost or applied twice. Fewer of them now that inline drains don't arm a 250 ms alarm. |
 | Simulator timeouts | Connection failures (Node fetch gives up connecting after 10 s) are retried in the client and reported separately; a lost join answer is retried once and `409 already_in_queue` (with `details.tokenId`) is accepted as the token, like the app's "open ticket". Whole-request timeouts (20 s) still fail the run. |
+
+### Decided in the fix batch (2026-10-16, branch `feat/fix-batch-rebuild`)
+
+| Question | Decision |
+|---|---|
+| "Open" (B16, INC-043) | The queue state decides whether a customer can join; hours are information. Labels from shared `openLook`: "Open now", "Open (after usual hours)", "Paused", "Queue not open" (closed inside hours), "Closed now". `openNow=1` = some queue open and not paused (same as the badge). |
+| Auto-close (B20, INC-047) | 30 min after the day's last hours range; opened outside hours (or on a closed day) → 23:59 IST of the opening day (a business working off-hours keeps the evening and taps Keep open past midnight); never sooner than 30 min after opening. DO alarm closes on time; the 15-min cron is the safety net. Keep open = +1 h per tap from the current auto-close time (`meta.keep_open_until`, reset on open/close). Owner can't switch auto-close off in v1. |
+| Wait text (B19, INC-046/049) | One helper (`waitText`/`waitSummary`): "No wait", "Next in ~N min", "N waiting · ~N min"; the midpoint of the DO's range, aged by the snapshot's `updatedAt`. The ticket formats its own range the same way. |
+| Now serving (INC-048) | Called token called last, else the last served this session, else none. A token that left/was skipped/missed its turn while called never shows. |
+| Device hash (C2, INC-042) | SHA-256(ANDROID_ID + fixed public salt `qpeer-device-v1:`), computed on the phone (`@noble/hashes`); only the hash travels and is stored (D1 tokens/strikes/devices, DO tokens). Second free walk-in on the same phone in the same queue: same account → `already_in_queue` + tokenId; other account → `device_in_queue` (no token id: it belongs to someone else). 3 no-shows per device hash in 30 days block free joins (read at join, 7 days after the last). Missing hash = old rules. Paid/remote/staff flows ignore it. |
+| Signed ticket (C3) | Ed25519 (Workers WebCrypto `Ed25519` works in workerd and the test pool; ES256 not needed). Text `QPT1.<b64url payload>.<b64url sig>` (~370 chars): `{v, q, t, n, s, c, sid, iat = joinedAt, exp = expiresAt ?? joinedAt + 24 h, kid}`; deterministic, so GET returns the same ticket. Signed on join and `GET /v1/tokens/:id` for active tokens only, never on socket messages (the app keeps it). Verified on the phone with `@noble/curves` (bundled public keys + cached `/v1/ticket-keys`); the console's "Verify a ticket" also reads the live status when online. No key → no ticket, nothing breaks. |
+| Ticket validity + carry-over (C4) | `ticketValidityMin` (0 = until close). Carried tokens keep number, session id and place — no reissue (the customer's number and signed ticket stay valid), "Kept" marker in console and ticket. Expired-by-time → `EXPIRED` / `validity` via the alarm, also while closed. Carried waits are not wait/ETA samples. Carry-over needs no new numbering rule because sort keys only grow. |
+| App storage (C1) | `@react-native-async-storage/async-storage` 2.2.0 (SQLite on Android, no config plugin, async API fast enough for a preload at start) over `expo-sqlite/kv-store` (sync reads, but a bigger native library for a few small keys). One `lib/storage.ts`: typed keys with zod schemas and a version per key; anything unreadable reads as missing. Saved: ticket views (+ signed ticket, ended ones for 24 h, ≤ 30), battery-tip dismissal, console queue, map filters/sort/view, last camera (not the user's position), ticket public keys. |
+| Offline (B13, INC-040) | Degrade, never block: one slim strip ("Offline — showing saved info", Retry); last views stay; server actions disabled with "You're offline. This needs internet." (`Button needsNetwork`); ticket shows "Last updated N min ago"; map shows "The map needs internet" with the saved active tickets; console greyed "Offline — actions paused". Offline detection stays request-based (no NetInfo). |

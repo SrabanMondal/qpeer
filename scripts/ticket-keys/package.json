@@ -1,0 +1,6 @@
+{
+  "name": "@qpeer/ticket-keys-scripts",
+  "private": true,
+  "description": "Offline ticket signing key (C3); Node 24 type stripping, no dependencies",
+  "type": "module"
+}

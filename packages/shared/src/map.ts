@@ -12,7 +12,8 @@ const Lng = z.coerce.number().finite().min(-180).max(180);
 
 /**
  * GET /v1/map query (MAP-01…04). Values arrive as strings. `openNow=1` keeps
- * only businesses open now by their hours (Asia/Kolkata).
+ * only businesses where someone can join now: at least one queue open and
+ * not paused, whatever the hours say (B16: the same rule as the badge).
  */
 export const MapQuery = z
   .object({
@@ -78,6 +79,8 @@ export const MapQueue = z.object({
   waitHighMs: z.number().int().nullable(),
   /** Snapshot time; null when there is no snapshot yet. */
   updatedAt: z.number().int().nullable(),
+  /** Tokens at a counter at snapshot time (B19). */
+  inService: z.number().int().optional(),
 });
 
 export type MapQueue = z.infer<typeof MapQueue>;
@@ -99,6 +102,10 @@ export const MapBusiness = z.object({
     waitHighMs: z.number().int().nullable(),
     /** At least one queue has an open session. */
     anyOpen: z.boolean(),
+    /** In service at the queue whose wait is shown (B19). */
+    inService: z.number().int().optional(),
+    /** Snapshot time of that queue: waits are durations from this instant. */
+    updatedAt: z.number().int().nullable().optional(),
   }),
 });
 

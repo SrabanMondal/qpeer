@@ -10,10 +10,11 @@ import {
   type TriageResponse,
   tokenLabel,
 } from "@qpeer/shared";
-import { and, desc, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, desc, eq, gt, inArray, notInArray, sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import {
   businesses,
+  freeLaneStrikes,
   type Queue,
   queues,
   type TokenRow,
@@ -22,8 +23,14 @@ import {
 } from "../../db/schema";
 import type { Bindings } from "../../env";
 import { AppError, notFound } from "../../lib/errors";
+import { type TicketEnv, withTicket } from "../../lib/ticket-sign";
 import { toMs } from "../../lib/time";
 import { findRole } from "../../middleware/guards";
+import {
+  STRIKE_BLOCK_MS,
+  STRIKE_LIMIT,
+  STRIKE_WINDOW_MS,
+} from "../../queue/outbox";
 import type { DoResult } from "../../queue/queue-do";
 import {
   initQueueDO,
@@ -40,7 +47,7 @@ import { queueStub, unwrap } from "./do-client";
  */
 export interface QueueCtx {
   db: Db;
-  env: Pick<Bindings, "QUEUE">;
+  env: Pick<Bindings, "QUEUE"> & TicketEnv;
   now: number;
 }
 
@@ -56,6 +63,7 @@ type ConsoleAction =
   | "pause"
   | "resume"
   | "undo-next"
+  | "keep-open"
   | "skip"
   | "no-show"
   | "admit"
@@ -114,6 +122,9 @@ export async function consoleAction(
       break;
     case "undo-next":
       r = await stub.undoNext();
+      break;
+    case "keep-open":
+      r = await stub.keepOpen();
       break;
     case "skip":
       r = await stub.skip(tid);
@@ -181,6 +192,11 @@ export async function joinQueue(
   const { queue, business } = await loadJoinable(db, queueId);
   const t1 = Date.now();
   const stub = queueStub(env, queueId);
+  // Read in parallel with the DO pre-check (no extra round trip on the path).
+  const deviceUntilP = body.deviceHash
+    ? deviceBlockedUntil(db, body.deviceHash, now)
+    : Promise.resolve(null);
+  deviceUntilP.catch(() => undefined);
   unwrap(await stub.checkJoin());
   const t2 = Date.now();
 
@@ -211,12 +227,14 @@ export async function joinQueue(
   const blockedUntil = user.freeLaneBlockedUntil
     ? toMs(user.freeLaneBlockedUntil)
     : null;
-  if (blockedUntil !== null && blockedUntil > now) {
+  const deviceUntil = await deviceUntilP;
+  const until = Math.max(blockedUntil ?? 0, deviceUntil ?? 0);
+  if (until > now) {
     throw new AppError(
       423,
       "free_lane_blocked",
       "Free joins are paused after repeated no-shows",
-      { until: blockedUntil },
+      { until },
     );
   }
   // TODO(NFR-11): endpoint rate limit for joins (only queue-level caps for now).
@@ -224,6 +242,7 @@ export async function joinQueue(
     method: "walkin",
     userId: user.id,
     cls: "regular",
+    deviceHash: body.deviceHash ?? null,
   });
   const t3 = Date.now();
   if (t3 - t0 >= SLOW_JOIN_MS) {
@@ -242,11 +261,38 @@ export async function joinQueue(
       }),
     );
   }
-  return unwrap(result).token;
+  return withTicket(env, unwrap(result).token);
 }
 
 /** Joins slower than this log their phase timings. */
 const SLOW_JOIN_MS = 1_000;
+
+/**
+ * C2: the JON-07 rule per device hash: 3 no-shows on this phone within 30
+ * days pause free joins until 7 days after the last one, whichever account
+ * the phone uses now. Null when not blocked.
+ */
+export async function deviceBlockedUntil(
+  db: Db,
+  deviceHash: string,
+  now: number,
+): Promise<number | null> {
+  const row = await db
+    .select({
+      n: sql<number>`COUNT(*)`,
+      last: sql<number | null>`MAX(${freeLaneStrikes.at})`,
+    })
+    .from(freeLaneStrikes)
+    .where(
+      and(
+        eq(freeLaneStrikes.deviceHash, deviceHash),
+        gt(freeLaneStrikes.at, new Date(now - STRIKE_WINDOW_MS)),
+      ),
+    )
+    .get();
+  if (!row || row.n < STRIKE_LIMIT || row.last === null) return null;
+  return Number(row.last) + STRIKE_BLOCK_MS;
+}
 
 // ---------- tokens (TOK-01, TOK-05, TOK-06) ----------
 
@@ -313,6 +359,9 @@ function viewFromRow(
     endReason: row.endReason,
     paid: row.paymentId !== null,
     rev: row.rev,
+    sessionId: row.sessionId,
+    cls: row.class,
+    expiresAt: row.expiresAt ? toMs(row.expiresAt) : null,
   };
 }
 
@@ -324,7 +373,7 @@ export async function getToken(
 ): Promise<TokenView> {
   const { row } = await loadTokenFor(db, tokenId, userId);
   const r = await queueStub(env, row.queueId).getToken(tokenId);
-  if (r.ok) return r.value.token;
+  if (r.ok) return withTicket(env, r.value.token);
   return viewFromRow(row, await namesFor(db, row.queueId));
 }
 
@@ -396,6 +445,7 @@ export async function myTokens(
     calledAt: t.calledAt ? toMs(t.calledAt) : null,
     endedAt: t.endedAt ? toMs(t.endedAt) : null,
     endReason: t.endReason,
+    expiresAt: t.expiresAt ? toMs(t.expiresAt) : null,
   }));
 }
 

@@ -20,6 +20,7 @@ export async function upsertDevice(
       expoPushToken: body.expoPushToken,
       userId,
       platform: body.platform,
+      deviceHash: body.deviceHash ?? null,
       lastSeenAt: at,
       createdAt: at,
       updatedAt: at,
@@ -29,6 +30,7 @@ export async function upsertDevice(
       set: {
         userId: sql`excluded.user_id`,
         platform: sql`excluded.platform`,
+        deviceHash: sql`coalesce(excluded.device_hash, ${devices.deviceHash})`,
         lastSeenAt: sql`excluded.last_seen_at`,
         updatedAt: sql`excluded.updated_at`,
       },

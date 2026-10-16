@@ -1,3 +1,4 @@
+export { AppSwitch, ThemedSwitch } from "./app-switch";
 export { Badge, type BadgeTone } from "./badge";
 export { Button, type ButtonVariant } from "./button";
 export { Card } from "./card";

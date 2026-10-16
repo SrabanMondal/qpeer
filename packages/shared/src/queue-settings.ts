@@ -2,6 +2,25 @@ import { z } from "zod";
 
 const int = (min: number, max: number) => z.number().int().min(min).max(max);
 
+/** Longest ticket validity: 7 days. */
+export const TICKET_VALIDITY_MAX_MIN = 7 * 24 * 60;
+
+/** Validity choices shown to owners (minutes; 0 = until the queue closes). */
+export const TICKET_VALIDITY_PRESETS_MIN = [
+  0, 60, 120, 240, 480, 1440, 2880, 10080,
+] as const;
+
+/** "Until the queue closes", "1 h", "8 h", "1 day", "7 days". */
+export function ticketValidityLabel(minutes: number): string {
+  if (minutes <= 0) return "Until the queue closes";
+  if (minutes % 1440 === 0) {
+    const d = minutes / 1440;
+    return d === 1 ? "1 day" : `${d} days`;
+  }
+  if (minutes % 60 === 0) return `${minutes / 60} h`;
+  return `${minutes} min`;
+}
+
 /** Field rules for queue settings (bounds only, no defaults). */
 const settingsFields = {
   /** Walk-in join radius around the pin, metres. */
@@ -20,6 +39,12 @@ const settingsFields = {
   serviceMinutesHint: int(1, 120),
   triageDailyCap: int(0, 50),
   paidPerUserCap: int(0, 10),
+  /**
+   * Ticket validity (C4), minutes from joining; 0 = until the queue closes
+   * (the default). A ticket still valid when the queue closes carries over
+   * to the front of the next session.
+   */
+  ticketValidityMin: int(0, TICKET_VALIDITY_MAX_MIN),
 };
 
 /** Defaults from the backend architecture doc, section 8. */
@@ -37,6 +62,7 @@ export const QUEUE_SETTINGS_DEFAULTS = {
   serviceMinutesHint: 5,
   triageDailyCap: 5,
   paidPerUserCap: 2,
+  ticketValidityMin: 0,
 } as const satisfies { [K in keyof typeof settingsFields]: number };
 
 /** Full settings; missing fields take their defaults (`QueueSettings.parse({})`). */
@@ -75,6 +101,9 @@ export const QueueSettings = z.object({
   ),
   paidPerUserCap: settingsFields.paidPerUserCap.default(
     QUEUE_SETTINGS_DEFAULTS.paidPerUserCap,
+  ),
+  ticketValidityMin: settingsFields.ticketValidityMin.default(
+    QUEUE_SETTINGS_DEFAULTS.ticketValidityMin,
   ),
 });
 

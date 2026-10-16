@@ -1,6 +1,7 @@
 import { DurableObject } from "cloudflare:workers";
 import {
   type AlertKind,
+  autoCloseAt,
   type ConsoleState,
   type ConsoleToken,
   capInterval,
@@ -9,12 +10,14 @@ import {
   etaHit,
   ewmaUpdate,
   type JoinMethod,
+  KEEP_OPEN_STEP_MS,
   type QueueLiveSummary,
   type QueueSettings,
   type TokenClass,
   type TokenSeries,
   type TokenView,
   tokenLabel,
+  type WeeklyHours,
 } from "@qpeer/shared";
 import { pushTransport } from "../modules/notifications/expo-push";
 import {
@@ -60,6 +63,7 @@ import {
   HOURLY_FIELDS,
   type HourlyCounts,
   type HourlyRow,
+  type Meta,
   type OutboxKind,
   type OutboxRow,
   QueueStore,
@@ -75,6 +79,7 @@ export type DoErrorCode =
   | "queue_paused"
   | "queue_full"
   | "already_in_queue"
+  | "device_in_queue"
   | "quota_full"
   | "conflict";
 
@@ -111,6 +116,8 @@ export interface AllocateInput {
   cls: TokenClass;
   /** Paid allocations (Step 4): idempotent by this id. */
   paymentOrderId?: string;
+  /** C2: hash of the phone's ANDROID_ID (free walk-ins); absent on old builds. */
+  deviceHash?: string | null;
 }
 
 export interface TokenWithOwner {
@@ -309,6 +316,8 @@ export class QueueDO extends DurableObject<Env> {
         s.set("paused_total_ms", 0);
         s.set("paused_at_last_call", 0);
         s.set("undo", null);
+        s.set("last_served", null);
+        s.set("keep_open_until", null);
         s.pruneOldSessions(sessionId);
         fx.changed = true;
         fx.snapshotNow = true;
@@ -319,8 +328,10 @@ export class QueueDO extends DurableObject<Env> {
   }
 
   /**
-   * QUE-09: ends the session; every active token expires (`queue_closed` alert).
-   * Returns paid tokens so the Worker can refund them (Step 4). Idempotent.
+   * QUE-09: ends the session; every active token expires (`queue_closed`
+   * alert), except WAITING tokens whose validity (C4) runs past now: they
+   * carry over to the front of the next session. Returns paid tokens that
+   * ended so the Worker can refund them (Step 4). Idempotent.
    */
   async close(): Promise<
     DoResult<{
@@ -332,29 +343,142 @@ export class QueueDO extends DurableObject<Env> {
     return this.mutate(
       "close",
       (now, fx) => {
-        const s = this.store;
-        if (s.get("status") === "closed") return ok(null);
-        for (const t of s.active()) {
-          this.alert(t, "queue_closed", now);
-          this.change(t.id, endPatch("EXPIRED", "closed", now), now, fx);
-          if (t.payment_order_id) {
-            paidTokens.push({
-              tokenId: t.id,
-              paymentOrderId: t.payment_order_id,
-            });
-          }
-        }
-        s.set("status", "closed");
-        s.set("paused_since", null);
-        s.set("undo", null);
-        s.set("now_serving", null);
-        this.flushHourly(now, true);
-        fx.changed = true;
-        fx.snapshotNow = true;
+        if (this.store.get("status") === "closed") return ok(null);
+        paidTokens.push(...this.closeCore(now, fx));
         return ok(null);
       },
       (now) => ({ console: this.consoleState(now), paidTokens }),
     );
+  }
+
+  /** Manual close, auto-close (B20) and the cron share this. */
+  private closeCore(
+    now: number,
+    fx: Fx,
+  ): { tokenId: string; paymentOrderId: string }[] {
+    const s = this.store;
+    const paidTokens: { tokenId: string; paymentOrderId: string }[] = [];
+    for (const t of s.active()) {
+      if (
+        t.state === "WAITING" &&
+        t.expires_at !== null &&
+        t.expires_at > now
+      ) {
+        // C4 carry-over: keeps number, session id and place (sort key).
+        if (!t.carried) this.change(t.id, { carried: 1 }, now, fx);
+        // Fresh "next"/"head back" alerts in the next session.
+        const fresh = s.token(t.id);
+        if (fresh) {
+          s.setAlertFlags(
+            t.id,
+            fresh.alert_flags &
+              ~(
+                ALERT_BITS.next |
+                ALERT_BITS.head_back |
+                ALERT_BITS.queue_paused
+              ),
+          );
+        }
+        continue;
+      }
+      this.alert(t, "queue_closed", now);
+      this.change(t.id, endPatch("EXPIRED", "closed", now), now, fx);
+      if (t.payment_order_id) {
+        paidTokens.push({ tokenId: t.id, paymentOrderId: t.payment_order_id });
+      }
+    }
+    s.set("status", "closed");
+    s.set("paused_since", null);
+    s.set("undo", null);
+    s.set("now_serving", null);
+    s.set("last_served", null);
+    s.set("keep_open_until", null);
+    this.flushHourly(now, true);
+    fx.changed = true;
+    fx.snapshotNow = true;
+    return paidTokens;
+  }
+
+  // =====================================================================
+  // RPC: auto-close (B20, INC-047)
+  // =====================================================================
+
+  /** Business hours for the auto-close (open, hours edit, cron). */
+  async setHours(hours: WeeklyHours): Promise<void> {
+    if (JSON.stringify(hours) === JSON.stringify(this.store.get("hours"))) {
+      return;
+    }
+    this.store.set("hours", hours);
+    await this.reschedule();
+  }
+
+  /**
+   * Console "Keep open": moves the auto-close 1 h later than it is now (or
+   * than now, if it is already due). Only while open/paused with known hours.
+   */
+  async keepOpen(): Promise<DoResult<ConsoleState>> {
+    return this.mutate(
+      "keepOpen",
+      (now, fx) => {
+        const deadline = this.autoCloseDeadline();
+        if (deadline === null) {
+          return fail("invalid_state", "The queue is not open");
+        }
+        this.store.set(
+          "keep_open_until",
+          Math.max(deadline, now) + KEEP_OPEN_STEP_MS,
+        );
+        fx.changed = true;
+        return ok(null);
+      },
+      (now) => this.consoleState(now),
+    );
+  }
+
+  /**
+   * Cron safety net (every 15 min): stores the hours, then closes the session
+   * if its auto-close time has passed (the alarm normally did it already).
+   */
+  async autoCloseCheck(
+    hours: WeeklyHours,
+  ): Promise<{ closed: boolean; autoCloseAt: number | null }> {
+    await this.setHours(hours);
+    const r = await this.mutate("autoClose", (now, fx) => {
+      const at = this.autoCloseDeadline();
+      if (at === null || at > now) return ok(false);
+      this.autoClose(now, fx);
+      return ok(true);
+    });
+    return {
+      closed: r.ok && r.value,
+      autoCloseAt: this.autoCloseDeadline(),
+    };
+  }
+
+  /** Effective auto-close time of the open session, or null. */
+  private autoCloseDeadline(): number | null {
+    const s = this.store;
+    if (s.get("status") === "closed") return null;
+    const hours = s.get("hours");
+    const openedAt = s.get("opened_at");
+    if (!hours || openedAt === null) return null;
+    const base = autoCloseAt(hours, openedAt);
+    const keep = s.get("keep_open_until");
+    return keep === null ? base : Math.max(base, keep);
+  }
+
+  private autoClose(now: number, fx: Fx): void {
+    const paid = this.closeCore(now, fx);
+    console.log(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "info",
+        where: "queue-do.auto-close",
+        queueId: this.store.get("queue_id"),
+        paidTokens: paid.length,
+      }),
+    );
+    // TODO(Step 4): refund `paid` (the Worker isn't in this call path).
   }
 
   /** QUE-07: pause (no joins, no Next; paused time is excluded from the ETA). */
@@ -533,6 +657,19 @@ export class QueueDO extends DurableObject<Env> {
         return fail("quota_full", "Paid token limit reached for this queue");
       }
     }
+    // C2 (INC-042): one free walk-in per phone, whatever the account (a
+    // reinstall gets a new anonymous account but keeps its ANDROID_ID).
+    const deviceHash =
+      input.method === "walkin" && !paid ? (input.deviceHash ?? null) : null;
+    if (deviceHash) {
+      const onDevice = s.activeFreeWalkinsForDevice(deviceHash)[0];
+      if (onDevice) {
+        return fail(
+          "device_in_queue",
+          "This phone already has a ticket in this queue",
+        );
+      }
+    }
     if (input.method === "remote" && !this.remoteQuotaAvailable()) {
       return fail("quota_full", "Reservations are full right now");
     }
@@ -570,6 +707,12 @@ export class QueueDO extends DurableObject<Env> {
       cancel_window_ms: settings.cancelWindowMin * 60_000,
       eta_low_at_join: est.lowMs,
       eta_high_at_join: est.highMs,
+      device_hash: deviceHash,
+      expires_at:
+        settings.ticketValidityMin > 0
+          ? now + settings.ticketValidityMin * 60_000
+          : null,
+      carried: 0,
     });
     this.recordToken(id, now);
     this.bump(now, { joins: 1 });
@@ -625,6 +768,7 @@ export class QueueDO extends DurableObject<Env> {
             lastCallAt: s.get("last_call_at"),
             pausedAtLastCall: s.get("paused_at_last_call"),
             nowServing: s.get("now_serving"),
+            lastServed: s.get("last_served"),
           },
           intervalId: null,
           hourStart,
@@ -668,9 +812,15 @@ export class QueueDO extends DurableObject<Env> {
             fx,
           );
           s.set("now_serving", tokenLabel(called.series, called.number));
-          add("waits", 1);
-          add("sum_wait_ms", now - head.joined_at);
-          if (head.eta_low_at_join !== null && head.eta_high_at_join !== null) {
+          // C4: a carried-over ticket's wait spans the closed hours; it would
+          // skew the averages, so it is not counted as a wait or ETA sample.
+          if (!head.carried) add("waits", 1);
+          if (!head.carried) add("sum_wait_ms", now - head.joined_at);
+          if (
+            !head.carried &&
+            head.eta_low_at_join !== null &&
+            head.eta_high_at_join !== null
+          ) {
             add("eta_total", 1);
             if (etaHit(now, head.eta_low_at_join, head.eta_high_at_join)) {
               add("eta_hits", 1);
@@ -742,6 +892,9 @@ export class QueueDO extends DurableObject<Env> {
         s.set("last_call_at", u.prev.lastCallAt);
         s.set("paused_at_last_call", u.prev.pausedAtLastCall);
         s.set("now_serving", u.prev.nowServing);
+        if (u.prev.lastServed !== undefined) {
+          s.set("last_served", u.prev.lastServed);
+        }
         if (u.intervalId !== null) s.removeInterval(u.intervalId);
         const negative: Partial<HourlyCounts> = {};
         for (const k of Object.keys(u.hourlyDelta) as (keyof HourlyCounts)[]) {
@@ -1062,6 +1215,13 @@ export class QueueDO extends DurableObject<Env> {
     try {
       this.ctx.storage.transactionSync(() => {
         for (const t of this.store.graceDue(now)) this.expireGrace(t, now, fx);
+        // C4: tickets whose validity ran out (also while the queue is closed).
+        for (const t of this.store.validityDue(now)) {
+          this.change(t.id, endPatch("EXPIRED", "validity", now), now, fx);
+        }
+        // B20: auto-close once the (possibly extended) time has come.
+        const closeAt = this.autoCloseDeadline();
+        if (closeAt !== null && closeAt <= now) this.autoClose(now, fx);
         this.afterChange(now, fx);
       });
     } catch (e) {
@@ -1081,7 +1241,12 @@ export class QueueDO extends DurableObject<Env> {
     if (t.user_id && t.payment_order_id === null && t.method === "walkin") {
       this.store.enqueue(
         "strike",
-        { userId: t.user_id, tokenId: t.id, at: now },
+        {
+          userId: t.user_id,
+          tokenId: t.id,
+          at: now,
+          deviceHash: t.device_hash,
+        },
         now,
       );
     }
@@ -1181,6 +1346,9 @@ export class QueueDO extends DurableObject<Env> {
     fx: Fx,
   ): TokenRow {
     const row = this.store.updateToken(id, patch);
+    if (patch.state === "SERVED") {
+      this.store.set("last_served", tokenLabel(row.series, row.number));
+    }
     this.recordToken(id, now);
     fx.changed = true;
     fx.touched.add(id);
@@ -1214,6 +1382,8 @@ export class QueueDO extends DurableObject<Env> {
       paymentId: null,
       rev: t.rev,
       at: now,
+      deviceHash: t.device_hash,
+      expiresAt: t.expires_at,
     };
     s.enqueue("token_upsert", payload, now);
   }
@@ -1229,6 +1399,7 @@ export class QueueDO extends DurableObject<Env> {
   private afterChange(now: number, fx: Fx): void {
     const s = this.store;
     const status = s.get("status");
+    this.refreshNowServing(status);
 
     if (status !== "closed") {
       // "You're next" once a token reaches the head (not when joining at the head).
@@ -1258,6 +1429,24 @@ export class QueueDO extends DurableObject<Env> {
     }
 
     this.flushHourly(now, false);
+  }
+
+  /**
+   * "Now serving" (coordinator report 2026-10-16): the token at a counter
+   * that was called last; when nobody is at a counter, the last token SERVED
+   * this session; null when closed. A called token that leaves, is skipped,
+   * misses its turn (grace) or is undone therefore stops showing at once.
+   */
+  private refreshNowServing(status: Meta["status"]): void {
+    const s = this.store;
+    let label: string | null = null;
+    if (status !== "closed") {
+      const called = s.latestCalled();
+      label = called
+        ? tokenLabel(called.series, called.number)
+        : s.get("last_served");
+    }
+    if (label !== s.get("now_serving")) s.set("now_serving", label);
   }
 
   /** Waiting tokens (first 50, ≥ 1 ahead) without a head-back alert, with their due time. */
@@ -1295,6 +1484,7 @@ export class QueueDO extends DurableObject<Env> {
       etaHighMs: sum.waitHighMs,
       nowServing: sum.nowServing,
       updatedAt: now,
+      inService: sum.inService,
     };
     s.enqueue("snapshot", payload, now);
   }
@@ -1381,6 +1571,8 @@ export class QueueDO extends DurableObject<Env> {
       farFanout: far.dirty
         ? (far.lastAt ?? now) + FAR_FANOUT_INTERVAL_MS
         : null,
+      validityExpiry: s.nextValidityExpiry(),
+      autoClose: this.autoCloseDeadline(),
     };
   }
 
@@ -1647,6 +1839,10 @@ export class QueueDO extends DurableObject<Env> {
       endReason: row.end_reason,
       paid: row.payment_order_id !== null,
       rev: row.rev,
+      sessionId: row.session_id,
+      cls: row.cls,
+      expiresAt: row.expires_at,
+      carriedOver: row.carried === 1,
     };
   }
 
@@ -1668,6 +1864,7 @@ export class QueueDO extends DurableObject<Env> {
       waitLowMs,
       waitHighMs,
       updatedAt: now,
+      inService: s.countState("CALLED"),
     };
   }
 
@@ -1688,6 +1885,8 @@ export class QueueDO extends DurableObject<Env> {
       counter: t.counter,
       graceUntil: t.grace_until,
       paid: t.payment_order_id !== null,
+      carriedOver: t.carried === 1,
+      expiresAt: t.expires_at,
     });
     const waiting = s.waiting().map((t, i) => toConsole(t, i + 1));
     const serving = s.byState("CALLED").map((t) => toConsole(t, null));
@@ -1726,6 +1925,7 @@ export class QueueDO extends DurableObject<Env> {
           : null,
       triageLeftToday: Math.max(0, settings.triageDailyCap - usedToday),
       updatedAt: now,
+      autoCloseAt: this.autoCloseDeadline(),
     };
   }
 }

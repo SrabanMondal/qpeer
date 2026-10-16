@@ -24,7 +24,9 @@ export interface TokenOptions {
 }
 
 /** App wired to a local RS256 key and a controllable clock, plus request helpers. */
-export async function makeTestApi() {
+export async function makeTestApi(opts: { env?: Record<string, string> } = {}) {
+  // Extra bindings (e.g. a throwaway TICKET_SIGNING_KEY) on top of the test env.
+  const bindings = { ...env, ...opts.env };
   const { privateKey, publicKey } = await generateKeyPair("RS256");
   const jwk = await exportJWK(publicKey);
   Object.assign(jwk, { kid: "test-key-id", alg: "RS256", use: "sig" });
@@ -71,7 +73,7 @@ export async function makeTestApi() {
         headers,
         body: payload,
       }),
-      env,
+      bindings,
     );
   }
 

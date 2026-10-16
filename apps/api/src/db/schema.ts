@@ -134,8 +134,10 @@ export const queueSnapshots = sqliteTable(
     waiting: integer("waiting").notNull(),
     etaLowMs: integer("eta_low_ms"),
     etaHighMs: integer("eta_high_ms"),
-    /** Label of the token called last (`47`, `T2`), or null. */
+    /** Label of the token at the counter or served last (`47`, `T2`), or null. */
     nowServing: text("now_serving"),
+    /** Tokens at a counter (CALLED) at snapshot time (B19). */
+    inService: integer("in_service").notNull().default(0),
     updatedAt: ms("updated_at").notNull(),
   },
   (t) => [index("queue_snapshots_lat_lng_idx").on(t.lat, t.lng)],
@@ -177,10 +179,14 @@ export const tokens = sqliteTable(
     servedAt: ms("served_at"),
     endedAt: ms("ended_at"),
     endReason: text("end_reason", {
-      enum: ["served", "no_show", "left", "cancelled", "closed"],
+      enum: ["served", "no_show", "left", "cancelled", "closed", "validity"],
     }),
     paymentId: text("payment_id"),
     rev: integer("rev").notNull(),
+    /** C2: SHA-256 of ANDROID_ID + app salt (walk-ins); never the raw id. */
+    deviceHash: text("device_hash"),
+    /** C4: end of the ticket's validity; null = until the queue closes. */
+    expiresAt: ms("expires_at"),
     createdAt: ms("created_at").notNull(),
     updatedAt: ms("updated_at").notNull(),
   },
@@ -205,6 +211,8 @@ export const devices = sqliteTable(
     expoPushToken: text("expo_push_token").primaryKey(),
     userId: text("user_id").notNull(),
     platform: text("platform", { enum: ["android", "ios"] }).notNull(),
+    /** C2: device hash sent at registration (optional). */
+    deviceHash: text("device_hash"),
     lastSeenAt: ms("last_seen_at").notNull(),
     createdAt: ms("created_at").notNull(),
     updatedAt: ms("updated_at").notNull(),
@@ -239,10 +247,15 @@ export const freeLaneStrikes = sqliteTable(
     id: text("id").primaryKey(),
     userId: text("user_id").notNull(),
     tokenId: text("token_id").notNull(),
+    /** C2: the no-show's device hash; strikes also count per device. */
+    deviceHash: text("device_hash"),
     at: ms("at").notNull(),
     createdAt: ms("created_at").notNull(),
   },
-  (t) => [index("free_lane_strikes_user_id_at_idx").on(t.userId, t.at)],
+  (t) => [
+    index("free_lane_strikes_user_id_at_idx").on(t.userId, t.at),
+    index("free_lane_strikes_device_hash_at_idx").on(t.deviceHash, t.at),
+  ],
 );
 
 /** Hourly counters per queue (QUE-19), additive upserts from the QueueDO outbox. */

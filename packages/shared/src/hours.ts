@@ -119,6 +119,49 @@ export function isOpenAt(hours: WeeklyHours, t: number): boolean {
   return hours[day].some((r) => r.from <= time && time < r.to);
 }
 
+// ---------- auto-close (B20, INC-047) ----------
+
+/** A queue closes by itself this long after the day's last hours range. */
+export const AUTO_CLOSE_AFTER_HOURS_MS = 30 * 60_000;
+/** The console warns this long before the auto-close. */
+export const AUTO_CLOSE_WARNING_MS = 15 * 60_000;
+/** Each "Keep open" tap moves the auto-close this much later. */
+export const KEEP_OPEN_STEP_MS = 60 * 60_000;
+/** A session is never auto-closed sooner than this after it opened. */
+export const AUTO_CLOSE_MIN_SESSION_MS = 30 * 60_000;
+
+/** Epoch ms of IST midnight that starts the IST day containing `t`. */
+export function istDayStart(t: number): number {
+  return Math.floor((t + IST_OFFSET_MS) / DAY_MS) * DAY_MS - IST_OFFSET_MS;
+}
+
+function minutesOf(hhmm: string): number {
+  return Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));
+}
+
+/**
+ * When a session opened at `openedAt` closes by itself (before "Keep open"):
+ * - the opening IST day has a range that ends (+30 min) after `openedAt`:
+ *   30 min after the end of that day's **last** range;
+ * - otherwise (opened outside hours, or on a closed day): 23:59 IST of the
+ *   opening day — a business that opens off-hours keeps the whole evening
+ *   and uses "Keep open" past midnight;
+ * - never sooner than 30 min after opening.
+ */
+export function autoCloseAt(hours: WeeklyHours, openedAt: number): number {
+  const { day } = istLocalTime(openedAt);
+  const start = istDayStart(openedAt);
+  const ranges = hours[day];
+  const last = ranges[ranges.length - 1];
+  let at = start + DAY_MS - 60_000; // 23:59 IST
+  if (last) {
+    const afterLast =
+      start + minutesOf(last.to) * 60_000 + AUTO_CLOSE_AFTER_HOURS_MS;
+    if (afterLast > openedAt) at = afterLast;
+  }
+  return Math.max(at, openedAt + AUTO_CLOSE_MIN_SESSION_MS);
+}
+
 /** "17:30" → "5:30 PM". Bad input is returned as is. */
 export function formatTime12(hhmm: string): string {
   const m = /^(\d{2}):(\d{2})$/.exec(hhmm);

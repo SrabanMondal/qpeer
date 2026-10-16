@@ -1,7 +1,9 @@
+import type { Bindings } from "../env";
 import {
   checkPushReceipts,
   pushTransport,
 } from "../modules/notifications/expo-push";
+import { autoCloseQueues } from "../modules/queue/auto-close";
 
 /**
  * Scheduled jobs (architecture doc §14). Cron expressions must match
@@ -12,6 +14,7 @@ export const CRON_QUARTER_HOUR = "*/15 * * * *";
 
 interface JobEnv {
   DB: D1Database;
+  QUEUE: Bindings["QUEUE"];
   /** `loadtest` swaps in the recording push sender (expo-push.ts). */
   ENVIRONMENT?: string;
   EXPO_ACCESS_TOKEN?: string;
@@ -26,8 +29,12 @@ export const JOBS: Record<string, { name: string; run: Job }[]> = {
       run: (env, now) => checkPushReceipts(env.DB, pushTransport(env), now),
     },
   ],
-  // Step 4: expire unpaid orders. Later: auto-close queues past closing time.
-  [CRON_QUARTER_HOUR]: [],
+  // Step 4: expire unpaid orders.
+  [CRON_QUARTER_HOUR]: [
+    // B20: close queues 30 min after their last hours range (safety net for
+    // the DO's own alarm, see modules/queue/auto-close.ts).
+    { name: "auto_close", run: (env) => autoCloseQueues(env) },
+  ],
 };
 
 /** Runs every job for `cron`; one failing job doesn't stop the others. */

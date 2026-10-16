@@ -87,14 +87,18 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-037 | unknown | `expo install` failed with EALLOWSCRIPTS | S4 | tooling | fixed | none | [file](incidents/INC-037-npm-eallowscripts.md) |
 | INC-038 | unknown | Metro kept running after its task stopped | S4 | tooling | fixed | none | [file](incidents/INC-038-metro-kept-running.md) |
 | INC-039 | unknown | Chained adb taps nearly hit Deactivate | S4 | process | fixed | none | [file](incidents/INC-039-adb-tap-drift.md) |
-| INC-040 | 2026-10-16 | Offline experience was inconsistent and the map had no fallback | S2 | mobile | open | B13 | [file](incidents/INC-040-offline-experience-inconsistent.md) |
-| INC-041 | 2026-10-16 | The app did not handle a failed map load | S3 | mobile | open | B14 | [file](incidents/INC-041-raw-mapbox-error.md) |
-| INC-042 | 2026-10-16 | A reinstall can get a second free ticket in the same queue | S3 | api | open | B15 | [file](incidents/INC-042-reinstall-second-free-ticket.md) |
-| INC-043 | 2026-10-16 | Map card and business page disagreed on "open" | S2 | mobile, api | open | B16 | [file](incidents/INC-043-open-status-conflict.md) |
-| INC-044 | 2026-10-16 | The "Show public stats" switch was drawn squashed | S3 | mobile | open | B17 | [file](incidents/INC-044-public-stats-switch-squashed.md) |
-| INC-045 | 2026-10-16 | The map card stayed open after a filter hid its business | S3 | mobile | open | B18 | [file](incidents/INC-045-card-stays-after-filter.md) |
-| INC-046 | 2026-10-16 | "0 waiting" still showed a wait time | S3 | mobile, shared | open | B19 | [file](incidents/INC-046-zero-waiting-shows-wait.md) |
-| INC-047 | 2026-10-16 | A queue stayed open overnight with a called ticket | S2 | queue engine | open | B20 | [file](incidents/INC-047-queue-open-overnight.md) |
+| INC-040 | 2026-10-16 | Offline experience was inconsistent and the map had no fallback | S2 | mobile | fixed-unverified-on-device | B13 | [file](incidents/INC-040-offline-experience-inconsistent.md) |
+| INC-041 | 2026-10-16 | The app did not handle a failed map load | S3 | mobile | fixed-unverified-on-device | B14 | [file](incidents/INC-041-raw-mapbox-error.md) |
+| INC-042 | 2026-10-16 | A reinstall can get a second free ticket in the same queue | S3 | api | fixed-unverified-on-device | B15 | [file](incidents/INC-042-reinstall-second-free-ticket.md) |
+| INC-043 | 2026-10-16 | Map card and business page disagreed on "open" | S2 | mobile, api | fixed-unverified-on-device | B16 | [file](incidents/INC-043-open-status-conflict.md) |
+| INC-044 | 2026-10-16 | The "Show public stats" switch was drawn squashed | S3 | mobile | fixed-unverified-on-device | B17 | [file](incidents/INC-044-public-stats-switch-squashed.md) |
+| INC-045 | 2026-10-16 | The map card stayed open after a filter hid its business | S3 | mobile | fixed-unverified-on-device | B18 | [file](incidents/INC-045-card-stays-after-filter.md) |
+| INC-046 | 2026-10-16 | "0 waiting" still showed a wait time | S3 | mobile, shared | fixed-unverified-on-device | B19 | [file](incidents/INC-046-zero-waiting-shows-wait.md) |
+| INC-047 | 2026-10-16 | A queue stayed open overnight with a called ticket | S2 | queue engine | fixed-unverified-on-device | B20 | [file](incidents/INC-047-queue-open-overnight.md) |
+| INC-048 | 2026-10-16 | "Now serving" kept a ticket that left while called | S2 | queue engine | fixed-unverified-on-device | none | [file](incidents/INC-048-now-serving-after-leave.md) |
+| INC-049 | 2026-10-16 | One queue showed three different waits at the same moment | S2 | mobile, shared | fixed-unverified-on-device | none (with B19) | [file](incidents/INC-049-three-different-waits.md) |
+| INC-050 | 2026-10-16 | A new route failed the typecheck until `expo start` ran | S4 | tooling | fixed | none | [file](incidents/INC-050-stale-typed-routes.md) |
+| INC-051 | 2026-10-16 | `expo prebuild` rewrote the app's npm scripts | S4 | tooling | fixed | none | [file](incidents/INC-051-prebuild-rewrites-scripts.md) |
 
 ## Load-test runs
 

@@ -23,6 +23,10 @@ export interface DueTimes {
   headBackAlert: number | null;
   hourlyFlush: number | null;
   farFanout: number | null;
+  /** C4: next ticket validity end. */
+  validityExpiry: number | null;
+  /** B20: auto-close of the open session. */
+  autoClose: number | null;
 }
 
 /** Earliest of the due times, or null when nothing is pending. */

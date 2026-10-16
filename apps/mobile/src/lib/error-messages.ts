@@ -13,6 +13,8 @@ const API_MESSAGES: Record<ErrorCode, string> = {
   not_found: "We could not find that. It may have been removed.",
   conflict: "Something changed at the same time. Refresh and try again.",
   already_in_queue: "You are already in this queue.",
+  device_in_queue:
+    "This phone already has a ticket in this queue, from another account.",
   queue_closed: "This queue is closed right now.",
   queue_paused: "This queue is paused right now.",
   queue_full: "This queue is full.",

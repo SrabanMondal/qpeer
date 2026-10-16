@@ -38,6 +38,9 @@ import { Radius, Spacing } from "@/constants/theme";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
 import { isNetworkError, useMapBusinesses } from "@/lib/api";
 import { turnOnLocation } from "@/lib/join-location";
+import { onBackOnline, useOffline } from "@/lib/network";
+import { useNow } from "@/lib/queue-format";
+import { peekStored, useStored, writeStored } from "@/lib/storage";
 import { showToast } from "@/lib/toast";
 import {
   locateProblemText,
@@ -48,6 +51,7 @@ import { BusinessCard } from "@/screens/discover/business-card";
 import { BusinessList } from "@/screens/discover/business-list";
 import { QueueMap, type QueueMapHandle } from "@/screens/discover/queue-map";
 import { DiscoverTopBar, type DiscoverView } from "@/screens/discover/top-bar";
+import { OfflineTicketsCard } from "@/screens/offline-tickets-card";
 
 /** Jammu city centre (MAP-01 default). */
 const JAMMU: LatLng = { lat: 32.7266, lng: 74.857 };
@@ -81,12 +85,72 @@ export function DiscoverScreen() {
   const map = useRef<QueueMapHandle>(null);
   const hasToken = HAS_MAP_TOKEN;
 
-  const [view, setView] = useState<DiscoverView>(hasToken ? "map" : "list");
-  const [category, setCategory] = useState<BusinessCategory | null>(null);
-  const [openNow, setOpenNow] = useState(false);
-  const [sort, setSort] = useState<MapSort>("distance");
+  // C1: filters, sort, view and the last camera survive a restart.
+  const savedPrefs = peekStored("mapPrefs");
+  const savedCamera = useRef(peekStored("mapCamera")).current;
+  const [view, setView] = useState<DiscoverView>(
+    hasToken ? (savedPrefs?.view ?? "map") : "list",
+  );
+  const [category, setCategory] = useState<BusinessCategory | null>(
+    savedPrefs?.category ?? null,
+  );
+  const [openNow, setOpenNow] = useState(savedPrefs?.openNow ?? false);
+  const [sort, setSort] = useState<MapSort>(savedPrefs?.sort ?? "distance");
+  const start: LatLng = savedCamera
+    ? { lat: savedCamera.lat, lng: savedCamera.lng }
+    : JAMMU;
   const [box, setBox] = useState<MapBox>(
-    () => clampMapBox(boxAround(JAMMU)).box,
+    () => clampMapBox(boxAround(start)).box,
+  );
+  const offline = useOffline();
+  // B14: the map style failed to load; `mapKey` remounts the map to retry.
+  const [mapFailed, setMapFailed] = useState(false);
+  const [mapKey, setMapKey] = useState(0);
+  const now = useNow(focused, 30_000);
+
+  // Storage may load after the first render (cold start): apply what it
+  // holds once, and only then start saving changes.
+  const prefsStore = useStored("mapPrefs");
+  const cameraStore = useStored("mapCamera");
+  const [prefsApplied, setPrefsApplied] = useState(savedPrefs !== undefined);
+  useEffect(() => {
+    if (prefsApplied || !prefsStore.ready || !cameraStore.ready) return;
+    const p = prefsStore.value;
+    if (p) {
+      setCategory(p.category);
+      setOpenNow(p.openNow);
+      setSort(p.sort);
+      if (hasToken) setView(p.view);
+    }
+    const cam = cameraStore.value;
+    if (cam && !savedCamera) {
+      map.current?.flyTo({ lat: cam.lat, lng: cam.lng }, cam.zoom);
+    }
+    setPrefsApplied(true);
+  }, [
+    prefsApplied,
+    prefsStore.ready,
+    prefsStore.value,
+    cameraStore.ready,
+    cameraStore.value,
+    savedCamera,
+  ]);
+  useEffect(() => {
+    if (prefsApplied) {
+      void writeStored("mapPrefs", { category, openNow, sort, view });
+    }
+  }, [prefsApplied, category, openNow, sort, view]);
+
+  // Back online after a failed map load: try the style again.
+  useEffect(
+    () =>
+      onBackOnline(() => {
+        setMapFailed((failed) => {
+          if (failed) setMapKey((k) => k + 1);
+          return false;
+        });
+      }),
+    [],
   );
   const [clamped, setClamped] = useState(false);
   const [userLoc, setUserLoc] = useState<LatLng | null>(null);
@@ -121,6 +185,8 @@ export function DiscoverScreen() {
     if (idleTimer.current) clearTimeout(idleTimer.current);
     idleTimer.current = setTimeout(() => {
       const { ne, sw } = state.properties.bounds;
+      const [lng, lat] = state.properties.center;
+      void writeStored("mapCamera", { lat, lng, zoom: state.properties.zoom });
       const next = clampMapBox(boxFromCorners(ne, sw));
       setClamped(next.clamped);
       setBox((old) =>
@@ -140,14 +206,18 @@ export function DiscoverScreen() {
     [],
   );
 
-  // Keep the open card in step with fresh data (live counts).
+  // Keep the open card in step with fresh data (live counts). B18
+  // (INC-045): once the current results no longer hold the business (a
+  // filter hid it, or the map moved away), close the card.
+  const settled = data.data !== undefined && !data.isPlaceholderData;
   useEffect(() => {
     if (!selected) return;
     const fresh = items.find((b) => b.id === selected.id);
     if (fresh && fresh !== selected) setSelected(fresh);
-  }, [items, selected]);
+    else if (!fresh && settled) setSelected(null);
+  }, [items, selected, settled]);
 
-  const features = useMemo(() => markerFeatures(items), [items]);
+  const features = useMemo(() => markerFeatures(items, now), [items, now]);
   const effectiveSort: MapSort =
     sort === "distance" && !userLoc ? "wait" : sort;
   const rows = useMemo(
@@ -199,6 +269,7 @@ export function DiscoverScreen() {
     }
   };
 
+  const listMode = view === "list" || !hasToken;
   const filtersOn = category !== null || openNow;
   const firstLoad = data.isPending && data.fetchStatus === "fetching";
   const failedWithoutData = data.isError && !data.data;
@@ -238,7 +309,27 @@ export function DiscoverScreen() {
     </>
   );
 
-  const stateCard = firstLoad ? (
+  // B13/B14: offline with nothing to show, or the map style failed: a calm
+  // card with the saved tickets, never a spinner or a black map.
+  const offlineCard =
+    (offline && !data.data) || (mapFailed && !listMode) ? (
+      <OfflineTicketsCard
+        title={
+          mapFailed && !offline
+            ? "The map can't load"
+            : "The map needs internet"
+        }
+        onRetry={() => {
+          setMapFailed(false);
+          setMapKey((k) => k + 1);
+          void data.refetch();
+        }}
+      />
+    ) : null;
+
+  const stateCard = offlineCard ? (
+    offlineCard
+  ) : firstLoad ? (
     <LoadingState label="Loading queues…" />
   ) : failedWithoutData ? (
     <ErrorState
@@ -271,21 +362,22 @@ export function DiscoverScreen() {
     />
   ) : null;
 
-  const listMode = view === "list" || !hasToken;
-
   return (
     <View style={[styles.fill, { backgroundColor: theme.bg }]}>
       {hasToken ? (
         <QueueMap
+          key={mapKey}
           ref={map}
-          initialCenter={JAMMU}
-          initialZoom={START_ZOOM}
+          initialCenter={start}
+          initialZoom={savedCamera?.zoom ?? START_ZOOM}
           features={features}
           selectedId={selected?.id ?? null}
           onSelect={(id) => setSelected(items.find((b) => b.id === id) ?? null)}
           onMapPress={() => setSelected(null)}
           onIdle={onIdle}
           showUser={userLoc !== null}
+          onLoadError={() => setMapFailed(true)}
+          onLoaded={() => setMapFailed(false)}
         />
       ) : null}
 

@@ -2,12 +2,12 @@
 
 ## Status
 <!-- updated 2026-10-16 -->
-Current task: Step 3 device check done; fix batch for B13–B20 proposed, waiting on the owner's answer to two rules (below). State: between steps.
-Next step: when the owner confirms the B16/B20 rules, write `.orch/briefs/fix-b13-b20.md` and run one Opus subagent; in parallel the owner creates the Razorpay test account for Step 4.
+Current task: fix batch + native rebuild on branch `feat/fix-batch-rebuild` (B13–B20 = INC-040…047, INC-048/049 from the phone, C1 storage, C2 device hash, C3 signed ticket, C4 ticket validity + carry-over). Code done, `npm run check` green; not merged, not deployed, not on a phone.
+Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), `TICKET_SIGNING_KEY` secret, deploy `dev`, `--app` public key commit, one `eas build --profile development`, then the device checklist in the branch report. Then Step 4 (owner creates the Razorpay test account).
 
 **Done and merged on `main`:** Step 0 foundations · Step 1 business (profile, pin, hours, queues, QR) · Step 2 live queue (QueueDO engine, walk-in GPS join, console, ticket, live WebSocket, push alerts) · Step 1/2 fix passes · Step 3 map (`/v1/map`, public stats, list view, public business page, dev seed) · Step 3.5 load test (3 fix rounds, final runs green) · runbook incident log.
 - Per-step build detail lives in git history and `docs/QPeer_v1_Backend_Architecture.md` (§23 holds the decisions per step). Every bug and its fix lives in `docs/runbook/` (INC-001 to INC-047; standing rules in `docs/runbook/lessons.md`). Record new incidents there, not here.
-- Tests: API 154, shared 104 (`npm run check`).
+- Tests: API 154, shared 104 (`npm run check`) on `main`; the fix-batch branch has API 178, shared 135.
 
 **Device-verified on the Samsung A9 (Android 10):** Steps 0–2 (QR join, alerts background + cold start, leave, offline/reconnect), B9 clock popup and B10 console layout (2026-10-16), Step 3 map script steps 1, 3 (partial), 5–9, 13, 14 (2026-10-16).
 **Not yet verified on a phone:** Step 3 script steps 2, 4, 10, 12, 15 (denied-permission path, zoom-out hint, offline, light theme, large font: these need phone setting changes, ask the owner first); B1 offline cold start; Google link name fill; H1 app-side `rev` merge; B5 "turn on location" path.
@@ -19,18 +19,16 @@ Next step: when the owner confirms the B16/B20 rules, write `.orch/briefs/fix-b1
 - EAS project `e7efb464-…` (account `sraban`); dev build installed on the phone. JS-only changes need only a Metro reload.
 
 ## Plan
-1. **Fix batch B13–B20** (runbook INC-040 to INC-047) + remove the `"lint": "expo lint"` script in `apps/mobile/package.json` and the `npx expo lint` line in `apps/mobile/AGENTS.md` (INC-019 trap). Optional in the same batch: B15 device hash (INC-042).
-2. **Step 4 payments** (Razorpay test mode). Owner must first create a Razorpay test account (key id, key secret, webhook secret; no KYC). Reservations, Priority Pass setting, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is in the dev build (check whether it needs a config plugin → possible rebuild). Design the business-set reservation validity (owner's idea, 2026-10-16) here.
+1. **Fix batch + rebuild** (`feat/fix-batch-rebuild`): merge, migrate, secret, deploy, rebuild, device check (see Status). Design in architecture doc §9.1, §23 "Decided in the fix batch".
+2. **Step 4 payments** (Razorpay test mode). Also: refunds for paid tokens ended by auto-close (TODO in `queue-do.ts`). Owner must first create a Razorpay test account (key id, key secret, webhook secret; no KYC). Reservations, Priority Pass setting, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is in the dev build (check whether it needs a config plugin → possible rebuild). Design the business-set reservation validity (owner's idea, 2026-10-16) here.
 3. **Step 5 insights + demo data:** analytics + earnings screens, Jammu seed with 4–8 weeks of history, live demo simulator, deploy the `demo` Worker, reset command.
 4. **Step 6 extras** (if time): Add person + claim code, Priority Pass on console, verified reviews.
-5. **Finish:** one native rebuild batching QR-as-image share/save (view-shot + sharing/media-library), a storage module (persist last ticket view for offline cold start, battery-tip dismissal, console queue choice, map filters), and the server-signed offline ticket (INC-042 follow-up); NFR-11 rate limits; leave-home-by; full demo rehearsal on `demo` with the phone.
+5. **Finish:** NFR-11 rate limits; leave-home-by; full demo rehearsal on `demo` with the phone. (QR image, storage and signed ticket moved into the fix batch.)
 - Later latency win: fold `checkJoin` into `allocate` (one less Worker↔DO round trip per join).
 
 ## Decisions
-- Offline: degrade, do not block. One slim offline banner, ticket keeps last view with "Last updated", map shows a calm card, server actions disabled with a reason, console greyed "Offline — actions paused". (Claude proposed 2026-10-16; owner had asked "overlay or degrade?" and has not objected.) [owner confirmation pending]
-- Walk-in tickets stay tied to the day's queue session; business-set validity (hours to days) applies to Step 4 reservations. (Claude proposed 2026-10-16) [owner confirmation pending]
-- Anti-abuse for anonymous users: hash of `ANDROID_ID` per walk-in ticket + strikes per device hash (INC-042). (Claude proposed 2026-10-16) [owner confirmation pending]
-- Proposed, asked the owner 2026-10-16, no answer yet: **B20** auto-close each queue 30 min after its last hours range, with a console warning so late staff can keep it open; **B16** queue state decides if a customer can join, hours are information, "Open (after usual hours)" label, `openNow` filter uses the same rule.
+- Owner agreed 2026-10-16: offline degrades, never blocks (B13); queue state decides "open", hours inform (B16); auto-close 30 min after the last hours range with a Keep open warning (B20); device hash per walk-in (C2); signed offline ticket (C3); ticket validity set per queue, still-valid tickets carry over to the front of the next session (C4, owner's request). Details: architecture doc §23 "Decided in the fix batch".
+- Decided in the batch (owner may revisit): opened outside hours → auto-close at 23:59 IST; carried tickets keep their number and session (no reissue); "Now serving" = last called still at a counter, else last served.
 
 ## Open questions
 - Priority Pass rules ("VIP pay to skip" vs capped): owner + professor.

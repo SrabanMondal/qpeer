@@ -24,7 +24,9 @@ export type QueueAction =
   | "pause"
   | "resume"
   | "next"
-  | "undo-next";
+  | "undo-next"
+  /** B20: push the auto-close 1 h later. */
+  | "keep-open";
 
 /** Token-level console actions (QUE-06, QUE-08). */
 export type TokenAction = "skip" | "no-show" | "admit" | "served";

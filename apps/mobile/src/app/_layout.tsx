@@ -17,10 +17,15 @@ import { useIsDark, useTheme } from "@/hooks/use-theme";
 import { AuthProvider } from "@/lib/auth";
 import { createQueryClient, useAppFocusRefetch } from "@/lib/network";
 import { usePushSetup } from "@/lib/push";
+import { preloadStorage } from "@/lib/storage";
 
 if (config.mapboxToken) {
   Mapbox.setAccessToken(config.mapboxToken);
 }
+
+// C1: saved tickets, map choices and keys are read before the first screens
+// need them (each read is also safe on its own).
+void preloadStorage();
 
 /**
  * A deep link (`qpeer://q/<id>`) or an alert tap on a cold start opens its
@@ -110,6 +115,10 @@ export default function RootLayout() {
               <Stack.Screen
                 name="queue/[id]/qr"
                 options={{ title: "QR code" }}
+              />
+              <Stack.Screen
+                name="queue/[id]/verify"
+                options={{ title: "Verify ticket" }}
               />
               <Stack.Screen name="scan" options={{ title: "Scan queue QR" }} />
               <Stack.Screen name="q/[id]" options={{ title: "Join queue" }} />

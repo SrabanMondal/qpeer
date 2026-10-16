@@ -7,6 +7,7 @@ import type {
   TokenClass,
   TokenSeries,
   TokenState,
+  WeeklyHours,
 } from "@qpeer/shared";
 import { defaultQueueSettings, EMPTY_EWMA } from "@qpeer/shared";
 
@@ -15,7 +16,7 @@ import { defaultQueueSettings, EMPTY_EWMA } from "@qpeer/shared";
  * Schema changes are applied lazily in `migrate()`, keyed by `schema_version`
  * in `meta`. Every value in `meta` is JSON text.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 export type TokenRow = {
   id: string;
@@ -44,6 +45,12 @@ export type TokenRow = {
   cancel_window_ms: number;
   eta_low_at_join: number | null;
   eta_high_at_join: number | null;
+  /** C2: device hash sent with a walk-in join (schema v2). */
+  device_hash: string | null;
+  /** C4: end of validity; null = until the queue closes (schema v2). */
+  expires_at: number | null;
+  /** C4: 1 = still valid when its session closed; kept for the next one. */
+  carried: number;
 };
 
 export type OutboxKind =
@@ -91,6 +98,8 @@ export interface UndoRecord {
     lastCallAt: number | null;
     pausedAtLastCall: number;
     nowServing: string | null;
+    /** Absent in undo records written before schema v2. */
+    lastServed?: string | null;
   };
   intervalId: number | null;
   hourStart: number;
@@ -121,6 +130,12 @@ export interface Meta {
   far: { dirty: boolean; lastAt: number | null };
   triage: { day: number; count: number };
   pings: number;
+  /** Label of the last token SERVED this session ("Now serving" fallback). */
+  last_served: string | null;
+  /** B20: business hours, sent by the Worker (open, hours edit, cron). */
+  hours: WeeklyHours | null;
+  /** B20: "Keep open" moved the auto-close to this time (this session). */
+  keep_open_until: number | null;
 }
 
 const META_DEFAULTS: Meta = {
@@ -147,6 +162,9 @@ const META_DEFAULTS: Meta = {
   far: { dirty: false, lastAt: null },
   triage: { day: 0, count: 0 },
   pings: 0,
+  last_served: null,
+  hours: null,
+  keep_open_until: null,
 };
 
 /** Class rank in the sort key: triage first, then priority, then regular. */
@@ -239,6 +257,16 @@ export class QueueStore {
         );
       `);
     }
+    if (version < 2) {
+      // Fix batch: device hash (C2), validity + carry-over (C4).
+      this.sql.exec(`
+        ALTER TABLE tokens ADD COLUMN device_hash TEXT;
+        ALTER TABLE tokens ADD COLUMN expires_at INTEGER;
+        ALTER TABLE tokens ADD COLUMN carried INTEGER NOT NULL DEFAULT 0;
+        CREATE INDEX IF NOT EXISTS tokens_device_state_idx ON tokens (device_hash, state);
+        CREATE INDEX IF NOT EXISTS tokens_expiry_idx ON tokens (state, expires_at);
+      `);
+    }
     this.cache.clear();
     this.set("schema_version", SCHEMA_VERSION);
   }
@@ -296,8 +324,9 @@ export class QueueStore {
     this.sql.exec(
       `INSERT INTO tokens (id, session_id, number, series, cls, method, user_id, state, sort_key,
         joined_at, called_at, counter, grace_until, served_at, ended_at, end_reason,
-        payment_order_id, alert_flags, rev, grace_ms, cancel_window_ms, eta_low_at_join, eta_high_at_join)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        payment_order_id, alert_flags, rev, grace_ms, cancel_window_ms, eta_low_at_join, eta_high_at_join,
+        device_hash, expires_at, carried)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       t.id,
       t.session_id,
       t.number,
@@ -321,6 +350,9 @@ export class QueueStore {
       t.cancel_window_ms,
       t.eta_low_at_join,
       t.eta_high_at_join,
+      t.device_hash,
+      t.expires_at,
+      t.carried,
     );
   }
 
@@ -352,6 +384,47 @@ export class QueueStore {
       .exec<TokenRow>(
         "SELECT * FROM tokens WHERE user_id = ? AND state IN ('WAITING','CALLED','GRACE')",
         userId,
+      )
+      .toArray();
+  }
+
+  /** C2: active free walk-in tokens joined from this device (any account). */
+  activeFreeWalkinsForDevice(deviceHash: string): TokenRow[] {
+    return this.sql
+      .exec<TokenRow>(
+        "SELECT * FROM tokens WHERE device_hash = ? AND state IN ('WAITING','CALLED','GRACE') AND method = 'walkin' AND payment_order_id IS NULL",
+        deviceHash,
+      )
+      .toArray();
+  }
+
+  /** Label of the CALLED token called most recently, or null. */
+  latestCalled(): TokenRow | null {
+    return (
+      this.sql
+        .exec<TokenRow>(
+          "SELECT * FROM tokens WHERE state = 'CALLED' ORDER BY called_at DESC, sort_key DESC LIMIT 1",
+        )
+        .toArray()[0] ?? null
+    );
+  }
+
+  /** C4: earliest validity end among WAITING tokens. */
+  nextValidityExpiry(): number | null {
+    const row = this.sql
+      .exec<{ t: number | null }>(
+        "SELECT MIN(expires_at) AS t FROM tokens WHERE state = 'WAITING' AND expires_at IS NOT NULL",
+      )
+      .one();
+    return row.t ?? null;
+  }
+
+  /** C4: WAITING tokens whose validity ran out. */
+  validityDue(now: number): TokenRow[] {
+    return this.sql
+      .exec<TokenRow>(
+        "SELECT * FROM tokens WHERE state = 'WAITING' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at",
+        now,
       )
       .toArray();
   }

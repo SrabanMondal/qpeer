@@ -43,6 +43,8 @@ export const ErrorCode = z.enum([
   "not_found",
   "conflict",
   "already_in_queue",
+  /** C2: another account on this phone already holds a walk-in ticket here. */
+  "device_in_queue",
   "queue_closed",
   "queue_paused",
   "queue_full",

@@ -470,6 +470,8 @@ describe("QueueDO timers, outbox and persistence", () => {
         headBackAlert: 900,
         hourlyFlush: 400,
         farFanout: null,
+        validityExpiry: 350,
+        autoClose: 320,
       }),
     ).toBe(300);
     expect(
@@ -480,6 +482,8 @@ describe("QueueDO timers, outbox and persistence", () => {
         headBackAlert: null,
         hourlyFlush: null,
         farFanout: null,
+        validityExpiry: null,
+        autoClose: null,
       }),
     ).toBeNull();
   });

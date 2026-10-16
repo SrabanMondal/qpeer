@@ -15,6 +15,7 @@ const STATUS: Record<DoErrorCode, ContentfulStatusCode> = {
   queue_paused: 409,
   queue_full: 409,
   already_in_queue: 409,
+  device_in_queue: 409,
   quota_full: 409,
   conflict: 409,
 };

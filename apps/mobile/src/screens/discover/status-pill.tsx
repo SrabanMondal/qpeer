@@ -1,17 +1,19 @@
-import type { MarkerStatus } from "@qpeer/shared";
+import { type MarkerStatus, openLook } from "@qpeer/shared";
 
 import { Badge, type BadgeTone } from "@/components/ui";
 
-/** Badge text for a business on the map/list: its queues first, then its hours. */
+/**
+ * Badge text for a business or queue (B16, INC-043): the queue state decides
+ * (open / paused / closed); the hours only add "(after usual hours)" or tell
+ * "Queue not open" from "Closed now". Same words on the map card, list row,
+ * business page and join screen (`openLook` in shared).
+ */
 export function statusLook(
   status: MarkerStatus,
-  isOpenNow: boolean,
+  withinHours: boolean | undefined,
 ): { label: string; tone: BadgeTone } {
-  if (status === "open") return { label: "Open now", tone: "success" };
-  if (status === "paused") return { label: "Paused", tone: "warning" };
-  return isOpenNow
-    ? { label: "Queue not open", tone: "neutral" }
-    : { label: "Closed now", tone: "neutral" };
+  const look = openLook(status, withinHours);
+  return { label: look.label, tone: look.tone };
 }
 
 export function StatusPill({
@@ -19,7 +21,8 @@ export function StatusPill({
   isOpenNow,
 }: {
   status: MarkerStatus;
-  isOpenNow: boolean;
+  /** Inside today's hours (IST); undefined when not known. */
+  isOpenNow: boolean | undefined;
 }) {
   const look = statusLook(status, isOpenNow);
   return <Badge label={look.label} tone={look.tone} />;

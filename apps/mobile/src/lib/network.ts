@@ -62,6 +62,18 @@ export function useOffline(): boolean {
   );
 }
 
+/** B13: short reason shown next to a server action disabled while offline. */
+export const OFFLINE_ACTION_TEXT = "You're offline. This needs internet.";
+
+/** Calls `fn` each time the app goes from offline back to online. */
+export function onBackOnline(fn: () => void): () => void {
+  let was = offline;
+  return subscribe(() => {
+    if (was && !offline) fn();
+    was = offline;
+  });
+}
+
 // --- Query client ------------------------------------------------------------
 
 export function createQueryClient(): QueryClient {

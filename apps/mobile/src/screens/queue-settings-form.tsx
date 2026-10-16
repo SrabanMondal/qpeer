@@ -2,17 +2,26 @@ import {
   QUEUE_SETTINGS_DEFAULTS,
   type QueueSettings,
   QueueSettingsPatch,
+  TICKET_VALIDITY_PRESETS_MIN,
+  ticketValidityLabel,
 } from "@qpeer/shared";
 import { useEffect, useState } from "react";
 import { Alert, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Button, Card, SectionHeader, TextField } from "@/components/ui";
+import {
+  Button,
+  Card,
+  ChoiceChips,
+  SectionHeader,
+  TextField,
+} from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { ApiError } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
 import { apiFieldErrors, type FieldErrors, useFieldErrors } from "@/lib/form";
 import { formatRupees, paiseToRupeesText } from "@/lib/format";
+import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 
 type SettingKey = keyof QueueSettings;
 
@@ -186,22 +195,34 @@ export function QueueSettingsForm({
   onDirtyChange?: (dirty: boolean) => void;
 }) {
   const [text, setText] = useState<Texts>(() => textsOf(settings));
+  // C4: ticket validity is a choice of presets, not a typed number.
+  const savedValidity = settings.ticketValidityMin ?? 0;
+  const [validity, setValidity] = useState<number>(savedValidity);
   const form = useFieldErrors((t: Texts) => readTexts(t).errors);
   const { errors } = form;
   const [saving, setSaving] = useState(false);
+  const offline = useOffline();
+  const validityOptions = [
+    ...new Set<number>([...TICKET_VALIDITY_PRESETS_MIN, savedValidity]),
+  ]
+    .sort((a, b) => a - b)
+    .map((m) => ({ value: String(m), label: ticketValidityLabel(m) }));
 
   // Compared by value with the saved settings ("20" = "20.00"), so after a
   // successful save the form is clean again.
-  const dirty = FIELDS.some(
-    (f) => fromText(f, text[f.key] ?? "") !== settings[f.key],
-  );
+  const dirty =
+    validity !== savedValidity ||
+    FIELDS.some((f) => fromText(f, text[f.key] ?? "") !== settings[f.key]);
   useEffect(() => {
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
 
   const save = async () => {
     if (!form.validateAll(text)) return;
-    const parsed = QueueSettingsPatch.safeParse(readTexts(text).patch);
+    const parsed = QueueSettingsPatch.safeParse({
+      ...readTexts(text).patch,
+      ticketValidityMin: validity,
+    });
     if (!parsed.success) return;
     setSaving(true);
     try {
@@ -259,12 +280,32 @@ export function QueueSettingsForm({
           </Card>
         </View>
       ))}
+      <SectionHeader title="Ticket validity" />
+      <Card>
+        <ChoiceChips
+          label="A ticket stays valid"
+          options={validityOptions}
+          value={String(validity)}
+          onChange={(v) => setValidity(Number(v))}
+          disabled={disabled}
+        />
+        <ThemedText type="small" themeColor="inkMuted">
+          {validity === 0
+            ? "Tickets end when you close the queue (the default)."
+            : `Tickets end ${ticketValidityLabel(validity)} after joining. If the queue closes earlier, waiting tickets that are still valid are kept and served first, with their number, when you open again.`}
+        </ThemedText>
+      </Card>
       <Button
         title="Save settings"
         onPress={save}
         loading={saving}
-        disabled={disabled}
+        disabled={disabled || offline}
       />
+      {offline ? (
+        <ThemedText type="small" themeColor="inkMuted">
+          {OFFLINE_ACTION_TEXT}
+        </ThemedText>
+      ) : null}
     </>
   );
 }

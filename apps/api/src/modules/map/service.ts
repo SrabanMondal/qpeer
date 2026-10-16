@@ -1,6 +1,5 @@
 import {
   isOpenAt,
-  istLocalTime,
   type MapBusiness,
   type MapQuery,
   type MapQueue,
@@ -25,6 +24,7 @@ interface MapRow {
   eta_low_ms: number | null;
   eta_high_ms: number | null;
   updated_at: number | null;
+  in_service: number | null;
 }
 
 /**
@@ -34,8 +34,9 @@ interface MapRow {
  * of them so we can tell when the result is truncated. The outer select joins
  * their active queues and the queues' snapshots.
  *
- * `openNow` is evaluated in SQL with the same rule as `isOpenAt` (IST weekday,
- * `from <= now < to`), so the limit applies after the filter.
+ * `openNow` is evaluated in SQL with the same rule as the badge
+ * (`markerStatus` = "open": a queue open and not paused; B16), so the limit
+ * applies after the filter.
  */
 export async function mapQuery(
   d1: D1Database,
@@ -64,6 +65,7 @@ export async function mapQuery(
       waitLowMs: r.eta_low_ms,
       waitHighMs: r.eta_high_ms,
       updatedAt: r.updated_at,
+      inService: r.in_service ?? 0,
     });
   }
 
@@ -78,7 +80,9 @@ export async function mapQuery(
 /** The single map statement and its parameters (exported for the query-plan test). */
 export function mapSql(
   q: MapQuery,
-  now: number,
+  // Unused since B16 (openNow no longer reads the hours); kept so callers
+  // don't change if a time-based filter comes back.
+  _now: number,
 ): { sql: string; params: unknown[] } {
   const cLat = (q.minLat + q.maxLat) / 2;
   const cLng = (q.minLng + q.maxLng) / 2;
@@ -103,12 +107,13 @@ export function mapSql(
     params.push(q.category);
   }
   if (q.openNow) {
-    const { day, time } = istLocalTime(now);
+    // B16 (INC-043): the same rule as the badge (`markerStatus` = "open"):
+    // some active queue is open and not paused. Hours don't matter.
     filters.push(`AND EXISTS (
-        SELECT 1 FROM json_each(biz.hours_json, ?) r
-        WHERE json_extract(r.value, '$.from') <= ? AND ? < json_extract(r.value, '$.to')
+        SELECT 1 FROM queues oq JOIN queue_snapshots os ON os.queue_id = oq.id
+        WHERE oq.business_id = biz.id AND oq.status = 'active'
+          AND os.is_open = 1 AND os.is_paused = 0
       )`);
-    params.push(`$.${day}`, time, time);
   }
   params.push(q.limit + 1);
 
@@ -127,7 +132,7 @@ export function mapSql(
     )
     SELECT l.id, l.name, l.category, l.address, l.lat, l.lng, l.hours_json,
            q.id AS queue_id, q.name AS queue_name,
-           s.is_open, s.is_paused, s.waiting, s.eta_low_ms, s.eta_high_ms, s.updated_at
+           s.is_open, s.is_paused, s.waiting, s.eta_low_ms, s.eta_high_ms, s.updated_at, s.in_service
     FROM listed l
     JOIN queues q ON q.business_id = l.id AND q.status = 'active'
     LEFT JOIN queue_snapshots s ON s.queue_id = q.id
@@ -160,6 +165,9 @@ function mapBusiness(
       waitLowMs: best?.waitLowMs ?? null,
       waitHighMs: best?.waitHighMs ?? null,
       anyOpen: queues.some((q) => q.isOpen),
+      // B19: "No wait" vs "Next in ~N min" for the queue whose wait is shown.
+      inService: best?.inService ?? 0,
+      updatedAt: best?.updatedAt ?? null,
     },
   };
 }
