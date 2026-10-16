@@ -10,7 +10,14 @@ export interface Bindings {
   ENVIRONMENT: string;
   /** Optional secret, only if Expo push security is enabled (§17). */
   EXPO_ACCESS_TOKEN?: string;
+  /**
+   * Public JWK set of the load-test signing key (secret, `loadtest` env only).
+   * Ignored unless `ENVIRONMENT` is exactly `loadtest` (see middleware/auth.ts).
+   */
+  LOADTEST_JWKS?: string;
 }
+
+export type AuthSource = "firebase" | "loadtest";
 
 /** Set by `requireBusinessRole` once the caller's membership is confirmed. */
 export interface Membership {
@@ -25,6 +32,8 @@ export interface AppEnv {
     clock: Clock;
     userId?: string;
     user?: User;
+    /** Which verifier accepted the caller's token. */
+    authSource?: AuthSource;
     membership?: Membership;
     errorCode?: ErrorCode;
   };

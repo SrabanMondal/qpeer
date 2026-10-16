@@ -12,6 +12,8 @@ export const CRON_QUARTER_HOUR = "*/15 * * * *";
 
 interface JobEnv {
   DB: D1Database;
+  /** `loadtest` swaps in the recording push sender (expo-push.ts). */
+  ENVIRONMENT?: string;
   EXPO_ACCESS_TOKEN?: string;
 }
 
