@@ -1,0 +1,297 @@
+{
+  "runId": "1016073253",
+  "startedAt": "2026-10-16T07:32:48.423Z",
+  "finishedAt": "2026-10-16T07:40:22.282Z",
+  "target": "https://qpeer-api-loadtest.qpeer-api.workers.dev",
+  "preset": "full",
+  "config": {
+    "businesses": 5,
+    "queuesPerBusiness": 2,
+    "customers": 300,
+    "durationS": 300,
+    "budget": 15000,
+    "wsShare": 0.4,
+    "mapClients": 5,
+    "seed": 135955877
+  },
+  "stoppedBy": "duration",
+  "requestsUsed": 1485,
+  "clientConnectRetries": 0,
+  "clientNetworkRetries": 1,
+  "counts": {
+    "tokens": 282,
+    "joinsOk": 274,
+    "triageOk": 8,
+    "probes": 32,
+    "pausedRejections": 4,
+    "fullRejections": 0,
+    "mapPolls": 50,
+    "consoleResponses": 131,
+    "joinRetriesRecovered": 0,
+    "joinRetriesAlreadyInQueue": 0
+  },
+  "endpoints": [
+    {
+      "endpoint": "GET /health",
+      "count": 1,
+      "p50": 807,
+      "p95": 807,
+      "p99": 807,
+      "max": 807,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "GET /loadtest/queues/:id/audit",
+      "count": 31,
+      "p50": 634,
+      "p95": 1752,
+      "p99": 1866,
+      "max": 1866,
+      "statuses": {
+        "200": 10,
+        "404": 21
+      }
+    },
+    {
+      "endpoint": "GET /loadtest/stats",
+      "count": 2,
+      "p50": 1294,
+      "p95": 3309,
+      "p99": 3309,
+      "max": 3309,
+      "statuses": {
+        "200": 2
+      }
+    },
+    {
+      "endpoint": "GET /map",
+      "count": 51,
+      "p50": 425,
+      "p95": 1507,
+      "p99": 1951,
+      "max": 1951,
+      "statuses": {
+        "200": 51
+      }
+    },
+    {
+      "endpoint": "GET /tokens/:id",
+      "count": 556,
+      "p50": 582,
+      "p95": 1505,
+      "p99": 2292,
+      "max": 5166,
+      "statuses": {
+        "200": 508,
+        "404": 48
+      }
+    },
+    {
+      "endpoint": "POST /businesses",
+      "count": 5,
+      "p50": 302,
+      "p95": 341,
+      "p99": 341,
+      "max": 341,
+      "statuses": {
+        "201": 5
+      }
+    },
+    {
+      "endpoint": "POST /businesses/:id/queues",
+      "count": 10,
+      "p50": 1139,
+      "p95": 1949,
+      "p99": 1949,
+      "max": 1949,
+      "statuses": {
+        "201": 10
+      }
+    },
+    {
+      "endpoint": "POST /loadtest/reset",
+      "count": 1,
+      "p50": 1584,
+      "p95": 1584,
+      "p99": 1584,
+      "max": 1584,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "POST /me/devices",
+      "count": 215,
+      "p50": 556,
+      "p95": 1616,
+      "p99": 2740,
+      "max": 4325,
+      "statuses": {
+        "200": 215
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/close",
+      "count": 10,
+      "p50": 669,
+      "p95": 1057,
+      "p99": 1057,
+      "max": 1057,
+      "statuses": {
+        "404": 10
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/join",
+      "count": 310,
+      "p50": 966,
+      "p95": 2177,
+      "p99": 2917,
+      "max": 4825,
+      "statuses": {
+        "201": 274,
+        "409": 11,
+        "422": 25
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/next",
+      "count": 95,
+      "p50": 727,
+      "p95": 1973,
+      "p99": 2748,
+      "max": 2748,
+      "statuses": {
+        "200": 94,
+        "409": 1
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/open",
+      "count": 10,
+      "p50": 1126,
+      "p95": 1499,
+      "p99": 1499,
+      "max": 1499,
+      "statuses": {
+        "200": 10
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/pause",
+      "count": 4,
+      "p50": 971,
+      "p95": 2158,
+      "p99": 2158,
+      "max": 2158,
+      "statuses": {
+        "200": 4
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/resume",
+      "count": 4,
+      "p50": 411,
+      "p95": 1163,
+      "p99": 1163,
+      "max": 1163,
+      "statuses": {
+        "200": 4
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/admit",
+      "count": 4,
+      "p50": 882,
+      "p95": 1174,
+      "p99": 1174,
+      "max": 1174,
+      "statuses": {
+        "200": 4
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/no-show",
+      "count": 10,
+      "p50": 852,
+      "p95": 2785,
+      "p99": 2785,
+      "max": 2785,
+      "statuses": {
+        "200": 9,
+        "409": 1
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/served",
+      "count": 3,
+      "p50": 210,
+      "p95": 1413,
+      "p99": 1413,
+      "max": 1413,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/skip",
+      "count": 3,
+      "p50": 1529,
+      "p95": 4102,
+      "p99": 4102,
+      "max": 4102,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/triage",
+      "count": 8,
+      "p50": 785,
+      "p95": 1476,
+      "p99": 1476,
+      "max": 1476,
+      "statuses": {
+        "201": 8
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/undo-next",
+      "count": 2,
+      "p50": 538,
+      "p95": 1225,
+      "p99": 1225,
+      "max": 1225,
+      "statuses": {
+        "200": 2
+      }
+    },
+    {
+      "endpoint": "POST /tokens/:id/leave",
+      "count": 33,
+      "p50": 622,
+      "p95": 1734,
+      "p99": 2171,
+      "max": 2171,
+      "statuses": {
+        "200": 33
+      }
+    },
+    {
+      "endpoint": "WS /queues/:id/live",
+      "count": 116,
+      "p50": 791,
+      "p95": 1532,
+      "p99": 1869,
+      "max": 2413,
+      "statuses": {
+        "101": 116
+      }
+    }
+  ],
+  "check": null,
+  "error": "audit: 404 not_found",
+  "green": false
+}

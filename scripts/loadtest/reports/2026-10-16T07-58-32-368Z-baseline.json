@@ -1,0 +1,439 @@
+{
+  "runId": "1016075886",
+  "startedAt": "2026-10-16T07:58:32.368Z",
+  "finishedAt": "2026-10-16T08:02:59.693Z",
+  "target": "https://qpeer-api-loadtest.qpeer-api.workers.dev",
+  "preset": "baseline",
+  "config": {
+    "businesses": 5,
+    "queuesPerBusiness": 2,
+    "customers": 50,
+    "durationS": 120,
+    "budget": 15000,
+    "wsShare": 0.4,
+    "mapClients": 1,
+    "seed": 137499822
+  },
+  "stoppedBy": "duration",
+  "requestsUsed": 395,
+  "clientConnectRetries": 0,
+  "clientNetworkRetries": 0,
+  "counts": {
+    "tokens": 61,
+    "joinsOk": 50,
+    "triageOk": 11,
+    "probes": 2,
+    "pausedRejections": 0,
+    "fullRejections": 0,
+    "mapPolls": 10,
+    "consoleResponses": 97,
+    "joinRetriesRecovered": 0,
+    "joinRetriesAlreadyInQueue": 0
+  },
+  "endpoints": [
+    {
+      "endpoint": "GET /health",
+      "count": 1,
+      "p50": 3953,
+      "p95": 3953,
+      "p99": 3953,
+      "max": 3953,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "GET /loadtest/queues/:id/audit",
+      "count": 21,
+      "p50": 981,
+      "p95": 2908,
+      "p99": 3483,
+      "max": 3483,
+      "statuses": {
+        "200": 21
+      }
+    },
+    {
+      "endpoint": "GET /loadtest/stats",
+      "count": 3,
+      "p50": 2004,
+      "p95": 2169,
+      "p99": 2169,
+      "max": 2169,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "GET /map",
+      "count": 11,
+      "p50": 458,
+      "p95": 1102,
+      "p99": 1102,
+      "max": 1102,
+      "statuses": {
+        "200": 11
+      }
+    },
+    {
+      "endpoint": "GET /tokens/:id",
+      "count": 91,
+      "p50": 629,
+      "p95": 1816,
+      "p99": 3278,
+      "max": 3278,
+      "statuses": {
+        "200": 91
+      }
+    },
+    {
+      "endpoint": "POST /businesses",
+      "count": 5,
+      "p50": 254,
+      "p95": 1126,
+      "p99": 1126,
+      "max": 1126,
+      "statuses": {
+        "201": 5
+      }
+    },
+    {
+      "endpoint": "POST /businesses/:id/queues",
+      "count": 10,
+      "p50": 1331,
+      "p95": 5490,
+      "p99": 5490,
+      "max": 5490,
+      "statuses": {
+        "201": 10
+      }
+    },
+    {
+      "endpoint": "POST /loadtest/reset",
+      "count": 1,
+      "p50": 1462,
+      "p95": 1462,
+      "p99": 1462,
+      "max": 1462,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "POST /me/devices",
+      "count": 35,
+      "p50": 364,
+      "p95": 2335,
+      "p99": 2706,
+      "max": 2706,
+      "statuses": {
+        "200": 35
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/close",
+      "count": 10,
+      "p50": 1131,
+      "p95": 2835,
+      "p99": 2835,
+      "max": 2835,
+      "statuses": {
+        "200": 10
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/join",
+      "count": 52,
+      "p50": 1142,
+      "p95": 2474,
+      "p99": 2604,
+      "max": 2604,
+      "statuses": {
+        "201": 50,
+        "409": 2
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/next",
+      "count": 84,
+      "p50": 798,
+      "p95": 1904,
+      "p99": 3419,
+      "max": 3419,
+      "statuses": {
+        "200": 59,
+        "409": 25
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/open",
+      "count": 10,
+      "p50": 1466,
+      "p95": 3148,
+      "p99": 3148,
+      "max": 3148,
+      "statuses": {
+        "200": 10
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/pause",
+      "count": 5,
+      "p50": 1058,
+      "p95": 1307,
+      "p99": 1307,
+      "max": 1307,
+      "statuses": {
+        "200": 5
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/resume",
+      "count": 5,
+      "p50": 769,
+      "p95": 2640,
+      "p99": 2640,
+      "max": 2640,
+      "statuses": {
+        "200": 5
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/admit",
+      "count": 2,
+      "p50": 821,
+      "p95": 1432,
+      "p99": 1432,
+      "max": 1432,
+      "statuses": {
+        "200": 2
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/no-show",
+      "count": 5,
+      "p50": 760,
+      "p95": 1522,
+      "p99": 1522,
+      "max": 1522,
+      "statuses": {
+        "200": 5
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/served",
+      "count": 3,
+      "p50": 1039,
+      "p95": 1412,
+      "p99": 1412,
+      "max": 1412,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/skip",
+      "count": 1,
+      "p50": 751,
+      "p95": 751,
+      "p99": 751,
+      "max": 751,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/triage",
+      "count": 11,
+      "p50": 1059,
+      "p95": 3297,
+      "p99": 3297,
+      "max": 3297,
+      "statuses": {
+        "201": 11
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/undo-next",
+      "count": 6,
+      "p50": 725,
+      "p95": 1191,
+      "p99": 1191,
+      "max": 1191,
+      "statuses": {
+        "200": 6
+      }
+    },
+    {
+      "endpoint": "POST /tokens/:id/leave",
+      "count": 2,
+      "p50": 929,
+      "p95": 1127,
+      "p99": 1127,
+      "max": 1127,
+      "statuses": {
+        "200": 2
+      }
+    },
+    {
+      "endpoint": "WS /queues/:id/live",
+      "count": 21,
+      "p50": 701,
+      "p95": 1527,
+      "p99": 1559,
+      "max": 1559,
+      "statuses": {
+        "101": 21
+      }
+    }
+  ],
+  "check": {
+    "invariants": [
+      {
+        "name": "Outbox drained after the load phase (queues open)",
+        "ok": true,
+        "detail": "Σ pendingOutbox over all queue DOs == 0 within 60 s",
+        "failures": []
+      },
+      {
+        "name": "D1 tokens == DO tokens (open)",
+        "ok": true,
+        "detail": "every DO token has a D1 row with the same state, rev, number, series, session",
+        "failures": []
+      },
+      {
+        "name": "Numbers unique and gap-free per session + series",
+        "ok": true,
+        "detail": "DO and D1: numbers 1..n with no duplicates and no gaps",
+        "failures": []
+      },
+      {
+        "name": "Snapshot == DO after drain",
+        "ok": true,
+        "detail": "queue_snapshots.waiting/is_open/is_paused == DO",
+        "failures": []
+      },
+      {
+        "name": "/v1/map summary == Σ queues == DO",
+        "ok": true,
+        "detail": "for every load-test business",
+        "failures": []
+      },
+      {
+        "name": "DO people-ahead == rank by sortKey",
+        "ok": true,
+        "detail": "peopleAhead of each WAITING token == WAITING tokens with a smaller sortKey",
+        "failures": []
+      },
+      {
+        "name": "People ahead shown to customers is exact (sample)",
+        "ok": true,
+        "detail": "7 WAITING tokens sampled after the load stopped",
+        "failures": []
+      },
+      {
+        "name": "WebSocket clients converge to the DO state",
+        "ok": true,
+        "detail": "21 sockets: last token message == DO after 35 s quiet",
+        "failures": []
+      },
+      {
+        "name": "Queue order consistent (DO and every console response)",
+        "ok": true,
+        "detail": "triage before regular; untouched regular tokens in number order; positions 1..n",
+        "failures": []
+      },
+      {
+        "name": "People ahead never rises without a cause",
+        "ok": true,
+        "detail": "a rise between two observations needs a skip, triage insert or undo in that window",
+        "failures": []
+      },
+      {
+        "name": "Outbox drained after close",
+        "ok": true,
+        "detail": "Σ pendingOutbox == 0 within 90 s of closing",
+        "failures": []
+      },
+      {
+        "name": "D1 tokens == DO tokens (closed)",
+        "ok": true,
+        "detail": "after close and drain",
+        "failures": []
+      },
+      {
+        "name": "Every token terminal after close",
+        "ok": true,
+        "detail": "no WAITING/CALLED/GRACE left",
+        "failures": []
+      },
+      {
+        "name": "Terminal states never move backwards",
+        "ok": true,
+        "detail": "shown terminal → other state only via Undo (SERVED → CALLED within 30 s); one state per rev; 0 late views with an older rev ignored, as the app does",
+        "failures": []
+      },
+      {
+        "name": "Analytics hourly totals == event log",
+        "ok": true,
+        "detail": "Σ analytics_hourly per queue vs the simulator log and the final token states",
+        "failures": []
+      },
+      {
+        "name": "Pushes: no duplicates; every called token alerted once",
+        "ok": true,
+        "detail": "per (token, kind) from the recording sender",
+        "failures": []
+      },
+      {
+        "name": "Rejections carry the right codes",
+        "ok": true,
+        "detail": "already_in_queue × 2",
+        "failures": []
+      },
+      {
+        "name": "No unexpected responses",
+        "ok": true,
+        "detail": "5xx, timeouts (status 0), broken connections on non-idempotent calls, bad bodies and unexpected error codes",
+        "failures": []
+      },
+      {
+        "name": "Client network failures stay rare",
+        "ok": true,
+        "detail": "0 requests never reached the server after retries (0.00 % of 395, limit 1 %)",
+        "failures": []
+      },
+      {
+        "name": "No coordinates in Worker logs",
+        "ok": true,
+        "detail": "50 join points searched in 1728724 bytes of tail output",
+        "failures": []
+      }
+    ],
+    "ws": {
+      "sockets": 21,
+      "opened": 21,
+      "messages": 384,
+      "tokenMessages": 275,
+      "pongs": 109,
+      "reconnects": 0,
+      "errors": 3
+    },
+    "pushesRecorded": 70,
+    "analyticsTotals": {
+      "joins": 61,
+      "leaves": 2,
+      "served": 38,
+      "noShows": 3,
+      "cancels": 0
+    },
+    "tokenStates": {
+      "SERVED (served)": 38,
+      "EXPIRED (closed)": 18,
+      "LEFT (left)": 2,
+      "EXPIRED (no_show)": 3
+    }
+  },
+  "error": null,
+  "green": true
+}
