@@ -11,6 +11,7 @@ import {
   type SimState,
   type SimToken,
   type SimUser,
+  shownLast,
   TERMINAL_STATES,
 } from "./model.ts";
 
@@ -54,6 +55,7 @@ interface TokenView {
   peopleAhead: number;
   queueStatus: string;
   nowServing: string | null;
+  rev: number;
 }
 
 const sleep = (ms: number, stop: AbortSignal) =>
@@ -87,6 +89,7 @@ const observe = (v: TokenView, src: TokenObservation["src"]) => ({
   peopleAhead: v.peopleAhead,
   queueStatus: v.queueStatus,
   nowServing: v.nowServing,
+  rev: v.rev,
 });
 
 export interface SimDeps {
@@ -462,7 +465,7 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
   let leaveAt = p.leaveAfter === null ? null : tok.joinedAt + p.leaveAfter;
   let nextPoll = tok.live ? null : Date.now() + p.pollEvery;
   while (!stop.aborted) {
-    const last = tok.observations[tok.observations.length - 1];
+    const last = shownLast(tok.observations);
     if (last && TERMINAL_STATES.has(last.state)) return;
     const wakeAt = Math.min(
       leaveAt ?? Number.POSITIVE_INFINITY,
@@ -475,7 +478,7 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
     if (leaveAt !== null && Date.now() >= leaveAt) {
       leaveAt = null;
       // Only a waiting customer leaves (a called one walks up instead).
-      if (tok.observations[tok.observations.length - 1]?.state === "WAITING") {
+      if (shownLast(tok.observations)?.state === "WAITING") {
         const at = Date.now();
         const r = await api.req<TokenView>(
           "POST",
@@ -617,6 +620,10 @@ async function staffLoop(
       ok,
       status: r.status,
       code: r.code,
+      // A lost answer (status 0, not `connect`) may still have been applied:
+      // the checker treats such a skip/undo/Next as possibly done (H2). The
+      // loop keeps its last console state; the next answer replaces it.
+      error: r.error,
     });
     return ok;
   };

@@ -142,8 +142,33 @@ export const TokenView = z.object({
   endReason: EndReason.nullable(),
   /** True for paid tokens (Step 4). */
   paid: z.boolean(),
+  /**
+   * Version of the token itself: goes up on every change of this token
+   * (state, place, call…), never down. Views of the same token can reach a
+   * client out of order (a socket message sent before a leave can arrive
+   * after the leave's HTTP answer), so clients keep the highest `rev`
+   * (`newerTokenView`). Changes elsewhere in the queue (people ahead, ETA)
+   * keep the rev.
+   */
+  rev: z.number().int(),
 });
 export type TokenView = z.infer<typeof TokenView>;
+
+/**
+ * Which of two views of the same token to show: the incoming one unless the
+ * current one is newer (higher `rev`). Equal revs take the incoming view (same
+ * token state, fresher queue position/ETA). Step 3.5 H1: a customer who left
+ * briefly saw WAITING again from a late socket message.
+ */
+export function newerTokenView(
+  current: TokenView | undefined | null,
+  incoming: TokenView,
+): TokenView {
+  if (current && current.id === incoming.id && current.rev > incoming.rev) {
+    return current;
+  }
+  return incoming;
+}
 
 /** One row of GET /v1/me/tokens (TOK-06), from the durable D1 record. */
 export const TokenSummary = z.object({
