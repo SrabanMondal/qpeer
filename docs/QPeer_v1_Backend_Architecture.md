@@ -420,6 +420,7 @@ Cron handlers are thin and call the same services as the API, so they are tested
 | `RAZORPAY_KEY_SECRET` | **secret** | `wrangler secret put` per env; `.dev.vars` locally |
 | `RAZORPAY_WEBHOOK_SECRET` | **secret** | same |
 | `EXPO_ACCESS_TOKEN` | **secret** (optional) | only if Expo push security is enabled |
+| `LOADTEST_JWKS` | **secret** (`loadtest` env only) | public JWK set of the load-test signing key; ignored unless `ENVIRONMENT` is exactly `loadtest` |
 | `DB` | D1 binding | per env |
 | `QUEUE` | DO binding | per env |
 
@@ -434,6 +435,7 @@ Cron handlers are thin and call the same services as the API, so they are tested
 | `local` | `wrangler dev` / tests | local SQLite | development, tests |
 | `dev` | `qpeer-api-dev` | `qpeer-dev` | phone testing, webhooks, seeding |
 | `demo` | `qpeer-api` | `qpeer-demo` | the demo (Step 5) |
+| `loadtest` | `qpeer-api-loadtest` | `qpeer-loadtest` | simulated-user load & correctness runs (Step 3.5, §19.1) |
 
 Deploy order for a change touching both: **migrate D1 first, then deploy the Worker** (new code may read new columns; old code ignores them). DO storage changes are applied lazily inside the DO (`CREATE TABLE IF NOT EXISTS` / versioned `ALTER`s in `storage.ts`, keyed by a schema version in `meta`).
 
@@ -451,6 +453,16 @@ Deploy order for a change touching both: **migrate D1 first, then deploy the Wor
 | Contract | Every response in tests is parsed with its shared zod schema |
 
 Every requirement ID that has backend behaviour gets at least one test named after it (`it("QUE-03: people ahead excludes left tokens", …)`), so coverage can be traced back to the checklist.
+
+### 19.1 Load test (Step 3.5)
+
+A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadtest/`, Node 24 type stripping, no dependencies) with hundreds of virtual users. It never touches `dev`/`demo`, creates no Firebase users and sends no real pushes.
+
+- **Test-only auth** (`middleware/loadtest-auth.ts`): only when `ENVIRONMENT === "loadtest"` **and** the `LOADTEST_JWKS` secret is set, a token whose issuer is `qpeer-loadtest` is verified against that JWK set (RS256, issuer/audience `qpeer-loadtest`, `exp`/`iat`/`sub` required; Firebase-shaped claims `sub`, `firebase.sign_in_provider`, `phone_number`). Every other token, and every token in every other environment, goes to the Firebase verifier, so a load-test token is 401 there even if the secret were set by mistake. Firebase tokens keep working on the loadtest Worker. A JWK set holding a private key is a config error (500).
+- **Recording push sender** (`expo-push.ts` `loadtestTransport`): in `loadtest`, sends never call Expo; each message gets an ok ticket `loadtest-<uuid>`, so `push_tickets` holds one row per send (token, kind). Receipts are always ok.
+- **Helper routes** `GET /v1/loadtest/stats` (push counts per token+kind, analytics rows, snapshots, per-queue DO status/waiting/outbox backlog), `GET /v1/loadtest/queues/:id/audit` (DO `auditTokens()` dump + D1 token rows), `POST /v1/loadtest/reset` (closes every queue, then — once every DO outbox is empty — wipes the D1 tables; 409 while draining). All 404 unless `ENVIRONMENT=loadtest` **and** the caller was verified by the load-test key. ≤ 40 queues per request (subrequest limit).
+- **Simulator**: refuses any base URL but `https://qpeer-api-loadtest.qpeer-api.workers.dev` (or `--local` wrangler dev) and checks `/v1/health` says `loadtest`. Owners create businesses around Jammu with 2 queues (grace 1 min), customers (anonymous + some phone-registered, most with a fake push device) join in a burst and spread out, with a few too-far / mocked / no-fix / double-join probes; 40 % hold a WebSocket, the rest poll; some leave. Staff loops per queue: Next every 5–40 s (scaled for short runs), skip, no-show → admit, served, undo, triage, pause/resume. Map clients poll `/v1/map`. Every request takes one unit of a hard budget (default 15 000; the load phase stops early to leave room for the checks).
+- **Invariant checker** (after a 35 s quiet period, then again after closing every queue and draining): D1 tokens == DO tokens; numbers unique and gap-free per session+series; snapshot == DO; `/v1/map` summary == Σ queues == DO; people-ahead exact (DO rank and sampled `GET /tokens/:id`); WebSocket clients converge; queue order (triage first, untouched regulars FIFO, console positions 1..n); people-ahead never rises without a skip/triage/undo; terminal states never move back except Undo; analytics totals == simulator log and final states; pushes deduplicated and every called token alerted once; rejection codes; no unexpected responses; no join coordinates in a `wrangler tail` capture (`--tail-log`). Reports go to `scripts/loadtest/reports/<timestamp>.md|.json`.
 
 ---
 
@@ -542,3 +554,14 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Stats thresholds | Each average needs ≥ 20 samples (waits, intervals, ETA checks); `servedCount` is always returned. |
 | Map ordering under the limit | Nearest to the box centre first (equirectangular distance), so a truncated result keeps the middle of the view. |
 | Dev environments | Dev routes answer only when `ENVIRONMENT` is `local` or `dev` (was "not demo"). |
+
+### Decided in Step 3.5
+
+| Question | Decision |
+|---|---|
+| How to load-test without many phones | A separate `loadtest` Worker + `qpeer-loadtest` D1 and a Node simulator (§19.1); `dev`/`demo` data is never touched. |
+| Auth for virtual users | A locally generated RS256 key; its public JWK set is the `LOADTEST_JWKS` secret of the loadtest env only. The verifier is chosen by issuer, and only when `ENVIRONMENT === "loadtest"` and the secret exists — everywhere else the code path is unreachable (tests cover `local`/`dev`/`demo`/unknown). No Firebase users are created. |
+| Pushes under load | Recorded, never sent: fake ok tickets `loadtest-<uuid>` in `push_tickets`, counted per (token, kind) by `/v1/loadtest/stats`. |
+| Request budget | Hard cap per run (default 15 000, max 50 000) counted client-side, because the free plan allows ≈ 100k Worker requests a day. |
+| Reset | Close every queue, wait until every DO outbox is empty, then wipe the D1 tables — otherwise a late outbox write would re-create rows after the wipe. |
+| Loadtest helper reach | 404 unless the environment is `loadtest` **and** the caller's token was verified by the load-test key (a Firebase user on that Worker can't call them). |
