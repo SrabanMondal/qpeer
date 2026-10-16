@@ -71,9 +71,42 @@ export const pushOverride: { transport: PushTransport | null } = {
   transport: null,
 };
 
-/** `env` may carry the optional `EXPO_ACCESS_TOKEN` secret (§17). */
+/** Prefix of the fake ticket ids written by the load-test sender. */
+export const LOADTEST_TICKET_PREFIX = "loadtest-";
+
+/**
+ * Load-test sender (`ENVIRONMENT` = loadtest, Step 3.5): never calls Expo.
+ * Every message gets an ok ticket `loadtest-<uuid>`, so `sendAlert` records one
+ * `push_tickets` row per send (token, kind) — the loadtest stats endpoint
+ * counts those rows. Receipts are always ok.
+ */
+export function loadtestTransport(): PushTransport {
+  return {
+    async send(messages) {
+      return messages.map(
+        (): ExpoTicket => ({
+          status: "ok",
+          id: `${LOADTEST_TICKET_PREFIX}${crypto.randomUUID()}`,
+        }),
+      );
+    },
+    async getReceipts(ids) {
+      const out: Record<string, ExpoReceipt> = {};
+      for (const id of ids) out[id] = { status: "ok" };
+      return out;
+    },
+  };
+}
+
+/**
+ * `env` may carry the optional `EXPO_ACCESS_TOKEN` secret (§17). In the
+ * `loadtest` environment pushes are recorded, never sent.
+ */
 export function pushTransport(env: object): PushTransport {
   if (pushOverride.transport) return pushOverride.transport;
+  if ((env as { ENVIRONMENT?: unknown }).ENVIRONMENT === "loadtest") {
+    return loadtestTransport();
+  }
   const token = (env as { EXPO_ACCESS_TOKEN?: unknown }).EXPO_ACCESS_TOKEN;
   return expoTransport(typeof token === "string" ? token : undefined);
 }

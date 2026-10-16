@@ -113,6 +113,33 @@ export interface TokenWithOwner {
   userId: string | null;
 }
 
+/** Load-test audit view of one DO (see `auditTokens`). */
+export interface AuditDump {
+  queueId: string | null;
+  sessionId: string | null;
+  status: "closed" | "open" | "paused";
+  waiting: number;
+  pendingOutbox: number;
+  tokens: {
+    id: string;
+    sessionId: string;
+    number: number;
+    series: TokenSeries;
+    cls: TokenClass;
+    method: JoinMethod;
+    userId: string | null;
+    state: TokenRow["state"];
+    sortKey: number;
+    joinedAt: number;
+    calledAt: number | null;
+    servedAt: number | null;
+    endedAt: number | null;
+    endReason: EndReason | null;
+    rev: number;
+    peopleAhead: number | null;
+  }[];
+}
+
 /** Undo of the last Next is allowed this long (QUE-12). */
 export const UNDO_WINDOW_MS = 30_000;
 /** Minimum delay before an alarm fires, so "due now" can't spin. */
@@ -893,6 +920,40 @@ export class QueueDO extends DurableObject<Env> {
   /** Test/debug: outbox items still pending (0 once D1 and pushes are caught up). */
   async pendingOutbox(): Promise<number> {
     return this.store.outboxCount();
+  }
+
+  /**
+   * Load-test audit (Step 3.5): every token the DO holds with its durable
+   * fields, plus status and outbox backlog. Read-only. Only the loadtest route
+   * calls it, and that route is 404 outside `ENVIRONMENT=loadtest`.
+   */
+  async auditTokens(): Promise<AuditDump> {
+    const s = this.store;
+    return {
+      queueId: s.get("queue_id"),
+      sessionId: s.get("session_id"),
+      status: s.get("status"),
+      waiting: s.countState("WAITING"),
+      pendingOutbox: s.outboxCount(),
+      tokens: s.allTokens().map((t) => ({
+        id: t.id,
+        sessionId: t.session_id,
+        number: t.number,
+        series: t.series,
+        cls: t.cls,
+        method: t.method,
+        userId: t.user_id,
+        state: t.state,
+        sortKey: t.sort_key,
+        joinedAt: t.joined_at,
+        calledAt: t.called_at,
+        servedAt: t.served_at,
+        endedAt: t.ended_at,
+        endReason: t.end_reason,
+        rev: t.rev,
+        peopleAhead: t.state === "WAITING" ? s.peopleAhead(t.sort_key) : null,
+      })),
+    };
   }
 
   // =====================================================================

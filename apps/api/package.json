@@ -8,6 +8,8 @@
     "test": "vitest run",
     "dev": "wrangler dev",
     "deploy:dev": "wrangler deploy --env dev",
+    "dev:loadtest": "wrangler d1 migrations apply DB --env loadtest --local && wrangler dev --env loadtest --port 8787",
+    "deploy:loadtest": "wrangler deploy --env loadtest",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

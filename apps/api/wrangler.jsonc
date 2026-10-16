@@ -95,6 +95,39 @@
       "triggers": {
         "crons": ["*/15 * * * *", "0 * * * *"]
       }
+    },
+    // Step 3.5 load test: Worker qpeer-api-loadtest. Test-only auth needs the
+    // LOADTEST_JWKS secret; pushes are recorded, never sent (expo-push.ts).
+    "loadtest": {
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "qpeer-loadtest",
+          "database_id": "12cf4f5a-8cc0-4894-8dfc-762c8c900579",
+          "migrations_dir": "drizzle/migrations"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "QUEUE",
+            "class_name": "QueueDO"
+          }
+        ]
+      },
+      "migrations": [
+        {
+          "tag": "v1",
+          "new_sqlite_classes": ["QueueDO"]
+        }
+      ],
+      "vars": {
+        "FIREBASE_PROJECT_ID": "qpeer-f6dbe",
+        "ENVIRONMENT": "loadtest"
+      },
+      "triggers": {
+        "crons": ["*/15 * * * *", "0 * * * *"]
+      }
     }
   }
 }

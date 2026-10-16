@@ -1,9 +1,14 @@
 import { createMiddleware } from "hono/factory";
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { db } from "../db/client";
-import type { AppEnv } from "../env";
+import type { AppEnv, AuthSource, Bindings } from "../env";
 import { AppError } from "../lib/errors";
 import { upsertUser } from "../modules/identity/service";
+import {
+  claimsLoadtestIssuer,
+  loadtestEnabled,
+  makeLoadtestVerifier,
+} from "./loadtest-auth";
 
 export interface VerifiedUser {
   uid: string;
@@ -11,6 +16,8 @@ export interface VerifiedUser {
   email: string | null;
   phone: string | null;
   name: string | null;
+  /** Which verifier accepted the token (default: Firebase). */
+  source?: AuthSource;
 }
 
 export type TokenVerifier = (token: string) => Promise<VerifiedUser>;
@@ -81,10 +88,37 @@ const unauthorized = () =>
   new AppError(401, "unauthorized", "Missing or invalid token");
 
 /**
- * Verifies the Firebase ID token and loads (or creates) the user into `c.var.user`.
+ * The verifier for this environment: Firebase everywhere; in the `loadtest`
+ * env only (with the `LOADTEST_JWKS` secret), tokens whose issuer is
+ * `qpeer-loadtest` go to the load-test verifier instead. Everywhere else such
+ * a token reaches the Firebase verifier and fails its issuer check (401).
+ */
+export function verifierForEnv(
+  env: Pick<Bindings, "FIREBASE_PROJECT_ID" | "ENVIRONMENT" | "LOADTEST_JWKS">,
+  firebaseKeys?: KeySource,
+): TokenVerifier {
+  if (!env.FIREBASE_PROJECT_ID?.trim()) {
+    throw new Error("FIREBASE_PROJECT_ID is not configured");
+  }
+  const firebase = makeFirebaseVerifier(env.FIREBASE_PROJECT_ID, firebaseKeys);
+  if (!loadtestEnabled(env)) return firebase;
+  const loadtest = makeLoadtestVerifier(env.LOADTEST_JWKS);
+  return (token) =>
+    claimsLoadtestIssuer(token) ? loadtest(token) : firebase(token);
+}
+
+export interface AuthOptions {
+  /** Replaces verification entirely (tests use a local RS256 key). */
+  verifier?: TokenVerifier;
+  /** Firebase key source for the env-selected verifier (tests only). */
+  firebaseKeys?: KeySource;
+}
+
+/**
+ * Verifies the ID token and loads (or creates) the user into `c.var.user`.
  * Only verification failures are 401; config and database errors become 500.
  */
-export function authMiddleware(verifierOverride?: TokenVerifier) {
+export function authMiddleware(opts: AuthOptions = {}) {
   return createMiddleware<AppEnv>(async (c, next) => {
     const authHeader = c.req.header("Authorization");
     if (!authHeader?.startsWith("Bearer ")) throw unauthorized();
@@ -92,11 +126,7 @@ export function authMiddleware(verifierOverride?: TokenVerifier) {
     const token = authHeader.slice(7).trim();
     if (!token) throw unauthorized();
 
-    if (!verifierOverride && !c.env.FIREBASE_PROJECT_ID?.trim()) {
-      throw new Error("FIREBASE_PROJECT_ID is not configured");
-    }
-    const verifier =
-      verifierOverride ?? makeFirebaseVerifier(c.env.FIREBASE_PROJECT_ID);
+    const verifier = opts.verifier ?? verifierForEnv(c.env, opts.firebaseKeys);
 
     let verified: VerifiedUser;
     try {
@@ -109,6 +139,7 @@ export function authMiddleware(verifierOverride?: TokenVerifier) {
     const user = await upsertUser(db(c.env.DB), c.get("clock").now(), verified);
     c.set("userId", user.id);
     c.set("user", user);
+    c.set("authSource", verified.source ?? "firebase");
     await next();
   });
 }

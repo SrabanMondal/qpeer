@@ -394,6 +394,13 @@ export class QueueStore {
       .toArray();
   }
 
+  /** Every token the DO still holds (current and last session), by join time. */
+  allTokens(): TokenRow[] {
+    return this.sql
+      .exec<TokenRow>("SELECT * FROM tokens ORDER BY joined_at, id")
+      .toArray();
+  }
+
   /** QUE-03: people ahead = waiting tokens with a smaller sort key (index on state, sort_key). */
   peopleAhead(sortKey: number): number {
     return this.count(
