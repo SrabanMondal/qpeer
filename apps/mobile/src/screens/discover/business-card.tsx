@@ -1,4 +1,9 @@
-import { type MapBusiness, markerStatus } from "@qpeer/shared";
+import {
+  type MapBusiness,
+  markerStatus,
+  summaryWait,
+  waitSummary,
+} from "@qpeer/shared";
 import { Pressable, StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
@@ -8,7 +13,7 @@ import { useTheme } from "@/hooks/use-theme";
 import { useBusiness } from "@/lib/api";
 import { openDirections } from "@/lib/directions";
 import { categoryIcon, categoryLabel } from "@/lib/format";
-import { formatWaitRange } from "@/lib/queue-format";
+import { useNow } from "@/lib/queue-format";
 import { StatusPill } from "@/screens/discover/status-pill";
 
 /**
@@ -30,10 +35,7 @@ export function BusinessCard({
   // is then cached for the detail page).
   const detail = useBusiness(b.id);
   const today = detail.data?.todayHours.text;
-  const wait =
-    b.summary.waitLowMs !== null && b.summary.waitHighMs !== null
-      ? formatWaitRange(b.summary.waitLowMs, b.summary.waitHighMs)
-      : null;
+  const now = useNow(true, 30_000);
   const status = markerStatus(b);
 
   return (
@@ -74,7 +76,7 @@ export function BusinessCard({
         <ThemedText type="body">
           {status === "closed"
             ? "Not taking walk-ins now"
-            : `${b.summary.waiting} waiting${wait ? ` · ${wait}` : ""}`}
+            : waitSummary(summaryWait(b), now)}
         </ThemedText>
       </View>
 

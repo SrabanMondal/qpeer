@@ -1,3 +1,4 @@
+import { openLook, waitText } from "@qpeer/shared";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Linking } from "react-native";
@@ -23,8 +24,9 @@ import {
 } from "@/lib/join-errors";
 import { isQueueId } from "@/lib/join-link";
 import { readJoinLocation, turnOnLocation } from "@/lib/join-location";
+import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 import { askForAlertsAfterJoin } from "@/lib/push";
-import { formatWaitRange, liveStatusLook } from "@/lib/queue-format";
+import { liveStatusLook, useNow } from "@/lib/queue-format";
 import { showToast } from "@/lib/toast";
 
 type Phase = "idle" | "locating" | "joining";
@@ -41,6 +43,8 @@ export default function JoinScreen() {
   const uid = useAuth().user?.uid ?? null;
   const info = useQueue(id);
   const join = useJoinQueue(id);
+  const offline = useOffline();
+  const now = useNow(true, 30_000);
   const [phase, setPhase] = useState<Phase>("idle");
   const [problem, setProblem] = useState<JoinProblem | null>(null);
 
@@ -137,9 +141,12 @@ export default function JoinScreen() {
 
   const { queue, business, live, myRole, joinRadiusM } = info.data;
   const status = liveStatusLook(live.status);
+  // B16: the queue state decides; the hours only add "(after usual hours)".
+  const look = openLook(live.status, business.isOpenNow);
   const walkInLine = `Walk-in check: you must be within ${joinRadiusM} m`;
   const busy = phase !== "idle";
   const open = live.status === "open";
+  const wait = open ? waitText(live, now) : null;
 
   return (
     <Screen
@@ -167,14 +174,12 @@ export default function JoinScreen() {
 
       <StatusBanner
         tone={status.tone}
-        title={
-          live.status === "open"
-            ? "Open now"
-            : live.status === "paused"
-              ? "Paused for a moment"
-              : "Closed right now"
+        title={look.label}
+        detail={
+          business.todayHours
+            ? `Today: ${business.todayHours.text}\n${walkInLine}`
+            : walkInLine
         }
-        detail={walkInLine}
       />
 
       <Card>
@@ -185,13 +190,7 @@ export default function JoinScreen() {
         <InfoRow label="People waiting" value={String(live.waiting)} />
         <InfoRow
           label="Estimated wait"
-          value={
-            live.waitLowMs !== null && live.waitHighMs !== null
-              ? formatWaitRange(live.waitLowMs, live.waitHighMs)
-              : open
-                ? "Not known yet"
-                : "—"
-          }
+          value={open ? (wait ?? "Not known yet") : "—"}
         />
       </Card>
 
@@ -237,7 +236,7 @@ export default function JoinScreen() {
         icon="how_to_reg"
         onPress={() => void doJoin()}
         loading={busy}
-        disabled={!open}
+        disabled={!open || offline}
         accessibilityLabel={`Join ${queue.name} at ${business.name}`}
       />
       <ThemedText
@@ -249,9 +248,11 @@ export default function JoinScreen() {
           ? "Checking your location…"
           : phase === "joining"
             ? "Joining…"
-            : open
-              ? "Your location is checked once to confirm you are here. It is not stored."
-              : "Joining opens when the queue is open."}
+            : offline
+              ? OFFLINE_ACTION_TEXT
+              : open
+                ? "Your location is checked once to confirm you are here. It is not stored."
+                : "Joining opens when the queue is open."}
       </ThemedText>
       {myRole ? (
         <ThemedText type="small" themeColor="inkMuted">
