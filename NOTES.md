@@ -19,6 +19,8 @@
 
 **Open items:** Priority Pass rules (owner + professor), real fees/split, B11 (watch: process killed once during fast taps), B12 (dev-build Tools gear overlaps header pill — dev only), owner should set the phone to automatic time.
 
+**Incident log:** every problem found so far and its fix is in `docs/runbook/README.md` (INC-001 to INC-039, standing rules in `docs/runbook/lessons.md`). Record new incidents there.
+
 **Working rules:** real work → Opus subagents with a brief in `.orch/briefs/`, one branch per task, I review + run `npm run check`, merge `--no-ff`; agy/opencode only for mechanical tasks. Commits: one line `<type>: <message>`, no body/trailer, no engine names (`COMMIT_GUIDELINES.md`, gitignored). Phone tests via adb over USB + Metro (`adb reverse tcp:8081 tcp:8081`); never `am force-stop` when testing alerts (use `am kill`). Never change phone settings without the owner's OK (they approved toggling airplane mode).
 
 ## Device test procedure: QR join with one phone (owner's instruction, 2026-10-15)
