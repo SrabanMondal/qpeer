@@ -7,7 +7,7 @@ import {
 } from "@qpeer/shared";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useRef, useState } from "react";
-import { Alert, StyleSheet, Switch, View } from "react-native";
+import { Alert, StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { normalizeTime, TimeInput } from "@/components/time-input";
@@ -21,9 +21,9 @@ import {
   Screen,
   type ScreenHandle,
   StatusBanner,
+  ThemedSwitch,
 } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
-import { useTheme } from "@/hooks/use-theme";
 import { useBusiness, useUpdateBusiness } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
 import { type FieldErrors, useFieldErrors, zodFieldErrors } from "@/lib/form";
@@ -204,7 +204,12 @@ function HoursEditor({
         </View>
       ))}
 
-      <Button title="Save hours" onPress={save} loading={update.isPending} />
+      <Button
+        title="Save hours"
+        onPress={save}
+        loading={update.isPending}
+        needsNetwork
+      />
     </Screen>
   );
 }
@@ -222,7 +227,6 @@ function DayEditor({
   errors: FieldErrors;
   onChange: (ranges: DayHours) => void;
 }) {
-  const theme = useTheme();
   const open = ranges.length > 0;
   const label = WEEKDAY_LABELS[day];
 
@@ -247,12 +251,10 @@ function DayEditor({
         <ThemedText type="label" themeColor={open ? "brand" : "inkMuted"}>
           {open ? "Open" : "Closed"}
         </ThemedText>
-        <Switch
+        <ThemedSwitch
           value={open}
           onValueChange={(v) => onChange(v ? [DEFAULT_RANGE] : [])}
           accessibilityLabel={`${label} open`}
-          trackColor={{ true: theme.brand, false: theme.border }}
-          thumbColor={theme.card}
         />
       </View>
 

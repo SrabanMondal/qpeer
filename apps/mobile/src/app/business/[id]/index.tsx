@@ -1,8 +1,9 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { Alert, StyleSheet, Switch, View } from "react-native";
+import { Alert } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import {
+  AppSwitch,
   Badge,
   Button,
   Card,
@@ -16,8 +17,6 @@ import {
   SectionHeader,
   StatusBanner,
 } from "@/components/ui";
-import { Spacing } from "@/constants/theme";
-import { useTheme } from "@/hooks/use-theme";
 import {
   useBusiness,
   useSetBusinessStatus,
@@ -30,13 +29,14 @@ import {
   listingStatus,
   todayText,
 } from "@/lib/format";
+import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 import { showErrorToast } from "@/lib/toast";
 
 /** One business: summary, listing status (BIZ-07) and every section to edit. */
 export default function BusinessScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const theme = useTheme();
+  const offline = useOffline();
   const business = useBusiness(id);
   const setStatus = useSetBusinessStatus(id);
   const update = useUpdateBusiness(id);
@@ -187,23 +187,20 @@ export default function BusinessScreen() {
         <>
           <SectionHeader title="Public stats" />
           <Card>
-            <View style={styles.switchRow}>
-              <View style={styles.flex}>
-                <ThemedText type="body">Show public stats</ThemedText>
-                <ThemedText type="small" themeColor="inkMuted">
-                  Average wait and service time on your public page. Shown
-                  automatically after 14 days on the map.
-                </ThemedText>
-              </View>
-              <Switch
-                value={b.publicStats === true}
-                onValueChange={(v) => void onPublicStats(v)}
-                disabled={update.isPending}
-                accessibilityLabel="Show public stats"
-                trackColor={{ true: theme.brand, false: theme.border }}
-                thumbColor={theme.card}
-              />
-            </View>
+            <AppSwitch
+              label="Show public stats"
+              description="Average wait and service time on your public page. Shown automatically after 14 days on the map."
+              value={b.publicStats === true}
+              onValueChange={(v) => void onPublicStats(v)}
+              disabled={update.isPending || offline}
+              right={
+                offline ? (
+                  <ThemedText type="small" themeColor="warning">
+                    {OFFLINE_ACTION_TEXT}
+                  </ThemedText>
+                ) : null
+              }
+            />
           </Card>
         </>
       ) : null}
@@ -223,6 +220,7 @@ export default function BusinessScreen() {
           variant="danger-soft"
           onPress={onDeactivate}
           loading={setStatus.isPending}
+          disabled={offline}
         />
       ) : (
         <Button
@@ -230,17 +228,14 @@ export default function BusinessScreen() {
           variant="brand"
           onPress={onActivate}
           loading={setStatus.isPending}
+          disabled={offline}
         />
       )}
+      {offline ? (
+        <ThemedText type="small" themeColor="inkMuted">
+          {OFFLINE_ACTION_TEXT}
+        </ThemedText>
+      ) : null}
     </Screen>
   );
 }
-
-const styles = StyleSheet.create({
-  switchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.twoHalf,
-  },
-  flex: { flex: 1, gap: Spacing.one },
-});
