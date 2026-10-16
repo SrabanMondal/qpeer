@@ -9,7 +9,8 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 - Per-step build detail lives in git history and `docs/QPeer_v1_Backend_Architecture.md` (§23 holds the decisions per step). Every bug and its fix lives in `docs/runbook/` (INC-001 to INC-047; standing rules in `docs/runbook/lessons.md`). Record new incidents there, not here.
 - Tests: API 154, shared 104 (`npm run check`) on `main`; the fix-batch branch has API 178, shared 135.
 
-**Device-verified on the Samsung A9 (Android 10):** Steps 0–2 (QR join, alerts background + cold start, leave, offline/reconnect), B9 clock popup and B10 console layout (2026-10-16), Step 3 map script steps 1, 3 (partial), 5–9, 13, 14 (2026-10-16).
+**Device-verified on the Samsung A9 (Android 10):** Steps 0–2 (QR join, alerts background + cold start, leave, offline/reconnect), B9 clock popup and B10 console layout (2026-10-16), Step 3 map script steps 1, 3 (partial), 5–9, 13, 14 (2026-10-16). Full customer journey from the map (2026-10-16, before the fix batch): map → card → View details → Join → GPS check → ticket #3; owner then paused (push `queue_paused` sent 19:36:33 IST), NEXT (push `called` 19:36:52), Served (#3 `SERVED` 19:37:00), ticket showed served (owner-tested).
+**Fix batch merged 2026-10-16 (`38e8c15`):** migration 0005 applied to dev/loadtest/demo, `TICKET_SIGNING_KEY` set on dev (kid `ticket-4b2a73ff`), dev + loadtest deployed, baseline load test green on the new code (395 requests). EAS builds started: development `720a5c7d-…`, preview APK `35f3efbb-…` (preview env now has `EXPO_PUBLIC_MAPBOX_TOKEN`, `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`, `GOOGLE_SERVICES_JSON`). On-device checklist for the new build: runbook INC-040…049 follow-ups.
 **Not yet verified on a phone:** Step 3 script steps 2, 4, 10, 12, 15 (denied-permission path, zoom-out hint, offline, light theme, large font: these need phone setting changes, ask the owner first); B1 offline cold start; Google link name fill; H1 app-side `rev` merge; B5 "turn on location" path.
 
 ## Environments
@@ -80,3 +81,4 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 - 2026-10-16T07:58Z `baseline` 50 customers / 120 s: **green**, 395 requests, join p95 2474 ms, next p95 1904 ms — [report](scripts/loadtest/reports/2026-10-16T07-58-32-368Z-baseline.md)
 - 2026-10-16T08:03Z `full` 300 customers / 300 s: **green**, 1576 requests, join p95 2654 ms, next p95 2247 ms — [report](scripts/loadtest/reports/2026-10-16T08-03-01-316Z-full.md)
 - Earlier red runs and their fixes: runbook INC-020 to INC-034.
+- 2026-10-16T14:47Z `baseline` 50 customers / 120 s: **green**, 395 requests, join p95 2483 ms, next p95 1899 ms — [report](scripts/loadtest/reports/2026-10-16T14-47-56-863Z-baseline.md)
