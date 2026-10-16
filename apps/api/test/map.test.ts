@@ -244,6 +244,8 @@ describe("GET /v1/map (MAP-01…04)", () => {
       waitLowMs: 300_000,
       waitHighMs: 420_000,
       anyOpen: true,
+      inService: 0,
+      updatedAt: api.clock.t,
     });
 
     const n = res.items.find((x) => x.id === neverOpened.id);
@@ -259,6 +261,8 @@ describe("GET /v1/map (MAP-01…04)", () => {
       waitLowMs: null,
       waitHighMs: null,
       anyOpen: false,
+      inService: 0,
+      updatedAt: null,
     });
     // nothing user-specific in the payload
     expect(JSON.stringify(res)).not.toMatch(/myRole|ownerUserId|phone/);
@@ -327,7 +331,7 @@ describe("GET /v1/map (MAP-01…04)", () => {
     );
   });
 
-  it("MAP-04: openNow uses the business hours in IST (controlled clock)", async () => {
+  it("MAP-04/B16: openNow = a queue open and not paused, whatever the hours; isOpenNow still reports the hours (IST)", async () => {
     const a = area(5);
     const morning: WeeklyHours = {
       ...defaultWeeklyHours(),
@@ -336,47 +340,74 @@ describe("GET /v1/map (MAP-01…04)", () => {
         { from: "17:00", to: "21:00" },
       ],
     };
-    const evening: WeeklyHours = {
-      ...defaultWeeklyHours(),
-      mon: [{ from: "13:00", to: "23:00" }],
-    };
     const closedMonday: WeeklyHours = { ...defaultWeeklyHours(), mon: [] };
-    const m = await insertBusiness({ location: a.at(), hours: morning });
-    const e = await insertBusiness({ location: a.at(0.01, 0), hours: evening });
-    const c = await insertBusiness({
-      location: a.at(0.02, 0),
+    const open = (waiting = 0): SeedSnapshot => ({
+      isOpen: true,
+      waiting,
+      low: 0,
+      high: 60_000,
+    });
+    // Open queue inside its hours.
+    const inHours = await insertBusiness({
+      location: a.at(),
+      hours: morning,
+      queues: [{ snapshot: open() }],
+    });
+    // Open queue on a closed day ("Open (after usual hours)" in the app).
+    const afterHours = await insertBusiness({
+      location: a.at(0.01, 0),
       hours: closedMonday,
+      queues: [{ snapshot: open(2) }],
+    });
+    // Inside its hours but no queue open: not open.
+    const notOpened = await insertBusiness({
+      location: a.at(0.02, 0),
+      hours: morning,
+      queues: [
+        { snapshot: { isOpen: false, waiting: 0, low: null, high: null } },
+      ],
+    });
+    // Only queue paused: not open (badge says Paused).
+    const paused = await insertBusiness({
+      location: a.at(0.03, 0),
+      hours: morning,
+      queues: [{ snapshot: { ...open(), isPaused: true } }],
+    });
+    // One paused, one open queue: open.
+    const mixed = await insertBusiness({
+      location: a.at(0.04, 0),
+      hours: closedMonday,
+      queues: [
+        { snapshot: { ...open(), isPaused: true } },
+        { snapshot: open() },
+      ],
     });
     const ids = (r: MapResponse) => r.items.map((b) => b.id).sort();
 
-    // Monday 2026-10-12, 12:59 IST: only the morning range is open.
+    // Monday 2026-10-12, 12:59 IST.
     await at(ist(2026, 10, 12, 12, 59), async () => {
       const all = await getMap(a.query());
-      expect(ids(all)).toEqual([m.id, e.id, c.id].sort());
-      const open = new Map(all.items.map((b) => [b.id, b.isOpenNow]));
-      expect(open.get(m.id)).toBe(true);
-      expect(open.get(e.id)).toBe(false);
-      expect(open.get(c.id)).toBe(false);
-      expect(ids(await getMap(a.query({ openNow: 1 })))).toEqual([m.id]);
-    });
-    // 13:00 IST: the end minute is closed, the next range's start is open.
-    await at(ist(2026, 10, 12, 13, 0), async () => {
-      expect(ids(await getMap(a.query({ openNow: 1 })))).toEqual([e.id]);
-    });
-    // 17:30 IST: both open; with category and limit applied after the filter.
-    await at(ist(2026, 10, 12, 17, 30), async () => {
+      expect(ids(all)).toHaveLength(5);
+      const hoursOpen = new Map(all.items.map((b) => [b.id, b.isOpenNow]));
+      expect(hoursOpen.get(inHours.id)).toBe(true);
+      expect(hoursOpen.get(afterHours.id)).toBe(false);
+      expect(hoursOpen.get(notOpened.id)).toBe(true);
       expect(ids(await getMap(a.query({ openNow: 1 })))).toEqual(
-        [m.id, e.id].sort(),
+        [inHours.id, afterHours.id, mixed.id].sort(),
       );
+      // Limit applies after the filter.
       const one = await getMap(a.query({ openNow: 1, limit: 1 }));
-      expect(one.items.map((b) => b.id)).toEqual([m.id]);
+      expect(one.items.map((b) => b.id)).toEqual([inHours.id]);
       expect(one.truncated).toBe(true);
     });
-    // Tuesday 00:30 IST (Monday 19:00 UTC): Tuesday's default hours, all closed.
+    // Tuesday 00:30 IST: hours closed everywhere; the open queues still count.
     await at(ist(2026, 10, 13, 0, 30), async () => {
-      expect(ids(await getMap(a.query({ openNow: 1 })))).toEqual([]);
-      expect(ids(await getMap(a.query({ openNow: 0 })))).toHaveLength(3);
+      expect(ids(await getMap(a.query({ openNow: 1 })))).toEqual(
+        [inHours.id, afterHours.id, mixed.id].sort(),
+      );
+      expect(ids(await getMap(a.query({ openNow: 0 })))).toHaveLength(5);
     });
+    expect(paused.id).toBeTruthy();
   });
 
   it("MAP-01: rejects invalid and too-large boxes; anonymous users allowed, no token 401", async () => {
@@ -409,8 +440,15 @@ describe("GET /v1/map (MAP-01…04)", () => {
 
   it("NFR-04: the map is one D1 statement", async () => {
     const a = area(7);
-    await insertBusiness({ location: a.at(), queues: [{}, {}] });
-    await insertBusiness({ location: a.at(0.01, 0.01) });
+    const open: SeedSnapshot = { isOpen: true, waiting: 1, low: 0, high: 1 };
+    await insertBusiness({
+      location: a.at(),
+      queues: [{ snapshot: open }, {}],
+    });
+    await insertBusiness({
+      location: a.at(0.01, 0.01),
+      queues: [{ snapshot: open }],
+    });
     let prepares = 0;
     const counting = new Proxy(env.DB, {
       get(target, prop) {
