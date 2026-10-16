@@ -1,5 +1,24 @@
 # QPeer Build Progress Notes
 
+## Status and next steps (handoff, 2026-10-16) — read this first in a new session
+
+**Done and merged on `main` (all deployed to the `dev` Worker `https://qpeer-api-dev.qpeer-api.workers.dev`, D1 `qpeer-dev`; `qpeer-demo` D1 migrated to 0004 but the demo Worker is not deployed yet):**
+- Step 0 foundations · Step 1 business (profile, pin, hours, queues, QR) · Step 2 live queue (QueueDO engine, walk-in GPS join, console, ticket, live WebSocket, push alerts) · Step 1/2 fix passes (B1–B4, B7–B10, clock-skew guard) · Step 3 map (`/v1/map`, public stats with 14-day/opt-in rule, joinRadiusM public, dev seed-map; app: live map with clustered wait pills, list view, public business page, owner public-stats switch, dev seed buttons).
+- Verified on a real phone (Samsung A9, Android 10): Steps 0–2 incl. QR join, alerts (background + cold start), leave, offline/reconnect. **Not yet verified on a phone:** clock-skew popup, B10 console layout, all of Step 3 (scripts: "Device test script — Step 3" below, clock check in the Step 2 fixes entry).
+- Tests: API 118, shared 102 (`npm run check`). API `testTimeout` raised to 20 s (slow DO+D1 seed test was flaky at 5 s).
+
+**Next: Step 3.5 — simulated load & correctness test** (agreed with the owner, before payments). Brief ready: `.orch/briefs/step3_5-loadtest.md`. Separate `loadtest` Worker env + `qpeer-loadtest` D1, test-only JWT verifier that works only when `ENVIRONMENT=loadtest`, fake push sender, Node simulator (`scripts/loadtest`) with hundreds of virtual users, invariant checker, ≤ ~15–20k requests per run (Cloudflare free plan ≈ 100k/day). Cloud steps (D1 create, secrets, deploy) are done by the orchestrator, not the subagent.
+
+**Then:**
+1. **Step 4 payments** (Razorpay test mode) — **owner must first create a Razorpay test account** (test key id + key secret + webhook secret; no KYC). Reservations, Priority Pass setting, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is already in the dev build (check whether it needs a config plugin → possible rebuild).
+2. **Step 5 insights + demo data** — analytics + earnings screens, Jammu seed with 4–8 weeks of history, simulator for live demos, deploy the `demo` Worker, reset command.
+3. **Step 6 extras** (if time): Add person + claim code, Priority Pass on console, verified reviews.
+4. **Finish:** one native rebuild batching QR-as-image share/save (view-shot + sharing/media-library) and a storage module (persist battery-tip dismissal, console queue choice, map filters); NFR-11 rate limits; leave-home-by; full demo rehearsal on the `demo` env with the phone.
+
+**Open items:** Priority Pass rules (owner + professor), real fees/split, B11 (watch: process killed once during fast taps), B12 (dev-build Tools gear overlaps header pill — dev only), owner should set the phone to automatic time.
+
+**Working rules:** real work → Opus subagents with a brief in `.orch/briefs/`, one branch per task, I review + run `npm run check`, merge `--no-ff`; agy/opencode only for mechanical tasks. Commits: one line `<type>: <message>`, no body/trailer, no engine names (`COMMIT_GUIDELINES.md`, gitignored). Phone tests via adb over USB + Metro (`adb reverse tcp:8081 tcp:8081`); never `am force-stop` when testing alerts (use `am kill`). Never change phone settings without the owner's OK (they approved toggling airplane mode).
+
 ## Device test procedure: QR join with one phone (owner's instruction, 2026-10-15)
 There is only one test phone, so it plays both roles:
 1. **Business side:** switch the app to Business mode, open the queue → **Show QR code**, take a screenshot with `adb exec-out screencap -p`, crop/save it on the laptop (e.g. `G:\dev\qpeer\.orch\qr\<queue>.png`), and open it full-screen on the laptop display.
