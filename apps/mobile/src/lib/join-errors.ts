@@ -139,6 +139,15 @@ export function joinErrorView(error: unknown): JoinProblem {
         support,
       };
     }
+    case "device_in_queue":
+      // C2 (INC-042): e.g. the app was reinstalled or the data cleared.
+      return {
+        title: "This phone already has a ticket here",
+        message:
+          "A ticket for this queue was taken on this phone, maybe before the app was reinstalled. One free walk-in ticket per phone keeps the queue fair. If you need a second place, ask the staff at the counter.",
+        fix: "none",
+        support,
+      };
     case "not_found":
       return {
         title: "Queue not found",

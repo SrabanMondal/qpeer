@@ -15,14 +15,20 @@ import {
 import { apiFetch } from "@/lib/api/client";
 import { queryKeys } from "@/lib/api/keys";
 import { useAuth } from "@/lib/auth";
+import { deviceHash } from "@/lib/device-id";
+import { saveTicketView } from "@/lib/storage";
 
 const enc = encodeURIComponent;
 
-/** POST /v1/queues/:id/join (JON-04). The location is sent once and never kept. */
+/**
+ * POST /v1/queues/:id/join (JON-04). The location is sent once and never
+ * kept. C2: the device hash (never the raw id) goes with it.
+ */
 export function joinQueue(queueId: string, body: JoinBody) {
+  const hash = deviceHash();
   return apiFetch(`/v1/queues/${enc(queueId)}/join`, TokenView, {
     method: "POST",
-    body,
+    body: hash ? { ...body, deviceHash: hash } : body,
   });
 }
 
@@ -67,6 +73,8 @@ export function mergeToken(
   const key = queryKeys.token(uid, token.id);
   const kept = newerTokenView(queryClient.getQueryData<TokenView>(key), token);
   queryClient.setQueryData(key, kept);
+  // C1: keep the latest view on the phone for offline cold starts.
+  if (uid) void saveTicketView(uid, kept);
   return kept;
 }
 
@@ -86,11 +94,14 @@ export function useToken(id: string) {
   return useQuery({
     queryKey: queryKeys.token(uid, id),
     // A refetch that started before a leave must not undo it.
-    queryFn: async () =>
-      newerTokenView(
+    queryFn: async () => {
+      const kept = newerTokenView(
         queryClient.getQueryData<TokenView>(queryKeys.token(uid, id)),
         await getToken(id),
-      ),
+      );
+      if (uid) void saveTicketView(uid, kept);
+      return kept;
+    },
     enabled: uid !== null && id.length > 0,
     // The live socket keeps it fresh; HTTP refetches on focus/reconnect.
     staleTime: 5_000,
