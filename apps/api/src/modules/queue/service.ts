@@ -151,12 +151,12 @@ export async function getConsole(
 async function loadJoinable(db: Db, queueId: string) {
   const q = await db.select().from(queues).where(eq(queues.id, queueId)).get();
   if (q?.status !== "active") throw notFound();
-  const b = await loadBusiness(db, q.businessId);
-  if (
-    !isListed(b, await loadQueues(db, [b.id])) ||
-    b.lat === null ||
-    b.lng === null
-  ) {
+  // Independent reads: one D1 round trip instead of two (F2).
+  const [b, qs] = await Promise.all([
+    loadBusiness(db, q.businessId),
+    loadQueues(db, [q.businessId]),
+  ]);
+  if (!isListed(b, qs) || b.lat === null || b.lng === null) {
     throw notFound();
   }
   return { queue: q, business: { ...b, lat: b.lat, lng: b.lng } };

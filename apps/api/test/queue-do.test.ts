@@ -488,6 +488,29 @@ describe("QueueDO timers, outbox and persistence", () => {
     expect(await stub.pendingOutbox()).toBe(0);
   });
 
+  it("F2: a burst of joins is batched to D1 and every token row exists when its join returns", async () => {
+    const { stub } = await seedQueue();
+    const joined = await Promise.all(
+      Array.from({ length: 30 }, async () => {
+        const t = await join(stub);
+        // read-your-writes: the Worker's GET /tokens/:id reads D1 first
+        const row = await env.DB.prepare(
+          "SELECT state FROM tokens WHERE id = ?",
+        )
+          .bind(t.id)
+          .first();
+        return { t, row };
+      }),
+    );
+    for (const { row } of joined) expect(row).toEqual({ state: "WAITING" });
+    expect(await stub.pendingOutbox()).toBe(0);
+    // Inline drains leave no near-term alarm behind (F1).
+    const alarm = await runInDurableObject(stub, (_i: QueueDO, state) =>
+      state.storage.getAlarm(),
+    );
+    if (alarm !== null) expect(alarm).toBeGreaterThan(Date.now() + 1_000);
+  });
+
   it("QUE-18/19: after a simulated D1 outage the outbox retries on the alarm and nothing is lost", async () => {
     const { stub, queueId } = await seedQueue();
     outboxFaults.failD1 = 1000;
@@ -676,6 +699,36 @@ describe("QueueDO alerts", () => {
     expect(push.kinds(t[0].id)).not.toContain("head_back"); // head gets "next" instead
   });
 
+  it("F2: close alerts every waiting token once, batched (one dead device removed)", async () => {
+    const { stub } = await seedQueue();
+    const users = Array.from({ length: 30 }, () => crypto.randomUUID());
+    const dead = `ExponentPushToken[dead-${users[5]}]`;
+    for (const u of users) await addDevice(u, `ExponentPushToken[z-${u}]`);
+    await addDevice(users[5], dead);
+    push.dead.add(dead);
+    const t = [];
+    for (const u of users) t.push(await join(stub, u));
+    must(await stub.close());
+    expect(await stub.pendingOutbox()).toBe(0);
+    for (const x of t) {
+      expect(push.kinds(x.id).filter((k) => k === "queue_closed")).toHaveLength(
+        x.id === t[5].id ? 2 : 1, // two devices for users[5]
+      );
+    }
+    const tickets = await env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM push_tickets WHERE kind = 'queue_closed' AND token_id IN (${t.map(() => "?").join(",")})`,
+    )
+      .bind(...t.map((x) => x.id))
+      .first();
+    expect(tickets).toEqual({ n: 30 });
+    const gone = await env.DB.prepare(
+      "SELECT 1 FROM devices WHERE expo_push_token = ?",
+    )
+      .bind(dead)
+      .first();
+    expect(gone).toBeNull();
+  });
+
   it("ALR-02: a DeviceNotRegistered ticket removes the device", async () => {
     const { stub } = await seedQueue();
     const u = crypto.randomUUID();
@@ -753,6 +806,67 @@ describe("QueueDO live updates (QUE-17)", () => {
     await runDurableObjectAlarm(stub);
     const latest = await waitFor(() => messages.length >= 3 && messages[2]);
     if (latest.type === "token") expect(latest.token.peopleAhead).toBe(20);
+    ws.close();
+  });
+
+  it("a held-back far update that is no longer owed doesn't keep re-arming the alarm", async () => {
+    const { stub } = await seedQueue();
+    const t = [];
+    for (let i = 0; i < 24; i++) t.push(await join(stub));
+    const far = t[23];
+    const res = await stub.fetch(`https://queue-do/live?tokenId=${far.id}`, {
+      headers: { Upgrade: "websocket" },
+    });
+    const { ws, messages } = collect(res);
+    await waitFor(() => messages.length >= 1);
+    must(await stub.next(1)); // first far broadcast (due)
+    await waitFor(() => messages.length >= 2);
+    must(await stub.next(1)); // held back → far update pending
+    // The far customer leaves: their socket is updated at once (touched), so
+    // the pending far update is owed to nobody.
+    must(await stub.leave(far.id, null));
+    const left = await waitFor(() =>
+      messages.find((m) => m.type === "token" && m.token.state === "LEFT"),
+    );
+    expect(left).toBeTruthy();
+    await stub.testAdvanceClock(31_000);
+    await runDurableObjectAlarm(stub);
+    const { farState, alarm } = await runInDurableObject(
+      stub,
+      async (_i: QueueDO, state) => ({
+        farState: JSON.parse(
+          state.storage.sql
+            .exec<{ value: string }>("SELECT value FROM meta WHERE key = 'far'")
+            .one().value,
+        ) as { dirty: boolean },
+        alarm: await state.storage.getAlarm(),
+      }),
+    );
+    expect(farState.dirty).toBe(false);
+    // Before the fix the alarm was set ~250 ms ahead, forever.
+    if (alarm !== null) expect(alarm).toBeGreaterThan(Date.now() + 1_000);
+    ws.close();
+  });
+
+  it("F3: grace expiry on the alarm is pushed to the token's socket", async () => {
+    const { stub } = await seedQueue({ settings: { graceMinutes: 1 } });
+    const a = await join(stub);
+    await join(stub);
+    must(await stub.next(1));
+    must(await stub.noShow(a.id));
+    const res = await stub.fetch(`https://queue-do/live?tokenId=${a.id}`, {
+      headers: { Upgrade: "websocket" },
+    });
+    const { ws, messages } = collect(res);
+    const first = await waitFor(() => messages.find((m) => m.type === "token"));
+    if (first.type === "token") expect(first.token.state).toBe("GRACE");
+    await stub.testAdvanceClock(61_000);
+    await runDurableObjectAlarm(stub);
+    const last = await waitFor(() =>
+      messages.find((m) => m.type === "token" && m.token.state === "EXPIRED"),
+    );
+    if (last.type === "token") expect(last.token.endReason).toBe("no_show");
+    expect((await view(stub, a.id)).state).toBe("EXPIRED");
     ws.close();
   });
 });

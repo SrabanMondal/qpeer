@@ -9,6 +9,7 @@ import {
   type AlertPush,
   type PushTransport,
   sendAlert,
+  sendAlerts,
 } from "../modules/notifications/expo-push";
 import type { HourlyCounts, OutboxRow } from "./storage";
 
@@ -78,11 +79,62 @@ export interface OutboxDeps {
   push: PushTransport;
 }
 
+/**
+ * Row items: plain idempotent upserts (token rows, queue snapshots). They are
+ * applied together in one D1 batch, so a burst of N changes costs one D1 round
+ * trip instead of N (Step 3.5 finding F2).
+ */
+export function isRowItem(item: OutboxRow): boolean {
+  return item.kind === "token_upsert" || item.kind === "snapshot";
+}
+
+/**
+ * Applies row items (see `isRowItem`) in one D1 batch, in outbox order. The
+ * batch is one transaction: it applies fully or not at all, and every
+ * statement is idempotent, so the caller retries all items on failure.
+ */
+export async function applyOutboxRows(
+  items: OutboxRow[],
+  deps: OutboxDeps,
+): Promise<void> {
+  if (items.length === 0) return;
+  if (outboxFaults.failD1 > 0) {
+    outboxFaults.failD1--;
+    throw new Error("simulated D1 failure");
+  }
+  const stmts = items.map((item) => {
+    const payload = JSON.parse(item.payload);
+    if (item.kind === "token_upsert") {
+      return upsertTokenStmt(deps.d1, payload as TokenUpsertPayload);
+    }
+    if (item.kind === "snapshot") {
+      return upsertSnapshotStmt(deps.d1, payload as SnapshotPayload);
+    }
+    throw new Error(`not a row item: ${item.kind}`);
+  });
+  await deps.d1.batch(stmts);
+}
+
+/**
+ * Applies push items together (`sendAlerts`: one device lookup, one Expo call).
+ * On failure the caller retries all of them; as with a single push, a failure
+ * after Expo accepted the messages can repeat them (ALR-04 is best effort).
+ */
+export async function applyOutboxPushes(
+  items: OutboxRow[],
+  deps: OutboxDeps,
+  now: number,
+): Promise<void> {
+  const alerts = items.map((i) => JSON.parse(i.payload) as AlertPush);
+  await sendAlerts(deps.d1, deps.push, alerts, now);
+}
+
 export async function applyOutboxItem(
   item: OutboxRow,
   deps: OutboxDeps,
   now: number,
 ): Promise<void> {
+  if (isRowItem(item)) return applyOutboxRows([item], deps);
   if (item.kind !== "push" && outboxFaults.failD1 > 0) {
     outboxFaults.failD1--;
     throw new Error("simulated D1 failure");
@@ -90,9 +142,8 @@ export async function applyOutboxItem(
   const payload = JSON.parse(item.payload);
   switch (item.kind) {
     case "token_upsert":
-      return upsertToken(deps.d1, payload as TokenUpsertPayload);
     case "snapshot":
-      return upsertSnapshot(deps.d1, payload as SnapshotPayload);
+      return;
     case "analytics":
       return addAnalytics(deps.d1, item.id, payload as AnalyticsPayload, now);
     case "strike":
@@ -104,8 +155,8 @@ export async function applyOutboxItem(
 }
 
 /** Upsert by id; only a higher `rev` applies, so a token never moves backwards. */
-async function upsertToken(d1: D1Database, t: TokenUpsertPayload) {
-  await d1
+function upsertTokenStmt(d1: D1Database, t: TokenUpsertPayload) {
+  return d1
     .prepare(
       `INSERT INTO tokens (id, queue_id, session_id, business_id, user_id, number, series, class, method,
          state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev, created_at, updated_at)
@@ -136,13 +187,12 @@ async function upsertToken(d1: D1Database, t: TokenUpsertPayload) {
       t.rev,
       t.at,
       t.at,
-    )
-    .run();
+    );
 }
 
 /** Upsert by queue id with an `updated_at` guard; lat/lng come from the business row. */
-async function upsertSnapshot(d1: D1Database, s: SnapshotPayload) {
-  await d1
+function upsertSnapshotStmt(d1: D1Database, s: SnapshotPayload) {
+  return d1
     .prepare(
       `INSERT INTO queue_snapshots (queue_id, business_id, lat, lng, is_open, is_paused, waiting,
          eta_low_ms, eta_high_ms, now_serving, updated_at)
@@ -164,8 +214,7 @@ async function upsertSnapshot(d1: D1Database, s: SnapshotPayload) {
       s.nowServing,
       s.updatedAt,
       s.businessId,
-    )
-    .run();
+    );
 }
 
 const isDuplicateReceipt = (e: unknown) =>

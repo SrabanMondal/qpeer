@@ -23,7 +23,7 @@ export async function upsertUser(
 
   let user = await byUid();
   if (!user) {
-    await db
+    const [created] = await db
       .insert(users)
       .values({
         id: newId(),
@@ -35,8 +35,10 @@ export async function upsertUser(
         createdAt: new Date(now),
         updatedAt: new Date(now),
       })
-      .onConflictDoNothing({ target: users.firebaseUid });
-    user = await byUid();
+      .onConflictDoNothing({ target: users.firebaseUid })
+      .returning();
+    // A concurrent first request may have won the insert: read theirs.
+    user = created ?? (await byUid());
     if (!user) throw new Error("user upsert failed");
   }
 
