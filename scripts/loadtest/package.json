@@ -1,0 +1,6 @@
+{
+  "name": "@qpeer/loadtest-scripts",
+  "private": true,
+  "description": "Step 3.5 load test (run with Node 24 type stripping; no dependencies)",
+  "type": "module"
+}
