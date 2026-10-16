@@ -148,18 +148,35 @@ describe("marker status and label (MAP-02)", () => {
       anyOpen: true,
     };
     expect(markerStatus(b)).toBe("open");
-    expect(markerLabel(b)).toBe("12 · ~25 min");
+    expect(markerLabel(b, 0)).toBe("12 · ~25 min");
   });
 
   it("open with an unknown wait", () => {
     const b = biz({ id: "a" });
     b.summary = {
-      waiting: 0,
+      waiting: 4,
       waitLowMs: null,
       waitHighMs: null,
       anyOpen: true,
     };
-    expect(markerLabel(b)).toBe("0 waiting");
+    expect(markerLabel(b, 0)).toBe("4 waiting");
+  });
+
+  it("B19: nobody waiting → No wait; someone at the counter → Next in", () => {
+    const b = biz({ id: "a" });
+    b.summary = {
+      waiting: 0,
+      waitLowMs: 2 * MIN,
+      waitHighMs: 8 * MIN,
+      anyOpen: true,
+      inService: 0,
+      updatedAt: 0,
+    };
+    expect(markerLabel(b, 0)).toBe("No wait");
+    b.summary.inService = 1;
+    expect(markerLabel(b, 0)).toBe("Next in ~5 min");
+    // A 2-minute-old snapshot shows the wait as of now.
+    expect(markerLabel(b, 2 * MIN)).toBe("Next in ~3 min");
   });
 
   it("paused when every open queue is paused", () => {
@@ -174,7 +191,7 @@ describe("marker status and label (MAP-02)", () => {
       anyOpen: true,
     };
     expect(markerStatus(b)).toBe("paused");
-    expect(markerLabel(b)).toBe("Paused");
+    expect(markerLabel(b, 0)).toBe("Paused");
   });
 
   it("open when one open queue is not paused", () => {
@@ -194,7 +211,7 @@ describe("marker status and label (MAP-02)", () => {
       anyOpen: false,
     };
     expect(markerStatus(b)).toBe("closed");
-    expect(markerLabel(b)).toBe("Closed");
+    expect(markerLabel(b, 0)).toBe("Closed");
   });
 
   it("short waits", () => {
@@ -207,9 +224,10 @@ describe("marker status and label (MAP-02)", () => {
 
 describe("markerFeatures", () => {
   it("builds [lng, lat] point features with id, label and status", () => {
-    const fc = markerFeatures([
-      biz({ id: "a", location: { lat: 32.1, lng: 74.2 } }),
-    ]);
+    const fc = markerFeatures(
+      [biz({ id: "a", location: { lat: 32.1, lng: 74.2 } })],
+      0,
+    );
     expect(fc.type).toBe("FeatureCollection");
     expect(fc.features).toEqual([
       {

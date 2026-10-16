@@ -34,6 +34,8 @@ export const EndReason = z.enum([
   "left",
   "cancelled",
   "closed",
+  /** C4: the ticket's validity (`ticketValidityMin`) ran out. */
+  "validity",
 ]);
 export type EndReason = z.infer<typeof EndReason>;
 
@@ -63,6 +65,11 @@ export function tokenLabel(series: TokenSeries, number: number): string {
 
 // ---------- requests ----------
 
+/** A device hash: 64 lowercase hex characters (SHA-256). Never the raw id. */
+export const DeviceHash = z
+  .string()
+  .regex(/^[0-9a-f]{64}$/, "Expected SHA-256 hex");
+
 /**
  * POST /v1/queues/:id/join (JON-04). The location is only used for the
  * distance check and is never stored or logged.
@@ -75,6 +82,11 @@ export const JoinBody = z
     accuracyM: z.number().finite().min(0).max(100_000),
     /** True when the OS reports a mock location provider. */
     mocked: z.boolean(),
+    /**
+     * C2 (INC-042): SHA-256 (hex) of the phone's ANDROID_ID plus a fixed app
+     * salt. Optional: older app builds don't send it.
+     */
+    deviceHash: DeviceHash.optional(),
   })
   .strict();
 export type JoinBody = z.infer<typeof JoinBody>;
@@ -102,7 +114,12 @@ export const ExpoPushToken = z
 
 /** POST /v1/me/devices (ALR-02): upsert by push token. */
 export const DeviceBody = z
-  .object({ expoPushToken: ExpoPushToken, platform: DevicePlatform })
+  .object({
+    expoPushToken: ExpoPushToken,
+    platform: DevicePlatform,
+    /** C2: same hash as on joins; optional for older builds. */
+    deviceHash: DeviceHash.optional(),
+  })
   .strict();
 export type DeviceBody = z.infer<typeof DeviceBody>;
 
@@ -151,6 +168,20 @@ export const TokenView = z.object({
    * keep the rev.
    */
   rev: z.number().int(),
+  // Fields added in the fix batch: optional so an app build and a server
+  // build of different ages still parse each other's answers.
+  /** Queue session the number belongs to (signed ticket, C3). */
+  sessionId: z.string().optional(),
+  cls: TokenClass.optional(),
+  /** C4: end of the ticket's validity; null = until the queue closes. */
+  expiresAt: z.number().int().nullable().optional(),
+  /** C4: still valid when the queue closed; kept at the front of the next session. */
+  carriedOver: z.boolean().optional(),
+  /**
+   * C3: compact Ed25519-signed ticket (`ticket.ts`), set on HTTP answers for
+   * active tokens when the server has a signing key; never on socket messages.
+   */
+  signedTicket: z.string().nullable().optional(),
 });
 export type TokenView = z.infer<typeof TokenView>;
 
@@ -166,6 +197,15 @@ export function newerTokenView(
 ): TokenView {
   if (current && current.id === incoming.id && current.rev > incoming.rev) {
     return current;
+  }
+  // Socket views carry no signed ticket: keep the one we already have.
+  if (
+    current &&
+    current.id === incoming.id &&
+    incoming.signedTicket == null &&
+    current.signedTicket
+  ) {
+    return { ...incoming, signedTicket: current.signedTicket };
   }
   return incoming;
 }
@@ -186,6 +226,8 @@ export const TokenSummary = z.object({
   calledAt: z.number().int().nullable(),
   endedAt: z.number().int().nullable(),
   endReason: EndReason.nullable(),
+  /** C4: end of validity; null = until the queue closes. */
+  expiresAt: z.number().int().nullable().optional(),
 });
 export type TokenSummary = z.infer<typeof TokenSummary>;
 
@@ -203,6 +245,8 @@ export const QueueLiveSummary = z.object({
   waitLowMs: z.number().int().nullable(),
   waitHighMs: z.number().int().nullable(),
   updatedAt: z.number().int(),
+  /** Tokens at a counter now (CALLED). B19: "Next in ~N min" vs "No wait". */
+  inService: z.number().int().optional(),
 });
 export type QueueLiveSummary = z.infer<typeof QueueLiveSummary>;
 
@@ -222,6 +266,9 @@ export const ConsoleToken = z.object({
   counter: z.number().int().nullable(),
   graceUntil: z.number().int().nullable(),
   paid: z.boolean(),
+  /** C4: carried over from an earlier session (keeps its number). */
+  carriedOver: z.boolean().optional(),
+  expiresAt: z.number().int().nullable().optional(),
 });
 export type ConsoleToken = z.infer<typeof ConsoleToken>;
 
@@ -256,6 +303,12 @@ export const ConsoleState = z.object({
   undoUntil: z.number().int().nullable(),
   triageLeftToday: z.number().int(),
   updatedAt: z.number().int(),
+  /**
+   * B20: when the open session closes by itself (30 min after the day's last
+   * hours range, or later after "Keep open"); null while closed or when the
+   * hours are not known yet. The console warns 15 min before.
+   */
+  autoCloseAt: z.number().int().nullable().optional(),
 });
 export type ConsoleState = z.infer<typeof ConsoleState>;
 

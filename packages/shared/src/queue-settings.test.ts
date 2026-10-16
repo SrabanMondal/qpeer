@@ -4,6 +4,8 @@ import {
   QUEUE_SETTINGS_DEFAULTS,
   QueueSettings,
   QueueSettingsPatch,
+  TICKET_VALIDITY_PRESETS_MIN,
+  ticketValidityLabel,
 } from "./queue-settings";
 
 describe("QueueSettings", () => {
@@ -22,8 +24,28 @@ describe("QueueSettings", () => {
       serviceMinutesHint: 5,
       triageDailyCap: 5,
       paidPerUserCap: 2,
+      ticketValidityMin: 0,
     });
     expect(defaultQueueSettings()).toEqual(QUEUE_SETTINGS_DEFAULTS);
+  });
+
+  it("C4: ticket validity is 0 (until close) to 7 days; every preset is allowed", () => {
+    expect(QueueSettings.safeParse({ ticketValidityMin: 10_081 }).success).toBe(
+      false,
+    );
+    expect(QueueSettings.safeParse({ ticketValidityMin: -1 }).success).toBe(
+      false,
+    );
+    for (const m of TICKET_VALIDITY_PRESETS_MIN) {
+      expect(
+        QueueSettingsPatch.safeParse({ ticketValidityMin: m }).success,
+      ).toBe(true);
+    }
+    expect(ticketValidityLabel(0)).toBe("Until the queue closes");
+    expect(ticketValidityLabel(60)).toBe("1 h");
+    expect(ticketValidityLabel(1440)).toBe("1 day");
+    expect(ticketValidityLabel(10080)).toBe("7 days");
+    expect(ticketValidityLabel(90)).toBe("90 min");
   });
 
   it("fills missing fields with defaults", () => {

@@ -45,4 +45,12 @@ describe("newerTokenView (Step 3.5 H1)", () => {
     expect(newerTokenView(cur, called)).toBe(called);
     expect(newerTokenView(undefined, cur)).toBe(cur);
   });
+
+  it("C3: a socket view without a signed ticket keeps the known ticket", () => {
+    const http = view({ rev: 1, signedTicket: "QPT1.a.b" });
+    const socket = view({ peopleAhead: 1, rev: 1 });
+    const kept = newerTokenView(http, socket);
+    expect(kept.peopleAhead).toBe(1);
+    expect(kept.signedTicket).toBe("QPT1.a.b");
+  });
 });

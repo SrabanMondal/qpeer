@@ -202,6 +202,9 @@ export const QueueInfoResponse = z.object({
     location: LatLng.nullable(),
     status: BusinessStatus,
     listed: z.boolean(),
+    /** B16: inside today's hours (IST) right now; information only. */
+    isOpenNow: z.boolean().optional(),
+    todayHours: TodayHours.optional(),
   }),
   myRole: BusinessRole.nullable(),
   live: QueueLiveSummary,

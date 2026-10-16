@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  autoCloseAt,
   DayHours,
   defaultWeeklyHours,
   HoursRange,
   isOpenAt,
+  istDayStart,
   istLocalTime,
   todayHours,
   WeeklyHours,
@@ -177,5 +179,56 @@ describe("WeeklyHours", () => {
 
     const bad = { ...defaultWeeklyHours(), tue: [{ from: "x", to: "10:00" }] };
     expect(issuePaths(WeeklyHours.safeParse(bad))).toEqual(["tue.0.from"]);
+  });
+});
+
+describe("autoCloseAt (B20, INC-047)", () => {
+  const hours: WeeklyHours = {
+    ...defaultWeeklyHours(),
+    mon: [
+      { from: "09:00", to: "13:00" },
+      { from: "17:00", to: "21:00" },
+    ],
+    sun: [],
+  };
+
+  it("30 min after the day's last range, even when opened in the first", () => {
+    expect(autoCloseAt(hours, ist(2026, 10, 12, 9, 5))).toBe(
+      ist(2026, 10, 12, 21, 30),
+    );
+  });
+
+  it("opened between ranges still closes after the last one", () => {
+    expect(autoCloseAt(hours, ist(2026, 10, 12, 14, 0))).toBe(
+      ist(2026, 10, 12, 21, 30),
+    );
+  });
+
+  it("opened after the last range: 23:59 IST of that day", () => {
+    expect(autoCloseAt(hours, ist(2026, 10, 12, 22, 0))).toBe(
+      ist(2026, 10, 12, 23, 59),
+    );
+  });
+
+  it("opened on a closed day: 23:59 IST", () => {
+    expect(autoCloseAt(hours, ist(2026, 10, 18, 10, 0))).toBe(
+      ist(2026, 10, 18, 23, 59),
+    );
+  });
+
+  it("never sooner than 30 min after opening", () => {
+    expect(autoCloseAt(hours, ist(2026, 10, 12, 21, 20))).toBe(
+      ist(2026, 10, 12, 21, 50),
+    );
+    expect(autoCloseAt(hours, ist(2026, 10, 12, 23, 50))).toBe(
+      ist(2026, 10, 13, 0, 20),
+    );
+  });
+
+  it("istDayStart is IST midnight", () => {
+    expect(istDayStart(ist(2026, 10, 12, 0, 0))).toBe(ist(2026, 10, 12, 0, 0));
+    expect(istDayStart(ist(2026, 10, 12, 23, 59))).toBe(
+      ist(2026, 10, 12, 0, 0),
+    );
   });
 });

@@ -1,13 +1,12 @@
 import type { BusinessCategory, BusinessStats } from "./business";
 import { distanceMeters, type LatLng } from "./geo";
+import { approxDuration, type WaitInputs, waitSummary } from "./live-text";
 import { MAP_MAX_BOX_DEG, type MapBusiness } from "./map";
 
 /**
  * Pure helpers for the app's map and list (MAP-01…05). No React Native
  * imports, so they are unit-tested here with Vitest.
  */
-
-const MINUTE_MS = 60_000;
 
 /** A lat/lng bounding box, as `GET /v1/map` takes it. */
 export type MapBox = {
@@ -114,30 +113,33 @@ export function shortWait(
   highMs: number | null,
 ): string | null {
   if (lowMs === null || highMs === null) return null;
-  const mid = Math.round(
-    (Math.max(0, lowMs) + Math.max(0, highMs)) / 2 / MINUTE_MS,
-  );
-  if (mid <= 0) return "< 1 min";
-  if (mid < 60) return `~${mid} min`;
-  const h = Math.floor(mid / 60);
-  const m = mid % 60;
-  return m === 0 ? `~${h} h` : `~${h} h ${m} min`;
+  return approxDuration(lowMs, highMs);
+}
+
+/** The business summary as `WaitInputs` (B19: one helper for every surface). */
+export function summaryWait(b: Pick<MapBusiness, "summary">): WaitInputs {
+  return {
+    waiting: b.summary.waiting,
+    inService: b.summary.inService,
+    waitLowMs: b.summary.waitLowMs,
+    waitHighMs: b.summary.waitHighMs,
+    updatedAt: b.summary.updatedAt,
+  };
 }
 
 /**
- * Marker pill text (design guide `MapPill`): "12 · ~25 min" when open with a
- * known wait, "12 waiting" while the wait is still unknown, "Paused", "Closed".
+ * Marker pill text (design guide `MapPill`), the compact `waitSummary`:
+ * "No wait", "Next in ~5 min", "12 · ~25 min", "12 waiting" while the wait
+ * is unknown; "Paused", "Closed".
  */
 export function markerLabel(
   b: Pick<MapBusiness, "queues" | "summary">,
+  now: number,
 ): string {
   const status = markerStatus(b);
   if (status === "closed") return "Closed";
   if (status === "paused") return "Paused";
-  const wait = shortWait(b.summary.waitLowMs, b.summary.waitHighMs);
-  return wait
-    ? `${b.summary.waiting} · ${wait}`
-    : `${b.summary.waiting} waiting`;
+  return waitSummary(summaryWait(b), now, true);
 }
 
 // ---------- GeoJSON ----------
@@ -163,6 +165,7 @@ export type MarkerFeatureCollection = {
 /** One point feature per business, `[lng, lat]`, for a clustered Mapbox `ShapeSource`. */
 export function markerFeatures(
   items: readonly MapBusiness[],
+  now: number,
 ): MarkerFeatureCollection {
   return {
     type: "FeatureCollection",
@@ -173,7 +176,11 @@ export function markerFeatures(
         type: "Point",
         coordinates: [b.location.lng, b.location.lat],
       },
-      properties: { id: b.id, label: markerLabel(b), status: markerStatus(b) },
+      properties: {
+        id: b.id,
+        label: markerLabel(b, now),
+        status: markerStatus(b),
+      },
     })),
   };
 }
