@@ -1,6 +1,11 @@
 import { z } from "zod";
 import { LatLng } from "./geo";
-import { defaultWeeklyHours, WeeklyHours } from "./hours";
+import {
+  DayHours,
+  defaultWeeklyHours,
+  WeekdaySchema,
+  WeeklyHours,
+} from "./hours";
 import { QueueLiveSummary } from "./queue";
 import { QueueSettings, QueueSettingsPatch } from "./queue-settings";
 
@@ -59,6 +64,8 @@ export const UpdateBusinessBody = z
     phone: Phone.nullable(),
     location: LatLng,
     hours: WeeklyHours,
+    /** MAP-06: show public stats before the business has been listed for 14 days. */
+    publicStats: z.boolean(),
   })
   .partial()
   .strict()
@@ -113,6 +120,40 @@ export const QueueView = z.object({
 
 export type QueueView = z.infer<typeof QueueView>;
 
+/** Days of `analytics_hourly` behind the public stats (MAP-05). */
+export const STATS_WINDOW_DAYS = 28;
+/** A stat is null until it has at least this many samples. */
+export const STATS_MIN_SAMPLES = 20;
+/** Non-members see stats once the business has been listed this long, or earlier if the owner opts in (MAP-06). */
+export const STATS_PUBLIC_AFTER_DAYS = 14;
+
+/**
+ * Public stats over the last 28 days (MAP-05), summed over the business's
+ * queues. Each average is null with fewer than 20 samples behind it.
+ */
+export const BusinessStats = z.object({
+  windowDays: z.number().int(),
+  /** Tokens served in the window (always a count, even when small). */
+  servedCount: z.number().int(),
+  /** Average wait from joining to being called. */
+  avgWaitMs: z.number().int().nullable(),
+  /** Average time between calls (the service interval). */
+  avgServiceMs: z.number().int().nullable(),
+  /** Share of calls that happened inside the predicted wait range, 0–100. */
+  etaAccuracyPct: z.number().int().nullable(),
+});
+
+export type BusinessStats = z.infer<typeof BusinessStats>;
+
+/** Today's opening hours in IST, with display text ("9:00 AM – 6:00 PM" / "Closed today"). */
+export const TodayHours = z.object({
+  day: WeekdaySchema,
+  ranges: DayHours,
+  text: z.string(),
+});
+
+export type TodayHours = z.infer<typeof TodayHours>;
+
 export const BusinessView = z.object({
   id: z.string(),
   name: z.string(),
@@ -121,10 +162,20 @@ export const BusinessView = z.object({
   phone: z.string().nullable(),
   location: LatLng.nullable(),
   hours: WeeklyHours,
+  /** From `hours`, in Asia/Kolkata, at response time. */
+  isOpenNow: z.boolean(),
+  todayHours: TodayHours,
   status: BusinessStatus,
   listed: z.boolean(),
   /** Owner view only. */
   missingForListing: z.array(ListingRequirement).optional(),
+  /** Members only: the owner's MAP-06 opt-in. */
+  publicStats: z.boolean().optional(),
+  /**
+   * `GET /v1/businesses/:id` only (MAP-05/06). Null for non-members until the
+   * business has been listed for 14 days, unless the owner opted in.
+   */
+  stats: BusinessStats.nullable().optional(),
   myRole: BusinessRole.nullable(),
   /** Members see every queue; others see active queues only. */
   queues: z.array(QueueView),
@@ -154,6 +205,8 @@ export const QueueInfoResponse = z.object({
   }),
   myRole: BusinessRole.nullable(),
   live: QueueLiveSummary,
+  /** Walk-in GPS radius; the only queue setting shown to non-members. */
+  joinRadiusM: z.number().int(),
 });
 
 export type QueueInfoResponse = z.infer<typeof QueueInfoResponse>;

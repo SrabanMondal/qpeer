@@ -54,6 +54,15 @@ export const businesses = sqliteTable(
       .$type<WeeklyHours>()
       .notNull(),
     status: text("status", { enum: ["active", "inactive"] }).notNull(),
+    /** MAP-06: owner opt-in to show public stats before 14 days of listing. */
+    publicStats: integer("public_stats", { mode: "boolean" })
+      .notNull()
+      .default(false),
+    /**
+     * First time the business became listed (BIZ-07); never cleared, so a short
+     * deactivation doesn't restart the MAP-06 14-day clock. Null = never listed.
+     */
+    firstListedAt: ms("first_listed_at"),
     createdAt: ms("created_at").notNull(),
     updatedAt: ms("updated_at").notNull(),
   },

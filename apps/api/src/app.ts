@@ -8,6 +8,7 @@ import { requestContext } from "./middleware/request-context";
 import { businessRoutes } from "./modules/business/routes";
 import { devRoutes } from "./modules/dev/routes";
 import { identityRoutes } from "./modules/identity/routes";
+import { mapRoutes } from "./modules/map/routes";
 import { notificationRoutes } from "./modules/notifications/routes";
 import { queueRoutes } from "./modules/queue/routes";
 
@@ -45,6 +46,7 @@ export function createApp(deps?: AppDeps) {
   app.use("/v1/*", authMiddleware(deps?.verifier));
   app.route("/v1", identityRoutes);
   app.route("/v1", businessRoutes);
+  app.route("/v1", mapRoutes);
   app.route("/v1", queueRoutes);
   app.route("/v1", notificationRoutes);
   app.route("/v1", devRoutes);

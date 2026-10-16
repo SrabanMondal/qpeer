@@ -1,20 +1,27 @@
 import {
   type BusinessRole,
+  type BusinessStats,
   type BusinessView,
   type CreateBusinessBody,
   type CreateQueueBody,
+  isOpenAt,
   type ListingRequirement,
   type QueueInfoResponse,
   type QueueLiveSummary,
   QueueSettings,
   type QueueView,
   queueJoinUrl,
+  STATS_MIN_SAMPLES,
+  STATS_PUBLIC_AFTER_DAYS,
+  STATS_WINDOW_DAYS,
+  todayHours,
   type UpdateBusinessBody,
   type UpdateQueueBody,
 } from "@qpeer/shared";
-import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import {
+  analyticsHourly,
   type Business,
   businesses,
   businessMembers,
@@ -27,7 +34,7 @@ import type { Bindings } from "../../env";
 import { AppError, notFound } from "../../lib/errors";
 import { geohash } from "../../lib/geo";
 import { newId } from "../../lib/ids";
-import { toMs } from "../../lib/time";
+import { DAY_MS, toMs } from "../../lib/time";
 import { findRole } from "../../middleware/guards";
 import { queueStub, unwrap } from "../queue/do-client";
 
@@ -111,6 +118,7 @@ function businessView(
   qs: Queue[],
   role: BusinessRole | null,
   snapshots: Map<string, QueueLiveSummary>,
+  now: number,
 ): BusinessView {
   const visibleQueues = role ? qs : qs.filter((q) => q.status === "active");
   const view: BusinessView = {
@@ -121,6 +129,8 @@ function businessView(
     phone: b.phone,
     location: location(b),
     hours: b.hoursJson,
+    isOpenNow: isOpenAt(b.hoursJson, now),
+    todayHours: todayHours(b.hoursJson, now),
     status: b.status,
     listed: isListed(b, qs),
     myRole: role,
@@ -131,7 +141,93 @@ function businessView(
     updatedAt: toMs(b.updatedAt),
   };
   if (role === "owner") view.missingForListing = missingForListing(b, qs);
+  if (role) view.publicStats = b.publicStats;
   return view;
+}
+
+/**
+ * Sets `first_listed_at` the first time the business is listed (BIZ-07 rule in
+ * SQL). Call after anything that can make a business listed: pin set, queue
+ * created, activation. Never cleared (MAP-06 clock).
+ */
+async function markFirstListed(
+  db: Db,
+  businessId: string,
+  now: number,
+): Promise<void> {
+  await db.run(sql`
+    UPDATE ${businesses} SET first_listed_at = ${now}
+    WHERE id = ${businessId} AND first_listed_at IS NULL
+      AND status = 'active' AND lat IS NOT NULL AND lng IS NOT NULL
+      AND EXISTS (
+        SELECT 1 FROM ${queues} q
+        WHERE q.business_id = ${businessId} AND q.status = 'active'
+      )
+  `);
+}
+
+/** MAP-06: non-members see stats after 14 days listed, or when the owner opted in. */
+export function statsVisible(
+  b: Business,
+  role: BusinessRole | null,
+  now: number,
+): boolean {
+  if (role) return true;
+  if (b.publicStats) return true;
+  return (
+    b.firstListedAt !== null &&
+    now - toMs(b.firstListedAt) >= STATS_PUBLIC_AFTER_DAYS * DAY_MS
+  );
+}
+
+const avgOrNull = (sum: number, n: number) =>
+  n >= STATS_MIN_SAMPLES ? Math.round(sum / n) : null;
+
+/**
+ * MAP-05: public stats from `analytics_hourly` over the last 28 days, one
+ * aggregate query on idx(business_id, hour_start).
+ */
+export async function businessStats(
+  db: Db,
+  businessId: string,
+  now: number,
+): Promise<BusinessStats> {
+  const since = now - STATS_WINDOW_DAYS * DAY_MS;
+  const row = await db
+    .select({
+      served: sql<number>`COALESCE(SUM(${analyticsHourly.served}), 0)`,
+      sumWaitMs: sql<number>`COALESCE(SUM(${analyticsHourly.sumWaitMs}), 0)`,
+      waits: sql<number>`COALESCE(SUM(${analyticsHourly.waits}), 0)`,
+      sumIntervalMs: sql<number>`COALESCE(SUM(${analyticsHourly.sumIntervalMs}), 0)`,
+      intervals: sql<number>`COALESCE(SUM(${analyticsHourly.intervals}), 0)`,
+      etaHits: sql<number>`COALESCE(SUM(${analyticsHourly.etaHits}), 0)`,
+      etaTotal: sql<number>`COALESCE(SUM(${analyticsHourly.etaTotal}), 0)`,
+    })
+    .from(analyticsHourly)
+    .where(
+      and(
+        eq(analyticsHourly.businessId, businessId),
+        gte(analyticsHourly.hourStart, since),
+      ),
+    )
+    .get();
+  const r = row ?? {
+    served: 0,
+    sumWaitMs: 0,
+    waits: 0,
+    sumIntervalMs: 0,
+    intervals: 0,
+    etaHits: 0,
+    etaTotal: 0,
+  };
+  const eta = avgOrNull(r.etaHits * 100, r.etaTotal);
+  return {
+    windowDays: STATS_WINDOW_DAYS,
+    servedCount: r.served,
+    avgWaitMs: avgOrNull(r.sumWaitMs, r.waits),
+    avgServiceMs: avgOrNull(r.sumIntervalMs, r.intervals),
+    etaAccuracyPct: eta,
+  };
 }
 
 export async function loadQueues(
@@ -164,6 +260,7 @@ async function viewFor(
   db: Db,
   businessId: string,
   role: BusinessRole | null,
+  now: number,
 ): Promise<BusinessView> {
   const b = await loadBusiness(db, businessId);
   const qs = await loadQueues(db, [b.id]);
@@ -175,6 +272,7 @@ async function viewFor(
       db,
       qs.map((q) => q.id),
     ),
+    now,
   );
 }
 
@@ -212,13 +310,14 @@ export async function createBusiness(
       updatedAt: at,
     }),
   ]);
-  return viewFor(db, id, "owner");
+  return viewFor(db, id, "owner", now);
 }
 
 /** BIZ-09/BIZ-15: businesses the user is a member of, with role and queues. */
 export async function listMyBusinesses(
   db: Db,
   userId: string,
+  now: number,
 ): Promise<BusinessView[]> {
   const rows = await db
     .select({ business: businesses, role: businessMembers.role })
@@ -241,15 +340,20 @@ export async function listMyBusinesses(
       qs.filter((q) => q.businessId === r.business.id),
       r.role,
       snaps,
+      now,
     ),
   );
 }
 
-/** Members see the full view; others only a listed business (else 404). */
+/**
+ * Members see the full view; others only a listed business (else 404). Adds
+ * the MAP-05 stats, hidden from non-members by the MAP-06 rule.
+ */
 export async function getBusinessForViewer(
   db: Db,
   businessId: string,
   userId: string,
+  now: number,
 ): Promise<BusinessView> {
   const b = await db
     .select()
@@ -259,6 +363,7 @@ export async function getBusinessForViewer(
   if (!b) throw notFound();
   const role = await findRole(db, b.id, userId);
   const qs = await loadQueues(db, [b.id]);
+  if (!role && !isListed(b, qs)) throw notFound();
   const view = businessView(
     b,
     qs,
@@ -267,8 +372,11 @@ export async function getBusinessForViewer(
       db,
       qs.map((q) => q.id),
     ),
+    now,
   );
-  if (!role && !view.listed) throw notFound();
+  view.stats = statsVisible(b, role, now)
+    ? await businessStats(db, b.id, now)
+    : null;
   return view;
 }
 
@@ -286,6 +394,7 @@ export async function updateBusiness(
   if (patch.address !== undefined) set.address = patch.address;
   if (patch.phone !== undefined) set.phone = patch.phone;
   if (patch.hours !== undefined) set.hoursJson = patch.hours;
+  if (patch.publicStats !== undefined) set.publicStats = patch.publicStats;
   if (patch.location !== undefined) {
     set.lat = patch.location.lat;
     set.lng = patch.location.lng;
@@ -303,13 +412,14 @@ export async function updateBusiness(
       .update(queueSnapshots)
       .set({ lat: patch.location.lat, lng: patch.location.lng })
       .where(eq(queueSnapshots.businessId, businessId));
+    await markFirstListed(db, businessId, now);
   }
   if (patch.name !== undefined) {
     for (const q of await loadQueues(db, [businessId])) {
       await queueStub(env, q.id).setLabels({ businessName: patch.name });
     }
   }
-  return viewFor(db, businessId, "owner");
+  return viewFor(db, businessId, "owner", now);
 }
 
 /**
@@ -335,8 +445,10 @@ export async function setBusinessStatus(
       // TODO(Step 4): refund `paidTokens` returned by close().
       unwrap(await queueStub(env, q.id).close());
     }
+  } else {
+    await markFirstListed(db, businessId, now);
   }
-  return viewFor(db, businessId, "owner");
+  return viewFor(db, businessId, "owner", now);
 }
 
 // ---------- queues ----------
@@ -366,6 +478,7 @@ export async function createQueue(
       `A business can have at most ${MAX_ACTIVE_QUEUES} active queues`,
     );
   }
+  await markFirstListed(db, businessId, now);
   const q = await loadQueue(db, id);
   await initQueueDO(db, env, q);
   return queueView(q, "owner");
@@ -507,5 +620,8 @@ export async function getQueueInfo(
     },
     myRole: role,
     live: await queueStub(env, q.id).getSummary(),
+    // Deferred from Step 2: the join screen shows the walk-in radius to everyone.
+    // Only this one setting is public (fees and the rest stay members-only).
+    joinRadiusM: QueueSettings.parse(q.settingsJson).joinRadiusM,
   };
 }

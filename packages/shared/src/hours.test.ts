@@ -1,5 +1,81 @@
 import { describe, expect, it } from "vitest";
-import { DayHours, defaultWeeklyHours, HoursRange, WeeklyHours } from "./hours";
+import {
+  DayHours,
+  defaultWeeklyHours,
+  HoursRange,
+  isOpenAt,
+  istLocalTime,
+  todayHours,
+  WeeklyHours,
+} from "./hours";
+
+/** Epoch ms of an IST wall-clock time (UTC+05:30). Month is 1-based. */
+function ist(y: number, mo: number, d: number, h: number, mi: number): number {
+  return Date.UTC(y, mo - 1, d, h, mi) - 5.5 * 3_600_000;
+}
+
+// 2026-10-12 is a Monday, 2026-10-18 a Sunday.
+describe("isOpenAt (MAP-04 open now, Asia/Kolkata)", () => {
+  const hours: WeeklyHours = {
+    ...defaultWeeklyHours(),
+    mon: [
+      { from: "09:00", to: "13:00" },
+      { from: "17:00", to: "21:00" },
+    ],
+    sat: [{ from: "00:00", to: "23:59" }],
+    sun: [],
+  };
+
+  it("istLocalTime converts UTC to IST day and time", () => {
+    // 18:30 UTC Sunday = 00:00 IST Monday
+    expect(istLocalTime(Date.UTC(2026, 9, 11, 18, 30))).toEqual({
+      day: "mon",
+      time: "00:00",
+    });
+    expect(istLocalTime(ist(2026, 10, 12, 9, 5))).toEqual({
+      day: "mon",
+      time: "09:05",
+    });
+  });
+
+  it("multiple ranges: open inside each, closed in the gap", () => {
+    expect(isOpenAt(hours, ist(2026, 10, 12, 10, 0))).toBe(true);
+    expect(isOpenAt(hours, ist(2026, 10, 12, 15, 0))).toBe(false);
+    expect(isOpenAt(hours, ist(2026, 10, 12, 18, 30))).toBe(true);
+    expect(isOpenAt(hours, ist(2026, 10, 12, 22, 0))).toBe(false);
+  });
+
+  it("edges: start minute is open, end minute is closed", () => {
+    expect(isOpenAt(hours, ist(2026, 10, 12, 8, 59))).toBe(false);
+    expect(isOpenAt(hours, ist(2026, 10, 12, 9, 0))).toBe(true);
+    expect(isOpenAt(hours, ist(2026, 10, 12, 12, 59))).toBe(true);
+    expect(isOpenAt(hours, ist(2026, 10, 12, 13, 0))).toBe(false);
+  });
+
+  it("closed day is never open", () => {
+    expect(isOpenAt(hours, ist(2026, 10, 18, 10, 0))).toBe(false);
+  });
+
+  it("midnight boundary: Saturday's all-day range ends, Sunday (closed) begins", () => {
+    expect(isOpenAt(hours, ist(2026, 10, 17, 23, 58))).toBe(true);
+    expect(isOpenAt(hours, ist(2026, 10, 17, 23, 59))).toBe(false);
+    expect(isOpenAt(hours, ist(2026, 10, 18, 0, 0))).toBe(false);
+    // Saturday 00:00 IST is Friday 18:30 UTC: the UTC day must not be used.
+    expect(isOpenAt(hours, Date.UTC(2026, 9, 16, 18, 30))).toBe(true);
+    expect(isOpenAt(hours, Date.UTC(2026, 9, 16, 18, 29))).toBe(false); // Fri 23:59 IST
+  });
+
+  it("todayHours gives the IST day's ranges and 12-hour text", () => {
+    expect(todayHours(hours, ist(2026, 10, 12, 1, 0))).toEqual({
+      day: "mon",
+      ranges: hours.mon,
+      text: "9:00 AM – 1:00 PM, 5:00 PM – 9:00 PM",
+    });
+    expect(todayHours(hours, ist(2026, 10, 18, 12, 0)).text).toBe(
+      "Closed today",
+    );
+  });
+});
 
 function issuePaths(result: { success: boolean; error?: unknown }): string[] {
   if (result.success) return [];
