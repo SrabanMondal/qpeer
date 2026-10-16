@@ -7,11 +7,12 @@
   ],
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm run test",
-    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/loadtest",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/loadtest && tsc -p scripts/ticket-keys",
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "npm run test --workspaces --if-present",
     "loadtest:gen-key": "node scripts/loadtest/gen-key.ts",
+    "ticket-keys:gen": "node scripts/ticket-keys/gen-key.ts",
     "loadtest:baseline": "node scripts/loadtest/run.ts --preset baseline --notes",
     "loadtest:full": "node scripts/loadtest/run.ts --preset full --notes",
     "loadtest:reset": "node scripts/loadtest/reset.ts",
