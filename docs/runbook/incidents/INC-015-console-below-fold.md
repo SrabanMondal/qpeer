@@ -5,7 +5,7 @@
 | Date found | 2026-10-15 |
 | Severity | S3 |
 | Area | mobile |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B10 |
 
 ## Summary
@@ -34,11 +34,11 @@ Commit 500d79f (branch `fix/clock-console`, merge 13806ab) changed `apps/mobile/
 
 ## Verification
 
-Not yet checked on a phone.
+Device check on 2026-10-16 (Samsung A9, Android 10): the console showed the status card, Now Serving, the Called card with Served and No-show, and NEXT above the fold without a scroll. The Undo bar did not show because no Next was pressed in the last 30 seconds.
 
 ## Follow-ups
 
-Open the console on the Samsung Galaxy A9 and make sure that Undo and the Called list show without a scroll.
+None.
 
 ## Lessons
 
