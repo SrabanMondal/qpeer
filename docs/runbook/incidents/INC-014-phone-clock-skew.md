@@ -5,7 +5,7 @@
 | Date found | 2026-10-15 |
 | Severity | S2 |
 | Area | mobile |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | B9 |
 
 ## Summary
@@ -39,12 +39,17 @@ Commit 500d79f on branch `fix/clock-console`, merged in 13806ab on 2026-10-16:
 
 ## Verification
 
-Unit tests in `packages/shared/src/clock.test.ts` and `apps/api/test/api.test.ts`. The popup is not yet checked on a phone.
+Unit tests in `packages/shared/src/clock.test.ts` and `apps/api/test/api.test.ts`.
+
+Device check on 2026-10-16 (Samsung A9, Android 10, phone clock 691 s fast, automatic time off):
+
+1. The app opened with the popup "Your phone's clock is about 12 minutes ahead."
+2. "Open date & time settings" opened `DateTimeSettingsActivity` directly.
+3. The owner turned on automatic time and went back to the app. The popup closed without a tap. The phone clock then matched the laptop clock to the second.
 
 ## Follow-ups
 
-1. Run the clock check from the Step 2 fixes entry in `NOTES.md` on the phone.
-2. The owner sets the phone to automatic time.
+None.
 
 ## Lessons
 

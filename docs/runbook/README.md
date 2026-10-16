@@ -61,7 +61,7 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-011 | 2026-10-15 | Invalid hours save did not scroll to the bad day | S3 | mobile | fixed | B7 | [file](incidents/INC-011-invalid-hours-no-scroll.md) |
 | INC-012 | 2026-10-15 | Leaving a form discarded unsaved edits | S2 | mobile | fixed | B8 | [file](incidents/INC-012-unsaved-edits-lost.md) |
 | INC-013 | 2026-10-15 | `am force-stop` blocked alert delivery during tests | S4 | process | benign | Step 2 device-check note | [file](incidents/INC-013-force-stop-blocks-alerts.md) |
-| INC-014 | 2026-10-15 | Fast phone clock broke countdowns | S2 | mobile | fixed-unverified-on-device | B9 | [file](incidents/INC-014-phone-clock-skew.md) |
+| INC-014 | 2026-10-15 | Fast phone clock broke countdowns | S2 | mobile | fixed | B9 | [file](incidents/INC-014-phone-clock-skew.md) |
 | INC-015 | 2026-10-15 | Console Undo bar and lists below the fold | S3 | mobile | fixed-unverified-on-device | B10 | [file](incidents/INC-015-console-below-fold.md) |
 | INC-016 | 2026-10-15 | App process killed after quick taps | S2 | mobile | watch | B11 | [file](incidents/INC-016-process-killed-quick-taps.md) |
 | INC-017 | 2026-10-15 | Dev-build "Tools" gear overlaps the header pill | S4 | mobile | open | B12 | [file](incidents/INC-017-dev-tools-gear-overlaps-pill.md) |
@@ -87,6 +87,9 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-037 | unknown | `expo install` failed with EALLOWSCRIPTS | S4 | tooling | fixed | none | [file](incidents/INC-037-npm-eallowscripts.md) |
 | INC-038 | unknown | Metro kept running after its task stopped | S4 | tooling | fixed | none | [file](incidents/INC-038-metro-kept-running.md) |
 | INC-039 | unknown | Chained adb taps nearly hit Deactivate | S4 | process | fixed | none | [file](incidents/INC-039-adb-tap-drift.md) |
+| INC-040 | 2026-10-16 | Offline experience was inconsistent and the map had no fallback | S2 | mobile | open | B13 | [file](incidents/INC-040-offline-experience-inconsistent.md) |
+| INC-041 | 2026-10-16 | The app did not handle a failed map load | S3 | mobile | open | B14 | [file](incidents/INC-041-raw-mapbox-error.md) |
+| INC-042 | 2026-10-16 | A reinstall can get a second free ticket in the same queue | S3 | api | open | B15 | [file](incidents/INC-042-reinstall-second-free-ticket.md) |
 
 ## Load-test runs
 
