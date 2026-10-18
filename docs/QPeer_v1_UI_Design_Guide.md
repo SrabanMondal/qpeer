@@ -112,7 +112,7 @@ Same look as the rest of the app: white cards, big numbers, one strong action pe
 | Skip-ahead card | Ticket screen, WAITING regular ticket | `Card`: "Skip ahead for ₹X · about N min faster", `brand` button. **Hidden when the saving is under 5 min**; never show "save ~0 min". |
 | Grace countdown | Ticket screen, GRACE | Large `warning`-tinted card at the top: **"Come now — m:ss left"** in `display` size, counting down every second on the server-corrected clock. Under it: "Counter N". This card is the hero of the screen while in GRACE. |
 | MISSED screen | Ticket screen, MISSED | Header "You missed your turn". Body "When you're here, tap I'm here to rejoin." One large `brand` button **"I'm here"** (runs the location check; clear errors for too far / fake location). After the one rejoin the button is gone. If the late window has passed, add the line "You'll rejoin at the end of the line." |
-| Check code | Ticket screen, under the number (R2, proposed) | Under the `NumberBadge`: "#14 · K7P2" in `label` style, letter-spaced, `inkMuted`. Staff ask for it at the counter when the phone is dead. |
+| Check code | Ticket screen, under the number (R2, decided 2026-10-18) | Under the `NumberBadge`: "#14 · K7P2" in `label` style, letter-spaced, `inkMuted`. Staff ask for it at the counter when the phone is dead. |
 
 ## 6. Writing style in the UI
 

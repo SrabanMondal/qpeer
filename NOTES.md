@@ -22,7 +22,7 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 ## Plan
 1. **Fix batch + rebuild** (`feat/fix-batch-rebuild`): merge, migrate, secret, deploy, rebuild, device check (see Status). Design in architecture doc §9.1, §23 "Decided in the fix batch".
 2. **Step 4 payments** (Razorpay test mode). Scope: payments + remote reservations + Priority Pass + upgrade + missed-turn rules. Also: refunds for paid tokens ended by auto-close (TODO in `queue-do.ts`). Owner must first create a Razorpay test account (key id, key secret, webhook secret; no KYC). Reservations, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is in the dev build (check whether it needs a config plugin → possible rebuild). Design the business-set reservation validity (owner's idea, 2026-10-16) here.
-   - **A. Missed turn (decided 2026-10-18):** engine state MISSED (GRACE end → MISSED, not EXPIRED), `POST /v1/tokens/:id/rejoin` with the walk-in GPS check, once per ticket, placed by `rejoinDelayMin` ÷ service time within `lateWindowMin`, else the end (R1), second miss → EXPIRED + strike (free walk-ins only, C5), no carry-over (R4), fee kept/refund rules, `missed` alert + big grace countdown (R3). Checklist QUE-22…29, TOK-09, ALR-08. Rules: HLD §5.2, architecture §9.3 + §23.
+   - **A. Missed turn (decided 2026-10-18):** engine state MISSED (GRACE end → MISSED, not EXPIRED), `POST /v1/tokens/:id/rejoin` with the walk-in GPS check, once per ticket, placed by `rejoinDelayMin` ÷ service time within `lateWindowMin`, else the end (R1), second miss → EXPIRED + strike (free walk-ins only, C5), no carry-over (R4), fee kept/refund rules, `missed` alert + big grace countdown (R3), check code + staff "Rejoin for customer" (R2), Skip uses the same K (QUE-06). Checklist QUE-06, QUE-22…29, TOK-09, ALR-08. Rules: HLD §5.2, architecture §9.3 + §23.
    - **B. Priority Pass + upgrade (decided 2026-10-18):** BOOKED state, GPS check-in, priority lane by check-in time (P series), "Skip ahead" upgrade, Next credit rule (1 in N, C1), estimate ranges (C3) + load-test people-ahead invariant, refunds (C6), device hash on purchases. Checklist PRI-01…12; HLD §5.2, architecture §9.3/§9.4/§10.5/§23.
 3. **Step 5 insights + demo data:** analytics + earnings screens, Jammu seed with 4–8 weeks of history, live demo simulator, deploy the `demo` Worker, reset command.
 4. **Step 6 extras** (if time): Add person + claim code, verified ratings (decided 2026-10-18; HLD §6.7, RAT-01…05).
@@ -31,10 +31,10 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 
 ## Decisions
 - Owner agreed 2026-10-16: offline degrades, never blocks (B13); queue state decides "open", hours inform (B16); auto-close 30 min after the last hours range with a Keep open warning (B20); device hash per walk-in (C2); signed offline ticket (C3); ticket validity set per queue, still-valid tickets carry over to the front of the next session (C4, owner's request). Details: architecture doc §23 "Decided in the fix batch".
+- Owner decided 2026-10-18: R1, R2, R3, R4, RT1, RT2 all decided. Skip uses the same rejoin delay K (own class range, G1 stays) instead of "behind 3". R2: 4-character check code per ticket ("#14 · K7P2") + staff "Rejoin for customer" after MISSED. Details: architecture §9.4 + §23.
 - Decided in the batch (owner may revisit): opened outside hours → auto-close at 23:59 IST; carried tickets keep their number and session (no reissue); "Now serving" = last called still at a counter, else last served.
 
 ## Open questions
-- R2 (proposed, awaits the owner): ticket check code "#14 · K7P2" + staff "Rejoin for customer" after MISSED (architecture §23). R1, R3, R4, RT1, RT2 decided 2026-10-18.
 - Does the professor want a say on defaults for public hospitals / government offices? Owner decided: business-set, no platform cap, ratings as the check.
 - Real fees and revenue split.
 - B11 (watch, INC-016): process killed once during fast taps; not reproduced.

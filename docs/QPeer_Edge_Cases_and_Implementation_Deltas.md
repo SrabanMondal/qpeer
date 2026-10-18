@@ -37,7 +37,8 @@ The original specification assumed a strict progression where missed turns were 
 | Fewer people waiting than the rejoin delay needs | To the end of the line. |
 | Two people rejoin at the same time | Same rule for each, in the order the server received them. |
 | Staff mark someone No-show by mistake | Grace protects them; every action is logged with its time. |
-| Phone dead after MISSED | *Proposed (R2, awaiting the owner):* every ticket shows a 4-character check code under its number ("#14 · K7P2"). Staff "Rejoin for customer" needs the number + check code, with the same once-only and position rule. If the person knows neither, staff serve them as a new walk-in. Staff never move a ticket by choice. |
+| Staff Skip someone | Moved back by the same rejoin delay, within their own class range, or to the end if fewer wait. |
+| Phone dead after MISSED | *Decided (R2, 2026-10-18):* every ticket shows a 4-character check code under its number ("#14 · K7P2"). Staff "Rejoin for customer" needs the number + check code, with the same once-only and position rule. If the person knows neither, staff serve them as a new walk-in. Staff never move a ticket by choice. |
 
 ---
 

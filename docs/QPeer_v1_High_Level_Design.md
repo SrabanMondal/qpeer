@@ -170,13 +170,13 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 4. The person taps **I'm here**. The app runs the same GPS walk-in check as joining (location is never stored; mocked locations are rejected). This is allowed **once per ticket**. Rejoins at the same time are ordered by tap time (the server receive time of a successful check). Where the ticket goes depends on two business settings (R1, decided 2026-10-18):
    - **Rejoin delay** `rejoinDelayMin` (default 15 min). The penalty is minutes of service, not a fixed number of people. The engine turns it into people with the queue's own service-time estimate (the EWMA interval between Next calls; the configured service time at cold start): behind ceil(rejoinDelayMin ÷ avgServiceMin) WAITING people, at least 1. If fewer wait, the ticket goes to the end. Example: a clinic at 3 min per person → behind 5. A salon at 30 min per person → behind 1.
    - **Late window** `lateWindowMin` (default 15 min; the business can raise it or set "no limit"). "I'm here" within the window after MISSED → the rejoin-delay rule above. After the window → the end of the line.
-   - Skip keeps its own fixed rule (behind the next 3). Rejoin differs on purpose: a missed person was away, so the penalty follows the queue's speed.
+   - **Skip uses the same delay** (decided 2026-10-18). A staff Skip moves the ticket behind the same number of WAITING people of its own class, worked out the same way, or to the end if fewer wait. The number is fixed at the moment of the skip. The class rule stays: a skipped regular or priority ticket never goes inside a higher class; a skipped triage ticket may go behind lower classes.
 5. The person misses a second time, or never rejoins before the queue closes (or the business limit) → EXPIRED. A MISSED ticket never carries over to the next session, even with a multi-day ticket validity (R4). A free walk-in also gets one no-show strike. The existing rule stays: 3 strikes in 30 days block free joins for 7 days, per user and per device hash. Paid tickets (remote reservation, Priority Pass) get no strike: losing the fee is the penalty (C5, decided 2026-10-18).
 6. A ticket moves back only when its owner asks to rejoin. Staff never reposition it. People ahead for others: no change when a called ticket becomes No-show or MISSED. On a rejoin, only the people behind the insert point get +1.
 7. Remote join fee: see §6.3.
 8. This replaces the dropped idea "NEXT calls only checked-in people" (presence tracking is unreliable). Check-in is used only for rejoin after MISSED and for Priority Pass activation.
 9. Engine details (R4, decided 2026-10-18): a missed priority or triage holder rejoins inside their own class (the skip class rule, G1). Analytics count a ticket served after a rejoin as served, count each miss as a no-show, and leave the time away out of wait statistics.
-10. **Staff "Rejoin for customer"** (R2, still PROPOSED, awaiting the owner): see the backend doc §23. It covers a dead phone after MISSED.
+10. **Staff "Rejoin for customer"** (R2, decided 2026-10-18). Every ticket gets a 4-character check code when it is made, shown under the number: "#14 · K7P2". The code uses no look-alike characters (no 0/O, 1/I/L). It is stored on the ticket and is part of the signed ticket. After MISSED, staff can rejoin a person whose phone is dead. They need the ticket number + check code, or a scan of a valid signed QR. The same once-only rule and the same position rule as "I'm here" apply. If the person knows neither, staff serve them as a new walk-in. Staff never move a ticket by choice. Details: backend doc §23.
 
 **Misuse and edge cases (decided by the owner, 2026-10-18):**
 
@@ -191,10 +191,10 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 | Fewer waiting at rejoin than the rejoin delay needs | To the end of the line. |
 | Two missed people rejoin at the same time | Each gets the same rule, in tap order. |
 | Taps "I'm here" with a fake location | Rejected, like a join (R4). |
-| Phone dead at the counter | During GRACE: staff look up the number or scan the saved ticket QR, then Admit. After MISSED: R2 (proposed) lets staff rejoin them with the ticket number + check code; until then, staff serve them as a new walk-in. |
+| Phone dead at the counter | During GRACE: staff look up the number or scan the saved ticket QR, then Admit. After MISSED: staff rejoin them with the ticket number + check code (R2). If they know neither, staff serve them as a new walk-in. |
 | Called person is inside but didn't hear | The alert plus Grace covers it, with the large countdown on the ticket. Admit serves them next. |
 
-R1, R3 and R4 were decided by the owner on 2026-10-18. R2 is still proposed (backend architecture doc §23).
+R1, R2, R3 and R4 were decided by the owner on 2026-10-18 (backend architecture doc §23).
 
 **Priority Pass, "flexible pass" (decided by the owner, 2026-10-18; built in Step 4).** This replaces the proposal of the same day and the older "VIP: pay to skip" idea (both superseded 2026-10-18). There are no time slots. The pass is a paid pass for one queue. It enters the line when the holder arrives.
 

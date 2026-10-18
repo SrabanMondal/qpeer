@@ -104,7 +104,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 **Operations**
 - [x] **QUE-05** Next (calls the next waiting token, records the interval and the counter)
-- [ ] **QUE-06** Skip (the token goes back behind the next N people, or to the end; pick one and document it)
+- [ ] **QUE-06** Skip (decided 2026-10-18): the token goes back behind the same K as a rejoin (QUE-27), counted in its own class range, or to the end if fewer wait. K is fixed at the moment of the skip. A skipped regular/priority token never lands inside a higher class's range; a skipped triage token may go behind lower classes (G1). Replaces "behind the next 3".
 - [ ] **QUE-07** Pause / Resume (paused time is excluded from the wait estimate; waiting users see "paused")
 - [x] **QUE-08** No-show → grace (default 10 min) → Admit late arrival as next, or expire when the timer ends *(since 2026-10-18 the timer leads to MISSED, not EXPIRED: QUE-22)*
 - [ ] **QUE-09** Close for the day: remaining tokens expire, paid ones are refunded via M8
@@ -118,9 +118,9 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **QUE-24** Second miss, or no rejoin by queue close (or the business limit) → EXPIRED + one no-show strike (per user and per device hash) for free walk-ins only. Paid tickets get no strike (C5, 2026-10-18).
 - [ ] **QUE-25** No repositioning by staff: a ticket moves back only when its owner rejoins
 - [ ] **QUE-26** People ahead: no change for others when a called ticket becomes No-show or MISSED. On a rejoin, only people behind the insert point get +1.
-- [ ] **QUE-27** Rejoin position (R1, decided 2026-10-18): within `lateWindowMin` after MISSED → behind max(1, ceil(`rejoinDelayMin` ÷ avgServiceMin)) WAITING, using the queue's EWMA service time (configured service time at cold start), or the end if fewer wait. After the window → the end of the line. "No limit" window allowed. Skip keeps its fixed "behind 3".
+- [ ] **QUE-27** Rejoin position (R1, decided 2026-10-18): within `lateWindowMin` after MISSED → behind max(1, ceil(`rejoinDelayMin` ÷ avgServiceMin)) WAITING, using the queue's EWMA service time (configured service time at cold start), or the end if fewer wait. After the window → the end of the line. "No limit" window allowed. Skip uses the same K (QUE-06).
 - [ ] **QUE-28** Engine details (R4, decided 2026-10-18): MISSED tickets never carry over at close (they expire); a missed priority/triage holder rejoins within their own class; analytics count served-after-rejoin as served, each miss as a no-show, and leave away time out of wait statistics.
-- [ ] **QUE-29** PENDING (owner's OK, R2): 4-character check code under the ticket number ("#14 · K7P2"), unambiguous alphabet, stored on the token and in the signed ticket. Staff "Rejoin for customer" after MISSED needs the number + check code (or a valid signed-QR scan). Same once-only and position rule as QUE-27. Neither known → serve as a new walk-in.
+- [ ] **QUE-29** Check code and staff rejoin (R2, decided 2026-10-18): 4-character check code given at allocation, shown under the ticket number ("#14 · K7P2"), unambiguous alphabet (no 0/O, 1/I/L), stored on the token (DO + D1) and in the signed ticket. Staff "Rejoin for customer" after MISSED needs the number + check code (or a valid signed-QR scan). Same once-only and position rule as QUE-27. Neither known → serve as a new walk-in.
 
 **Wait estimates**
 - [ ] **QUE-13** EWMA of Next intervals with outlier capping. Cold start uses the queue's configured service time.
