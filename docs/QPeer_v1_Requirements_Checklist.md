@@ -106,11 +106,18 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [x] **QUE-05** Next (calls the next waiting token, records the interval and the counter)
 - [ ] **QUE-06** Skip (the token goes back behind the next N people, or to the end; pick one and document it)
 - [ ] **QUE-07** Pause / Resume (paused time is excluded from the wait estimate; waiting users see "paused")
-- [x] **QUE-08** No-show → grace (default 10 min) → Admit late arrival as next, or expire when the timer ends
+- [x] **QUE-08** No-show → grace (default 10 min) → Admit late arrival as next, or expire when the timer ends *(since 2026-10-18 the timer leads to MISSED, not EXPIRED: QUE-22)*
 - [ ] **QUE-09** Close for the day: remaining tokens expire, paid ones are refunded via M8
 - [ ] **QUE-10** Leave (customer) at any time. Cancel with a refund inside the cancel window (via M8).
 - [x] **QUE-11** Triage insert (free, staff), with a daily cap
 - [ ] **QUE-12** Undo the last Next within ~30 s (staff mis-tap)
+
+**Missed turn and rejoin** (decided 2026-10-18, Step 4; HLD §5.2)
+- [ ] **QUE-22** GRACE ends → new state MISSED (not EXPIRED). MISSED is out of the live order and not counted as waiting. Ticket text: "You missed your turn. When you're here, tap I'm here to rejoin."
+- [ ] **QUE-23** "I'm here" rejoin: same GPS walk-in check as joining (location never stored) → behind the next 3 WAITING, or the end if fewer wait. Once per ticket. Simultaneous rejoins ordered by tap time (server receive time of a successful check).
+- [ ] **QUE-24** Second miss, or no rejoin by queue close (or the business limit) → EXPIRED + one no-show strike (per user and per device hash)
+- [ ] **QUE-25** No repositioning by staff: a ticket moves back only when its owner rejoins
+- [ ] **QUE-26** People ahead: no change for others when a called ticket becomes No-show or MISSED. On a rejoin, only people behind the insert point get +1.
 
 **Wait estimates**
 - [ ] **QUE-13** EWMA of Next intervals with outlier capping. Cold start uses the queue's configured service time.
@@ -140,10 +147,11 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [x] **TOK-01** Token screen: big number, now serving, people ahead, wait range, be-back-by / leave-home-by, state badge
 - [x] **TOK-02** Live updates via WebSocket. **Reconnects automatically** after network loss or app background.
 - [x] **TOK-03** Correct state on reopen (fetched fresh, even if alerts were missed)
-- [ ] **TOK-04** States shown distinctly: waiting, paused, called (counter N), grace, served, expired, left, cancelled/refunded
+- [ ] **TOK-04** States shown distinctly: waiting, paused, called (counter N), grace, missed, served, expired, left, cancelled/refunded
 - [ ] **TOK-05** Leave queue (confirm dialog). Cancel paid token (shows refund or no-refund before confirming).
 - [x] **TOK-06** "My tokens" list: active first, then recent history. Empty state.
 - [ ] **TOK-07** Directions button opens the phone's maps app at the business pin
+- [ ] **TOK-08** MISSED ticket screen with an **I'm here** button (runs the location check, clear errors for too far / fake location, hidden after the one rejoin)
 
 ## M6 Alerts
 
@@ -154,6 +162,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [x] **ALR-05** Tapping an alert opens that token's screen
 - [x] **ALR-06** Android notification channel with high importance. In-app guide to turn off battery optimisation.
 - [ ] **ALR-07** Business console alerts: late arrival waiting in grace (optional sound)
+- [ ] **ALR-08** PENDING (owner's OK, R3): one `missed` alert when a ticket becomes MISSED ("You missed your turn. Tap I'm here when you arrive.")
 
 ## M7 Map & discovery
 
@@ -180,6 +189,8 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **PAY-11** Customer payment history (amount, status, refund status)
 - [ ] **PAY-12** Daily reconciliation job flags payments without a token or tokens without a payment
 - [ ] **PAY-13** Razorpay key secret and webhook secret exist only on the Worker
+- [ ] **PAY-14** Missed turn (2026-10-18): the remote fee is kept only if the ticket expires and the person never arrived. Served, even after a rejoin → no refund (the fee paid for holding the place).
+- [ ] **PAY-15** Business cancels or closes early → the remote fee is refunded, including for MISSED tickets
 
 ## M9 Insights
 
@@ -204,8 +215,15 @@ M0 ──► M1 ──► M2 ─────────────┐
 ## M11 Extras (x)
 
 - [ ] **EXT-01** Add person (staff) with a 6-digit claim code; claim from the app
-- [ ] **EXT-02** Priority Pass as a queue setting (limit per N regular tokens; 0 = no limit), shown to regular customers
+- [ ] **EXT-02** Priority Pass as a queue setting (limit per N regular tokens; 0 = no limit), shown to regular customers *(see EXT-04 to EXT-08 for the proposed 2026-10-18 design)*
 - [ ] **EXT-03** Verified reviews: one per served token within 7 days; stars + text; rating on the business detail
+
+**Priority Pass, proposed 2026-10-18** (PENDING: owner + professor; HLD §5.2)
+- [ ] **EXT-04** PENDING. "Flexible pass" per-business setting, OFF by default. Buy now, valid for a window (`ticketValidity`).
+- [ ] **EXT-05** PENDING. The pass enters the live order only at check-in on arrival (GPS or counter QR; staff can verify the signed ticket QR). Holders are ordered by check-in time, not purchase time.
+- [ ] **EXT-06** PENDING. Fairness cap: at most 1 priority per N regulars (default 3, business-adjustable) + a daily sales cap per queue ("Sold out"). Triage still first.
+- [ ] **EXT-07** PENDING. Show the current priority wait before purchase
+- [ ] **EXT-08** PENDING. Expired without check-in → fee forfeited (or partial refund, still open). Business cancel or early close → full refund.
 
 ---
 

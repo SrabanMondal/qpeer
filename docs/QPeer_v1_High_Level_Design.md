@@ -17,7 +17,7 @@ The demo is finished when this script runs from start to end on real Android pho
 3. **The customer reserves a place from the map** and pays with Razorpay test mode. They receive a token and a "leave home by" time.
 4. **A second customer joins as a walk-in** by scanning the QR code and passing the GPS check.
 5. **The business taps Next.** Customers' positions and wait estimates update live, and alerts arrive.
-6. **No-show path:** a remote customer is marked no-show, the grace period expires, the fee is forfeited and the split is recorded. **Cancel path:** a customer cancels in time and is refunded.
+6. **No-show path:** a remote customer is marked no-show, the grace period ends (MISSED), they never rejoin, the ticket expires, the fee is forfeited and the split is recorded. **Cancel path:** a customer cancels in time and is refunded.
 7. **The business opens Analytics and Earnings** and sees peak hours, trends, average waits and income.
 
 ### Scope
@@ -25,7 +25,7 @@ The demo is finished when this script runs from start to end on real Android pho
 | | Version 1 |
 |---|---|
 | **Must have** | Business account, profile, pin, queue, QR · customer map + business detail with public stats · walk-in join with GPS check · remote reservation with Razorpay test mode, deposits, refunds, split ledger · queue console (Next, Skip, Pause/Resume, No-show, Grace, Admit late, Close) · live position, wait range, alerts · business analytics and earnings · demo data generator |
-| **Extras if time allows** | Staff "Add person" with claim code · Priority Pass as a setting · simple reviews |
+| **Extras if time allows** | Staff "Add person" with claim code · Priority Pass as a setting (design proposed 2026-10-18, pending the owner and the professor, §5.2) · simple reviews |
 | **Not in v1** | Live payments, iOS, billing-software integrations, TV display, admin tools, comparison with nearby businesses, languages other than English, Bluetooth |
 
 ---
@@ -139,7 +139,7 @@ The QR code encodes `qpeer://q/<queueId>`. Scanning it with the phone camera ope
 | Queues (owner) | `POST /businesses/:id/queues` · `PATCH /queues/:id/settings` · `GET /queues/:id/qr` |
 | Join | `POST /queues/:id/join/walkin` `{lat, lng, accuracy, mocked}` |
 | Reserve / pay | `POST /queues/:id/orders` `{kind: reservation \| priority}` → Razorpay order · `POST /payments/verify` · `POST /webhooks/razorpay` |
-| Tokens | `GET /tokens/:id` · `POST /tokens/:id/leave` · `POST /tokens/:id/cancel` |
+| Tokens | `GET /tokens/:id` · `POST /tokens/:id/leave` · `POST /tokens/:id/cancel` · `POST /tokens/:id/rejoin` `{lat, lng, accuracy, mocked}` ("I'm here" after MISSED) |
 | Live | `GET /queues/:id/live?token=` (WebSocket upgrade, forwarded to QueueDO) |
 | Console (staff) | `POST /queues/:id/{next, skip, pause, resume, close}` · `POST /queues/:id/tokens/:tid/{noshow, admit}` |
 | Insights | `GET /businesses/:id/analytics?range=` · `GET /businesses/:id/earnings?range=` |
@@ -155,9 +155,47 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 - `tokens`: id, number, class (`triage` / `priority` / `regular`), method (`walkin` / `remote` / `staff`), owner uid, state, joined_at, called_at, counter, grace_until, alert flags
 - `hourly`: counters for the current hour, flushed to D1
 
-**Order:** triage first, then priority (subject to the configured limit), then regular, each by join sequence. A remote reservation gets its place in the sequence **when payment is confirmed**.
+**Ticket states:** WAITING, CALLED, GRACE, **MISSED** (added 2026-10-18), SERVED, EXPIRED, LEFT, CANCELLED. A ticket is active while WAITING, CALLED, GRACE or MISSED. A MISSED ticket is not in the live order and does not count as waiting.
+
+**Order:** triage first, then priority (subject to the configured limit), then regular, each by join sequence. A remote reservation gets its place in the sequence **when payment is confirmed**. A ticket that rejoins after MISSED goes behind the next 3 waiting people (see below). Staff never move a ticket by choice.
 
 **People ahead:** an indexed `COUNT` of waiting tokens before mine in that order. With SQLite inside the Durable Object this is fast for thousands of tokens, so v1 doesn't need the Fenwick tree from the earlier design. Add it only if profiling shows a need.
+
+**Missed turn and late arrival (decided by the owner, 2026-10-18).** The same rules apply to walk-ins and remote joiners.
+
+1. The person is called but is not there. Staff tap **No-show**. The ticket enters GRACE (business setting, for example 10 min). The existing `grace_started` alert tells the person "you were called, come now". Staff keep calling others. Nobody is blocked.
+2. The person arrives during GRACE. Staff tap **Admit**. The person is served right after the current person. They lose no place.
+3. GRACE ends. The ticket becomes **MISSED** (not EXPIRED). The ticket screen says: "You missed your turn. When you're here, tap I'm here to rejoin."
+4. The person taps **I'm here**. The app runs the same GPS walk-in check as joining (location is never stored). The ticket goes behind the next 3 WAITING people (the same rule as Skip). If fewer than 3 wait, it goes to the end. This is allowed **once per ticket**. Rejoins at the same time are ordered by tap time (the server receive time of a successful check).
+5. The person misses a second time, or never rejoins before the queue closes (or the business limit) → EXPIRED and one no-show strike. The existing rule stays: 3 strikes in 30 days block free joins for 7 days, per user and per device hash.
+6. A ticket moves back only when its owner asks to rejoin. Staff never reposition it. People ahead for others: no change when a called ticket becomes No-show or MISSED. On a rejoin, only the people behind the insert point get +1.
+7. Remote join fee: see §6.3.
+8. This replaces the dropped idea "NEXT calls only checked-in people" (presence tracking is unreliable). Check-in is used only for rejoin after MISSED and for Priority Pass activation.
+
+**Misuse and edge cases (decided by the owner, 2026-10-18):**
+
+| Case | What happens |
+|---|---|
+| Joins, goes shopping, comes back late on purpose | One rejoin behind 3. A second miss expires the ticket and adds a strike. |
+| Misses on purpose again and again across days | 3 no-shows in 30 days block free joins for 7 days (built, also per phone). |
+| Reinstalls the app for a fresh ticket | Blocked by the device check (built). |
+| Takes tickets in many queues "just in case" | One per queue. Each miss adds a strike. Optional later: a limit on active free tickets per person. |
+| Taps "I'm here" from home | Location check, the same 150 m rule as joining. |
+| Staff mark someone No-show by mistake | The customer got the alert and Grace protects them. Every action is logged with its time for later review. |
+| Fewer than 3 waiting at rejoin | To the end of the line. |
+| Two missed people rejoin at the same time | Each goes behind 3, in tap order. |
+| Phone dead at the counter | Staff look up the number or scan the saved ticket QR, then Admit (during GRACE; after MISSED see R2 in the backend doc §23). |
+| Called person is inside but didn't hear | The alert plus Grace covers it. Admit serves them next. |
+
+Proposed refinements R1–R4 (awaiting the owner's OK) are listed in the backend architecture doc §23.
+
+**Priority Pass (proposed 2026-10-18, pending the owner and the professor; not final).** This supersedes the older "VIP: pay to skip" idea as the recommended design.
+- **Flexible pass**, a per-business setting, OFF by default. The customer buys now. The pass is valid for a window (the `ticketValidity` setting). The ticket enters the live order only when the holder **checks in** on arrival (GPS, or the counter QR; staff can verify the signed ticket QR).
+- Among priority holders, the order is by **check-in time**, not purchase time.
+- Fairness cap: at most 1 priority per N regulars (default N = 3, set by the business), plus a daily sales cap per queue ("Sold out"). Triage still goes first. The app shows the current priority wait before purchase.
+- Expired without check-in → the fee is forfeited (or a partial refund; still open). The business cancels or closes early → full refund.
+- Fits OPD, government offices, labs, service centres and salons. Doctors with long fixed sessions need time-slot appointments instead: a separate, later feature, not v1.
+- Optional later: a customer "Running late" button that moves the person back N places by choice, before they are called.
 
 **Wait estimate:** an EWMA of the intervals between Next calls (paused time excluded, outliers capped at 5× the recent median), plus an exponentially weighted variance for the range. The estimated call time = the remainder of the current interval + people ahead × EWMA. The range uses the variance (see the earlier ETA documents).
 
@@ -225,13 +263,19 @@ Customer (signed in, not anonymous) taps Reserve
 If the quota filled up in between → automatic refund + ledger refund
 ```
 
+**Fee after a missed turn (decided 2026-10-18, built in Step 4):** the fee is kept only if the ticket expires and the person never arrived. If the person is served, even after a rejoin, the fee paid for holding the place (no refund). If the business cancels or closes early, the fee is refunded.
+
 ### 6.4 Calling, no-show, grace and forfeit
 ```text
 Staff taps Next → QueueDO calls the next token → interval recorded → updates + alerts
-Staff taps No-show → token enters GRACE (default 10 min) → alarm set
+Staff taps No-show → token enters GRACE (default 10 min) → alarm set → alert grace_started
   • arrives in time → staff taps Admit → served next
-  • alarm fires → EXPIRED → remote/priority: ledger "forfeit" + shares; walk-in: strike +1
+  • alarm fires → MISSED (out of the live order)
+      • taps "I'm here" + GPS check (once per ticket) → WAITING behind the next 3 (or the end)
+      • misses again, or never rejoins by close → EXPIRED
+        → remote/priority: ledger "forfeit" + shares; free walk-in: strike +1
 ```
+Rules and edge cases: §5.2 "Missed turn and late arrival" (decided 2026-10-18).
 
 ### 6.5 Cancel and refund
 A customer cancels before the cancel window closes → Worker calls the Razorpay Refunds API → ledger refund → token LEFT. After the window, cancelling = leaving without a refund.
@@ -315,7 +359,7 @@ qpeer/
 | **3. Map** | Snapshots, map + markers + list, business detail with public stats | The seeded businesses and live counts show on the map, updating within 30 s |
 | **4. Payments** | Accounts upgrade, orders, Checkout, verify + webhook, refunds, ledger | Test payment → token. No-show → forfeit recorded. Cancel → refund recorded. |
 | **5. Insights + demo data** | Analytics and earnings screens, seed and simulate scripts | The full demo script runs end to end on the `demo` environment |
-| **6. Extras** | Add person + claim code, Priority Pass setting, reviews | Only if time allows |
+| **6. Extras** | Add person + claim code, Priority Pass setting (behind a per-business setting once the professor confirms, §5.2), reviews | Only if time allows |
 
 ---
 
@@ -328,4 +372,4 @@ qpeer/
 | **Demo city** | **Jammu, J&K, India**. Seed data is centred on about 32.73° N, 74.86° E and spread across the city's main neighbourhoods. |
 | **Repository location** | `G:\dev\qpeer` (local git repository on this laptop) |
 
-Later decisions (Priority Pass rules, real fees, OTP provider for real SMS) stay in the SRS TBD list and don't block v1.
+Later decisions (Priority Pass rules, real fees, OTP provider for real SMS) stay in the SRS TBD list and don't block v1. The Priority Pass now has a proposed design (§5.2, 2026-10-18) that waits for the owner and the professor.

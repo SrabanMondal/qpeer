@@ -242,14 +242,25 @@ A **session** is one open→close cycle (normally one day). Opening a queue star
 ```text
 WAITING ─next─► CALLED ─served─► SERVED
    │              └─no-show─► GRACE ─admit─► CALLED (front)  ─served─► SERVED
-   │                              └─timer─► EXPIRED
+   │                              └─timer─► MISSED ─"I'm here" (once)─► WAITING (behind next 3)
+   │                                           └─close / business limit─► EXPIRED + strike
+   │            (a rejoined ticket that misses again: GRACE ─timer─► EXPIRED + strike)
    ├─leave───────► LEFT
    ├─cancel──────► CANCELLED (refund decided by the Worker)
    ├─validity ran out (C4) ► EXPIRED (end reason `validity`)
    └─queue closed► EXPIRED   (unless still valid: carried over, stays WAITING)
 ```
 
-Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while `WAITING`, `CALLED` or `GRACE`.
+Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while `WAITING`, `CALLED`, `GRACE` or `MISSED`.
+
+**MISSED and rejoin (decided 2026-10-18, Step 4; HLD §5.2 has the full rules and edge cases).** Same for walk-ins and remote joiners.
+- No-show → GRACE with the existing `grace_started` alert (no new alert at grace start). Admit during GRACE → served right after the current person.
+- GRACE timer → `MISSED`, not `EXPIRED`. A MISSED token is out of the live order and is not counted as waiting.
+- "I'm here" = `POST /v1/tokens/:id/rejoin { lat, lng, accuracy, mocked }` → the same GPS walk-in check as joining (location never stored) → DO `rejoin(tokenId, userId)` → `WAITING`, re-sequenced behind the next 3 WAITING tokens (the Skip rule), or to the end if fewer wait. **Once per ticket** (a `rejoined` flag on the token). Simultaneous rejoins are ordered by the server receive time of a successful check (the DO serializes them).
+- Second miss (a rejoined token's GRACE ends), or no rejoin by queue close (or the business limit) → `EXPIRED` + one no-show strike (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash).
+- Only the owner's rejoin moves a token back. Staff never reposition it.
+- Paid tokens: forfeit only when the token expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Business cancel or early close → refund.
+- Replaces the dropped idea "NEXT calls only checked-in people". Check-in is used only for rejoin after MISSED and for Priority Pass activation.
 
 ### 9.4 Order and "people ahead"
 
@@ -257,6 +268,7 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 - **People ahead** = `COUNT(*) WHERE state = 'WAITING' AND sortKey < mine`, using an index on `(state, sortKey)`. This is exact after leaves, cancels and skips, and fast for thousands of tokens, so the Fenwick tree from the early design isn't needed.
 - **Priority limit** (when enabled): a priority token's sequence is pushed back so that at most 1 priority entry is served per `priorityPerRegular` regular tokens.
 - **Skip** gives the token a new sequence equal to "after the next N waiting tokens" (N = 3 by default) — decided once, documented in tests.
+- **Rejoin after MISSED** (2026-10-18) uses the same key rule as Skip: behind the next 3 WAITING tokens, or the end. MISSED tokens are excluded from people ahead. When a called token becomes No-show or MISSED, nobody else's people-ahead changes. On a rejoin, only tokens behind the insert point get +1.
 
 ### 9.5 RPC interface (called only by the Worker)
 
@@ -271,6 +283,7 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 | `checkQuota(userId)` | Can a remote reservation be made right now? | Used before creating a Razorpay order |
 | `next(counter)` / `undoNext()` | Call the next token; undo within 30 s | Records interval |
 | `skip(tokenId)` / `noShow(tokenId)` / `admit(tokenId)` / `served(tokenId)` | Staff actions | |
+| `rejoin(tokenId, userId)` | "I'm here" after MISSED (Step 4) | Worker runs the GPS check first. Once per ticket; fails `invalid_state` otherwise. |
 | `leave(tokenId, userId)` / `cancel(tokenId, userId)` | Customer actions | `cancel` returns whether a refund applies (inside cancel window) |
 | `insertTriage()` | Free staff-only triage token | Daily cap |
 | `getToken(tokenId)` / `getState()` | Read live state | Used by token screen and console |
@@ -379,7 +392,8 @@ created ──(captured, verified)──► captured ──► allocated
 
 - `devices` holds Expo push tokens per user (upsert on app start and on token change; removed on sign-out) — ALR-02.
 - Sending: the DO outbox calls the Expo Push API (`https://exp.host/--/api/v2/push/send`) in batches of up to 100, stores ticket ids in `push_tickets`; an hourly cron checks receipts and deletes `DeviceNotRegistered` tokens.
-- Alert kinds (ALR-03): `head_back`, `next`, `called`, `grace_started`, `refund_issued`, `queue_paused`, `queue_closed`. Each is sent at most once per token (flag set in the DO before sending).
+- Alert kinds (ALR-03): `head_back`, `next`, `called`, `grace_started`, `refund_issued`, `queue_paused`, `queue_closed`. Each is sent at most once per token (flag set in the DO before sending). `grace_started` ("you were called, come now") is also the alert for the missed-turn flow; there is no new alert at grace start.
+- Proposed (R3, awaiting the owner's OK): `missed`, sent once when a token becomes MISSED: "You missed your turn. Tap I'm here when you arrive."
 - Android channel `queue-alerts` (high importance) is created by the app; the payload names it.
 
 ---
@@ -554,7 +568,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Question | Step |
 |---|---|
 | Razorpay Route availability in test mode (split in ledger only if not) | 4 |
-| Priority Pass rules (limit or none) — setting already supported | 6 |
+| Priority Pass rules (limit or none) — setting already supported. Proposed design 2026-10-18 below, pending the owner and the professor. | 6 |
 
 ### Decided in Step 2
 
@@ -609,3 +623,40 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Ticket validity + carry-over (C4) | `ticketValidityMin` (0 = until close). Carried tokens keep number, session id and place — no reissue (the customer's number and signed ticket stay valid), "Kept" marker in console and ticket. Expired-by-time → `EXPIRED` / `validity` via the alarm, also while closed. Carried waits are not wait/ETA samples. Carry-over needs no new numbering rule because sort keys only grow. |
 | App storage (C1) | `@react-native-async-storage/async-storage` 2.2.0 (SQLite on Android, no config plugin, async API fast enough for a preload at start) over `expo-sqlite/kv-store` (sync reads, but a bigger native library for a few small keys). One `lib/storage.ts`: typed keys with zod schemas and a version per key; anything unreadable reads as missing. Saved: ticket views (+ signed ticket, ended ones for 24 h, ≤ 30), battery-tip dismissal, console queue, map filters/sort/view, last camera (not the user's position), ticket public keys. |
 | Offline (B13, INC-040) | Degrade, never block: one slim strip ("Offline — showing saved info", Retry); last views stay; server actions disabled with "You're offline. This needs internet." (`Button needsNetwork`); ticket shows "Last updated N min ago"; map shows "The map needs internet" with the saved active tickets; console greyed "Offline — actions paused". Offline detection stays request-based (no NetInfo). |
+
+### Decided 2026-10-18 (owner): missed turn and late arrival (A, built in Step 4)
+
+| Question | Decision |
+|---|---|
+| Called, not present | Staff tap No-show → GRACE (`graceMinutes`) with the existing `grace_started` alert. Staff keep calling others; nobody is blocked. |
+| Arrives during GRACE | Admit → served right after the current person (no place lost). |
+| GRACE ends | New state `MISSED` (not `EXPIRED`), out of the live order. Ticket text: "You missed your turn. When you're here, tap I'm here to rejoin." |
+| "I'm here" | `POST /v1/tokens/:id/rejoin` with the same GPS walk-in check as joining (location never stored) → WAITING behind the next 3 WAITING (the Skip rule), or the end if fewer wait. Once per ticket. Simultaneous rejoins ordered by the server receive time of a successful check. |
+| Second miss / no rejoin | A rejoined ticket that misses again, or a MISSED ticket not rejoined by queue close (or the business limit) → `EXPIRED` + one no-show strike (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash). The strike is now taken at this expiry, no longer at the end of GRACE. |
+| Who moves a ticket | Only its owner, by rejoining. Staff never reposition it. |
+| People ahead | No change for others when a called ticket becomes No-show or MISSED. On a rejoin, only tokens behind the insert point get +1. |
+| Remote fee | Kept only if the ticket expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Refunded if the business cancels or closes early. |
+| "NEXT calls only checked-in people" | Dropped (presence tracking is unreliable). Check-in is used only for rejoin after MISSED and for Priority Pass activation. |
+| Misuse and edge cases | Owner's table in HLD §5.2 (late on purpose, repeat misses, reinstall, many queues, "I'm here" from home, wrong No-show, fewer than 3 waiting, simultaneous rejoins, dead phone, didn't hear the call). |
+
+### Proposed 2026-10-18, awaiting the owner's OK (R1–R4)
+
+| Question | Proposal |
+|---|---|
+| R1 Late-on-purpose loophole | "Behind 3" applies only if "I'm here" is tapped within a business-set window after MISSED (default 15 min). Later rejoins go to the end of the line. |
+| R2 Staff-assisted rejoin | After MISSED, staff may "Rejoin for customer" only after verifying the signed ticket QR at the counter. Same once-only rule and same position rule as R1 / A4. Covers a dead phone. Staff still never reposition by choice. |
+| R3 Missed alert | One push when a ticket becomes MISSED: new kind `missed`, "You missed your turn. Tap I'm here when you arrive." |
+| R4 Engine details | MISSED tickets never carry over at close, even with multi-day `ticketValidityMin` (they expire at close). A missed priority/triage holder rejoins within their own class range (behind 3 of their class, per the skip class rule, G1). "I'm here" rejects mocked locations like join. Analytics count served-after-rejoin as served and misses as no-shows, and leave away time out of wait statistics. |
+
+### Proposed 2026-10-18, pending the owner and the professor: Priority Pass (B)
+
+Supersedes "VIP: pay to skip" as the recommended design. Not final.
+
+| Question | Proposal |
+|---|---|
+| Model | "Flexible pass", per-business setting, OFF by default. Buy now, valid for a window (`ticketValidityMin`). The ticket enters the live order only when the holder checks in on arrival (GPS or the counter QR; staff can verify the signed ticket QR). |
+| Order among holders | By check-in time, not purchase time. |
+| Fairness | At most 1 priority per N regulars (default N = 3, business-adjustable; `priorityPerRegular`) + a daily sales cap per queue ("Sold out"). Triage still goes first. The current priority wait is shown before purchase. |
+| Money | Expired without check-in → fee forfeited (or a partial refund: still open). Business cancel or early close → full refund. |
+| Fit | OPD, government offices, labs, service centres, salons. Doctors with long fixed sessions need time-slot appointments: a separate later feature, not v1. |
+| Later option | A customer "Running late" button that moves the person back N places by choice, before being called. |
