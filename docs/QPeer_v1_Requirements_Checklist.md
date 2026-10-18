@@ -21,10 +21,10 @@ The working to-do list for v1 (the demo). Design details live in `QPeer_v1_High_
 | **M5 Token experience** | Token screen, live updates, my tokens | M3 | 2 |
 | **M6 Alerts** | Push registration and alert delivery | M1, M3 | 2 |
 | **M7 Map & discovery** | Map, markers, list, business detail, public stats | M2, M3 (snapshots) | 3 |
-| **M8 Payments** | Orders, checkout, webhooks, refunds, forfeits, ledger | M1, M3 | 4 |
+| **M8 Payments** | Orders, checkout, webhooks, refunds, forfeits, ledger, Priority Pass + upgrade (2026-10-18) | M1, M3 | 4 |
 | **M9 Insights** | Analytics and earnings | M3 (events), M8 (ledger) | 5 |
 | **M10 Demo data** | Seed (Jammu), simulator, demo reset | M2, M3, M8 schema | 5 |
-| **M11 Extras (x)** | Add person, Priority Pass, reviews | M3, M8 | 6 |
+| **M11 Extras (x)** | Add person, ratings (Priority Pass moved to M8 on 2026-10-18) | M3, M8 | 6 |
 
 ### What can be built in parallel
 
@@ -98,7 +98,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 **Numbering and order**
 - [ ] **QUE-01** Atomic numbers: concurrent joins never get the same number (tested with parallel requests)
-- [ ] **QUE-02** Order: triage → priority (x) → regular, each by join sequence. A remote reservation gets its place when payment is confirmed.
+- [ ] **QUE-02** Order: triage → priority (x) → regular, each by join sequence. A remote reservation gets its place when payment is confirmed. *(since 2026-10-18 priority follows the 1-in-N credit rule: PRI-06)*
 - [ ] **QUE-03** People ahead = waiting tokens before mine. Correct after leaves, cancels, no-shows and skips.
 - [ ] **QUE-04** One active free token per user per queue. Paid reservations are capped per user (e.g. 2 per queue).
 
@@ -115,13 +115,13 @@ M0 ──► M1 ──► M2 ─────────────┐
 **Missed turn and rejoin** (decided 2026-10-18, Step 4; HLD §5.2)
 - [ ] **QUE-22** GRACE ends → new state MISSED (not EXPIRED). MISSED is out of the live order and not counted as waiting. Ticket text: "You missed your turn. When you're here, tap I'm here to rejoin."
 - [ ] **QUE-23** "I'm here" rejoin: same GPS walk-in check as joining (location never stored) → behind the next 3 WAITING, or the end if fewer wait. Once per ticket. Simultaneous rejoins ordered by tap time (server receive time of a successful check).
-- [ ] **QUE-24** Second miss, or no rejoin by queue close (or the business limit) → EXPIRED + one no-show strike (per user and per device hash)
+- [ ] **QUE-24** Second miss, or no rejoin by queue close (or the business limit) → EXPIRED + one no-show strike (per user and per device hash) for free walk-ins only. Paid tickets get no strike (C5, 2026-10-18).
 - [ ] **QUE-25** No repositioning by staff: a ticket moves back only when its owner rejoins
 - [ ] **QUE-26** People ahead: no change for others when a called ticket becomes No-show or MISSED. On a rejoin, only people behind the insert point get +1.
 
 **Wait estimates**
 - [ ] **QUE-13** EWMA of Next intervals with outlier capping. Cold start uses the queue's configured service time.
-- [ ] **QUE-14** Range (low–high) from the variance. Never shows a single exact number.
+- [ ] **QUE-14** Range (low–high) from the variance. Never shows a single exact number. *(with the priority lane on, also PRI-08)*
 - [ ] **QUE-15** Be-back-by / leave-home-by times (leave-home uses straight-line distance ÷ an assumed speed + a buffer)
 
 **Timers, live updates, persistence**
@@ -147,7 +147,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [x] **TOK-01** Token screen: big number, now serving, people ahead, wait range, be-back-by / leave-home-by, state badge
 - [x] **TOK-02** Live updates via WebSocket. **Reconnects automatically** after network loss or app background.
 - [x] **TOK-03** Correct state on reopen (fetched fresh, even if alerts were missed)
-- [ ] **TOK-04** States shown distinctly: waiting, paused, called (counter N), grace, missed, served, expired, left, cancelled/refunded
+- [ ] **TOK-04** States shown distinctly: booked (Priority Pass, with a Check in button), waiting, paused, called (counter N), grace, missed, served, expired, left, cancelled/refunded
 - [ ] **TOK-05** Leave queue (confirm dialog). Cancel paid token (shows refund or no-refund before confirming).
 - [x] **TOK-06** "My tokens" list: active first, then recent history. Empty state.
 - [ ] **TOK-07** Directions button opens the phone's maps app at the business pin
@@ -192,6 +192,20 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **PAY-14** Missed turn (2026-10-18): the remote fee is kept only if the ticket expires and the person never arrived. Served, even after a rejoin → no refund (the fee paid for holding the place).
 - [ ] **PAY-15** Business cancels or closes early → the remote fee is refunded, including for MISSED tickets
 
+**Priority Pass and upgrade** (decided by the owner 2026-10-18, Step 4; HLD §5.2, architecture §9.3, §9.4, §10.5, §23)
+- [ ] **PRI-01** Settings, all business-set, no platform limits: priority on/off (default OFF), price, ratio "1 priority per N regulars" (any whole number ≥ 1; the form prefills 1-in-2 when switched on), optional daily sales cap ("Sold out"), validity window (default today; hours to days), cancel refund % (default 50). **Edit later.**
+- [ ] **PRI-02** Buy a pass: signed-in, non-anonymous only. Honest preview before paying ("Priority holders wait about X min · regular wait about Y min · you save about Z min"). Ticket created only after server-side confirmation (verify + webhook); no confirmation → no ticket. New state BOOKED (paid, not in the line).
+- [ ] **PRI-03** Check-in on arrival: GPS within the join radius (walk-in check; mocked rejected; a counter-QR photo alone is not enough) → priority lane, ordered by check-in time, P-series number (P1, P2…). After check-in the window no longer applies.
+- [ ] **PRI-04** Priority holders follow the same missed-turn rules (Grace → Missed → one rejoin → Expired)
+- [ ] **PRI-05** Upgrade "Skip ahead for ₹X, about N min faster" on a WAITING ticket: payment moves the same ticket into the priority lane at the upgrade time, no check-in. Only WAITING tickets. Buying a pass while holding a ticket upgrades it, never a second ticket. Offer hidden when the saving is below the threshold (default 5 min; C2).
+- [ ] **PRI-06** Next rule, engine-enforced (staff cannot pick a priority person): triage first; else the priority head if due; else the next regular. Credit counter: +1 per regular call (also when it ends as No-show), −N per priority call, capped at N, starts at 0 when a session opens; triage adds nothing; Undo of Next undoes the credit change (C1).
+- [ ] **PRI-07** Regulars see "Priority lane on · 1 in N" on the business page, join screen and ticket
+- [ ] **PRI-08** Estimates with priority: a regular's people ahead and wait are a range (low: only checked-in priority holders; high: every N-th call goes to priority; C3). Shared estimate and the load-test people-ahead invariant use the same rule.
+- [ ] **PRI-09** Money: served → fee kept, split business/Qpeer (demo 70/30). Cancel before check-in → refund at the business's %. Never checked in by the end of the window → no refund. Checked in, missed, never rejoined → no refund, no strike (C5).
+- [ ] **PRI-10** Full automatic refund when a checked-in holder is not served because the queue closed (also when closed while paused), or the business cancels or closes early. Checked-in holders never carry over to the next day (C6).
+- [ ] **PRI-11** Anti-misuse: pass tied to the buyer's account (no transfer); 1 pass per account per queue per day; device hash recorded on purchases and upgrades, and the same phone cannot buy a second pass with another account; every call logged with its time.
+- [ ] **PRI-12** Signed ticket QR carries the first name + last 4 phone digits only; the console shows the full name when online (C4)
+
 ## M9 Insights
 
 - [ ] **INS-01** Analytics range picker (7 / 28 days)
@@ -215,15 +229,16 @@ M0 ──► M1 ──► M2 ─────────────┐
 ## M11 Extras (x)
 
 - [ ] **EXT-01** Add person (staff) with a 6-digit claim code; claim from the app
-- [ ] **EXT-02** Priority Pass as a queue setting (limit per N regular tokens; 0 = no limit), shown to regular customers *(see EXT-04 to EXT-08 for the proposed 2026-10-18 design)*
-- [ ] **EXT-03** Verified reviews: one per served token within 7 days; stars + text; rating on the business detail
+- **EXT-02** Superseded 2026-10-18 (was: Priority Pass as a queue setting, 0 = no limit). Now PRI-01 to PRI-12 in M8, built in Step 4.
+- **EXT-03** Superseded 2026-10-18 (was: verified reviews, stars + text, within 7 days). Now RAT-01 to RAT-05.
+- **EXT-04 to EXT-08** Superseded 2026-10-18 (were: the PENDING "flexible pass" proposal). Replaced by the decided PRI-01 to PRI-12.
 
-**Priority Pass, proposed 2026-10-18** (PENDING: owner + professor; HLD §5.2)
-- [ ] **EXT-04** PENDING. "Flexible pass" per-business setting, OFF by default. Buy now, valid for a window (`ticketValidity`).
-- [ ] **EXT-05** PENDING. The pass enters the live order only at check-in on arrival (GPS or counter QR; staff can verify the signed ticket QR). Holders are ordered by check-in time, not purchase time.
-- [ ] **EXT-06** PENDING. Fairness cap: at most 1 priority per N regulars (default 3, business-adjustable) + a daily sales cap per queue ("Sold out"). Triage still first.
-- [ ] **EXT-07** PENDING. Show the current priority wait before purchase
-- [ ] **EXT-08** PENDING. Expired without check-in → fee forfeited (or partial refund, still open). Business cancel or early close → full refund.
+**Ratings** (decided by the owner 2026-10-18, Step 6; HLD §6.7)
+- [ ] **RAT-01** Every SERVED customer can rate in the app: customer experience and service quality, 0–5 stars each. The lane (regular or priority) is stored.
+- [ ] **RAT-02** Ratings show on the map, the business card and the business page
+- [ ] **RAT-03** One rating per served ticket (server-side)
+- [ ] **RAT-04** PENDING (owner's OK, RT1): ratings split by lane ("Regular customers 2.1★ · Priority customers 4.8★") next to "Priority lane on · 1 in N"
+- [ ] **RAT-05** PENDING (owner's OK, RT2): show ratings only after a minimum count (e.g. 5); the business cannot delete ratings but can reply publicly
 
 ---
 

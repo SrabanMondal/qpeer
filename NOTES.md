@@ -21,11 +21,11 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 
 ## Plan
 1. **Fix batch + rebuild** (`feat/fix-batch-rebuild`): merge, migrate, secret, deploy, rebuild, device check (see Status). Design in architecture doc §9.1, §23 "Decided in the fix batch".
-2. **Step 4 payments** (Razorpay test mode). Also: refunds for paid tokens ended by auto-close (TODO in `queue-do.ts`). Owner must first create a Razorpay test account (key id, key secret, webhook secret; no KYC). Reservations, Priority Pass setting, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is in the dev build (check whether it needs a config plugin → possible rebuild). Design the business-set reservation validity (owner's idea, 2026-10-16) here.
-   - **A. Missed turn (decided 2026-10-18):** engine state MISSED (GRACE end → MISSED, not EXPIRED), `POST /v1/tokens/:id/rejoin` with the walk-in GPS check, once per ticket (behind next 3 or the end), second miss → EXPIRED + strike, fee kept/refund rules, `missed` alert (if R3 is approved). Rules: HLD §5.2, architecture §9.3 + §23.
-   - **B. Priority Pass "flexible pass"** behind a per-business setting, only once the professor confirms (proposal in HLD §5.2, architecture §23).
+2. **Step 4 payments** (Razorpay test mode). Scope: payments + remote reservations + Priority Pass + upgrade + missed-turn rules. Also: refunds for paid tokens ended by auto-close (TODO in `queue-do.ts`). Owner must first create a Razorpay test account (key id, key secret, webhook secret; no KYC). Reservations, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is in the dev build (check whether it needs a config plugin → possible rebuild). Design the business-set reservation validity (owner's idea, 2026-10-16) here.
+   - **A. Missed turn (decided 2026-10-18):** engine state MISSED (GRACE end → MISSED, not EXPIRED), `POST /v1/tokens/:id/rejoin` with the walk-in GPS check, once per ticket (behind next 3 or the end), second miss → EXPIRED + strike (free walk-ins only, C5), fee kept/refund rules, `missed` alert (if R3 is approved). Rules: HLD §5.2, architecture §9.3 + §23.
+   - **B. Priority Pass + upgrade (decided 2026-10-18):** BOOKED state, GPS check-in, priority lane by check-in time (P series), "Skip ahead" upgrade, Next credit rule (1 in N, C1), estimate ranges (C3) + load-test people-ahead invariant, refunds (C6), device hash on purchases. Checklist PRI-01…12; HLD §5.2, architecture §9.3/§9.4/§10.5/§23.
 3. **Step 5 insights + demo data:** analytics + earnings screens, Jammu seed with 4–8 weeks of history, live demo simulator, deploy the `demo` Worker, reset command.
-4. **Step 6 extras** (if time): Add person + claim code, Priority Pass on console, verified reviews.
+4. **Step 6 extras** (if time): Add person + claim code, verified ratings (decided 2026-10-18; HLD §6.7, RAT-01…05).
 5. **Finish:** NFR-11 rate limits; leave-home-by; full demo rehearsal on `demo` with the phone. (QR image, storage and signed ticket moved into the fix batch.)
 - Later latency win: fold `checkJoin` into `allocate` (one less Worker↔DO round trip per join).
 
@@ -34,8 +34,9 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 - Decided in the batch (owner may revisit): opened outside hours → auto-close at 23:59 IST; carried tickets keep their number and session (no reissue); "Now serving" = last called still at a counter, else last served.
 
 ## Open questions
-- Priority Pass: proposed "flexible pass" (check-in order, 1 per N regulars, daily cap; 2026-10-18) supersedes "VIP pay to skip"; waits for owner + professor. Partial refund on expiry still open.
 - Missed-turn refinements R1–R4 (architecture §23, 2026-10-18) await the owner's OK: R1 rejoin window (15 min, later → end), R2 staff rejoin via signed QR, R3 `missed` alert, R4 engine details.
+- Ratings RT1–RT3 (lane split, integrity, monopoly limit; architecture §23) await the owner's OK.
+- Does the professor want a say on defaults for public hospitals / government offices (priority ratio)? Owner decided: business-set, no platform cap, ratings as the check.
 - Real fees and revenue split.
 - B11 (watch, INC-016): process killed once during fast taps; not reproduced.
 - B12 (INC-017): dev-build "Tools" gear overlaps the header pill and the map's Scan QR button (dev only).

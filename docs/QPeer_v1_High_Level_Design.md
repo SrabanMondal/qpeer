@@ -24,8 +24,8 @@ The demo is finished when this script runs from start to end on real Android pho
 
 | | Version 1 |
 |---|---|
-| **Must have** | Business account, profile, pin, queue, QR · customer map + business detail with public stats · walk-in join with GPS check · remote reservation with Razorpay test mode, deposits, refunds, split ledger · queue console (Next, Skip, Pause/Resume, No-show, Grace, Admit late, Close) · live position, wait range, alerts · business analytics and earnings · demo data generator |
-| **Extras if time allows** | Staff "Add person" with claim code · Priority Pass as a setting (design proposed 2026-10-18, pending the owner and the professor, §5.2) · simple reviews |
+| **Must have** | Business account, profile, pin, queue, QR · customer map + business detail with public stats · walk-in join with GPS check · remote reservation with Razorpay test mode, deposits, refunds, split ledger · Priority Pass and upgrade behind a per-business setting (decided 2026-10-18, §5.2) · queue console (Next, Skip, Pause/Resume, No-show, Grace, Admit late, Close) · live position, wait range, alerts · business analytics and earnings · demo data generator |
+| **Extras if time allows** | Staff "Add person" with claim code · verified ratings (decided 2026-10-18, §6.7) |
 | **Not in v1** | Live payments, iOS, billing-software integrations, TV display, admin tools, comparison with nearby businesses, languages other than English, Bluetooth |
 
 ---
@@ -94,7 +94,8 @@ app/
 │   ├── business/[id]         Stats, wait now, Reserve / Walk-in info
 │   ├── scan                  Camera QR scan → location check → join
 │   ├── token/[id]            Big number, now serving, people ahead, wait range,
-│   │                         be-back-by / leave-home-by, Leave / Cancel
+│   │                         be-back-by / leave-home-by, Leave / Cancel,
+│   │                         Check in (Priority Pass), Skip ahead offer, Rate
 │   └── checkout/[queueId]    Fee, rules, Razorpay Checkout
 ├── (business)/
 │   ├── onboarding            Profile, category, pin drop, hours
@@ -102,7 +103,7 @@ app/
 │   ├── console/[queueId]     Now serving, Next, Skip, Pause, No-show, grace list, Close
 │   ├── analytics             Charts + plain-language insights
 │   ├── earnings              Payments, refunds, forfeits, shares
-│   └── settings              Radius, walk-in quota, fees, grace time
+│   └── settings              Radius, walk-in quota, fees, grace time, Priority Pass
 └── profile                   Mode switch (Customer ↔ Business), sign out
 ```
 
@@ -138,8 +139,8 @@ The QR code encodes `qpeer://q/<queueId>`. Scanning it with the phone camera ope
 | Businesses | `POST /businesses` · `PATCH /businesses/:id` · `GET /businesses/:id` (public detail + stats) |
 | Queues (owner) | `POST /businesses/:id/queues` · `PATCH /queues/:id/settings` · `GET /queues/:id/qr` |
 | Join | `POST /queues/:id/join/walkin` `{lat, lng, accuracy, mocked}` |
-| Reserve / pay | `POST /queues/:id/orders` `{kind: reservation \| priority}` → Razorpay order · `POST /payments/verify` · `POST /webhooks/razorpay` |
-| Tokens | `GET /tokens/:id` · `POST /tokens/:id/leave` · `POST /tokens/:id/cancel` · `POST /tokens/:id/rejoin` `{lat, lng, accuracy, mocked}` ("I'm here" after MISSED) |
+| Reserve / pay | `POST /queues/:id/orders` `{kind: reservation \| priority}` → Razorpay order · `POST /tokens/:id/upgrade` → Razorpay order (Skip ahead) · `POST /payments/verify` · `POST /webhooks/razorpay` |
+| Tokens | `GET /tokens/:id` · `POST /tokens/:id/leave` · `POST /tokens/:id/cancel` · `POST /tokens/:id/rejoin` `{lat, lng, accuracy, mocked}` ("I'm here" after MISSED) · `POST /tokens/:id/checkin` `{lat, lng, accuracy, mocked}` (Priority Pass on arrival) · `POST /tokens/:id/rating` `{experience, service}` (x) |
 | Live | `GET /queues/:id/live?token=` (WebSocket upgrade, forwarded to QueueDO) |
 | Console (staff) | `POST /queues/:id/{next, skip, pause, resume, close}` · `POST /queues/:id/tokens/:tid/{noshow, admit}` |
 | Insights | `GET /businesses/:id/analytics?range=` · `GET /businesses/:id/earnings?range=` |
@@ -155,11 +156,11 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 - `tokens`: id, number, class (`triage` / `priority` / `regular`), method (`walkin` / `remote` / `staff`), owner uid, state, joined_at, called_at, counter, grace_until, alert flags
 - `hourly`: counters for the current hour, flushed to D1
 
-**Ticket states:** WAITING, CALLED, GRACE, **MISSED** (added 2026-10-18), SERVED, EXPIRED, LEFT, CANCELLED. A ticket is active while WAITING, CALLED, GRACE or MISSED. A MISSED ticket is not in the live order and does not count as waiting.
+**Ticket states:** **BOOKED** (Priority Pass paid, not yet in the line; added 2026-10-18), WAITING, CALLED, GRACE, **MISSED** (added 2026-10-18), SERVED, EXPIRED, LEFT, CANCELLED. A ticket is active while BOOKED, WAITING, CALLED, GRACE or MISSED. BOOKED and MISSED tickets are not in the live order and do not count as waiting.
 
-**Order:** triage first, then priority (subject to the configured limit), then regular, each by join sequence. A remote reservation gets its place in the sequence **when payment is confirmed**. A ticket that rejoins after MISSED goes behind the next 3 waiting people (see below). Staff never move a ticket by choice.
+**Order (updated 2026-10-18):** two lanes. The regular lane is ordered by join sequence. A remote reservation gets its place in the sequence **when payment is confirmed**. The priority lane is ordered by check-in time (or upgrade time). Next follows the rule in "Priority Pass" below: triage first, then the head of the priority lane when it is due, else the next regular. A ticket that rejoins after MISSED goes behind the next 3 waiting people (see below). Staff never move a ticket by choice.
 
-**People ahead:** an indexed `COUNT` of waiting tokens before mine in that order. With SQLite inside the Durable Object this is fast for thousands of tokens, so v1 doesn't need the Fenwick tree from the earlier design. Add it only if profiling shows a need.
+**People ahead:** an indexed `COUNT` of waiting tokens before mine in that order. With SQLite inside the Durable Object this is fast for thousands of tokens, so v1 doesn't need the Fenwick tree from the earlier design. Add it only if profiling shows a need. With the priority lane on, a regular's people ahead also includes the expected priority calls (see "Priority Pass").
 
 **Missed turn and late arrival (decided by the owner, 2026-10-18).** The same rules apply to walk-ins and remote joiners.
 
@@ -167,7 +168,7 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 2. The person arrives during GRACE. Staff tap **Admit**. The person is served right after the current person. They lose no place.
 3. GRACE ends. The ticket becomes **MISSED** (not EXPIRED). The ticket screen says: "You missed your turn. When you're here, tap I'm here to rejoin."
 4. The person taps **I'm here**. The app runs the same GPS walk-in check as joining (location is never stored). The ticket goes behind the next 3 WAITING people (the same rule as Skip). If fewer than 3 wait, it goes to the end. This is allowed **once per ticket**. Rejoins at the same time are ordered by tap time (the server receive time of a successful check).
-5. The person misses a second time, or never rejoins before the queue closes (or the business limit) → EXPIRED and one no-show strike. The existing rule stays: 3 strikes in 30 days block free joins for 7 days, per user and per device hash.
+5. The person misses a second time, or never rejoins before the queue closes (or the business limit) → EXPIRED. A free walk-in also gets one no-show strike. The existing rule stays: 3 strikes in 30 days block free joins for 7 days, per user and per device hash. Paid tickets (remote reservation, Priority Pass) get no strike: losing the fee is the penalty (C5, decided 2026-10-18).
 6. A ticket moves back only when its owner asks to rejoin. Staff never reposition it. People ahead for others: no change when a called ticket becomes No-show or MISSED. On a rejoin, only the people behind the insert point get +1.
 7. Remote join fee: see §6.3.
 8. This replaces the dropped idea "NEXT calls only checked-in people" (presence tracking is unreliable). Check-in is used only for rejoin after MISSED and for Priority Pass activation.
@@ -176,7 +177,7 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 
 | Case | What happens |
 |---|---|
-| Joins, goes shopping, comes back late on purpose | One rejoin behind 3. A second miss expires the ticket and adds a strike. |
+| Joins, goes shopping, comes back late on purpose | One rejoin behind 3. A second miss expires the ticket and adds a strike (free walk-ins only; a paid ticket loses its fee instead). |
 | Misses on purpose again and again across days | 3 no-shows in 30 days block free joins for 7 days (built, also per phone). |
 | Reinstalls the app for a fresh ticket | Blocked by the device check (built). |
 | Takes tickets in many queues "just in case" | One per queue. Each miss adds a strike. Optional later: a limit on active free tickets per person. |
@@ -189,15 +190,54 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 
 Proposed refinements R1–R4 (awaiting the owner's OK) are listed in the backend architecture doc §23.
 
-**Priority Pass (proposed 2026-10-18, pending the owner and the professor; not final).** This supersedes the older "VIP: pay to skip" idea as the recommended design.
-- **Flexible pass**, a per-business setting, OFF by default. The customer buys now. The pass is valid for a window (the `ticketValidity` setting). The ticket enters the live order only when the holder **checks in** on arrival (GPS, or the counter QR; staff can verify the signed ticket QR).
-- Among priority holders, the order is by **check-in time**, not purchase time.
-- Fairness cap: at most 1 priority per N regulars (default N = 3, set by the business), plus a daily sales cap per queue ("Sold out"). Triage still goes first. The app shows the current priority wait before purchase.
-- Expired without check-in → the fee is forfeited (or a partial refund; still open). The business cancels or closes early → full refund.
-- Fits OPD, government offices, labs, service centres and salons. Doctors with long fixed sessions need time-slot appointments instead: a separate, later feature, not v1.
-- Optional later: a customer "Running late" button that moves the person back N places by choice, before they are called.
+**Priority Pass, "flexible pass" (decided by the owner, 2026-10-18; built in Step 4).** This replaces the proposal of the same day and the older "VIP: pay to skip" idea (both superseded 2026-10-18). There are no time slots. The pass is a paid pass for one queue. It enters the line when the holder arrives.
 
-**Wait estimate:** an EWMA of the intervals between Next calls (paused time excluded, outliers capped at 5× the recent median), plus an exponentially weighted variance for the range. The estimated call time = the remainder of the current interval + people ahead × EWMA. The range uses the variance (see the earlier ETA documents).
+Lifecycle:
+1. **Buy.** Signed-in, non-anonymous accounts only. The business sets the price and the validity window (default "today"; hours to days). Before paying, the app shows an honest preview: "Priority holders wait about X min · regular wait about Y min · you save about Z min". The ticket is created only after the server confirms the payment (verify + webhook), never from the client alone. Payment not confirmed → no ticket.
+2. **BOOKED.** Paid, not yet in the line. The holder can be anywhere.
+3. **Check in on arrival.** GPS within the queue's join radius (the walk-in check). A photo of the counter QR alone is not enough. Mocked locations are rejected. The ticket then enters the **priority lane**, ordered by check-in time (not purchase time).
+4. **Called and served** through Next (rule below). Priority tickets have their own number series: P1, P2… Missed-turn rules are the same as for everyone: Grace → Missed → one rejoin → Expired.
+5. Once checked in, the validity window no longer matters. The holder stays until served or until the queue closes.
+
+**Upgrade ("Skip ahead", v1, the main revenue path).** A WAITING ticket shows "Skip ahead for ₹X, about N min faster". Paying moves that same ticket into the priority lane at the upgrade time. No check-in is needed: the person is already present. One active ticket per person per queue: buying a pass while holding a ticket upgrades it, never a second ticket. Only WAITING tickets can upgrade (not CALLED, GRACE or MISSED). The offer is hidden when the estimated saving is below a threshold (default 5 min). The app never shows "save ~0 min" next to a price (C2).
+
+**Next rule** (enforced by the engine; staff cannot pick a priority person by hand):
+- Triage first (existing daily cap).
+- Else call the head of the priority lane if it is **due**, else the next regular.
+- Due = a credit counter. Each regular call adds 1 credit. A priority call costs N credits (N = the business ratio "1 priority per N regulars"). Credits are capped at N, so there is no burst after a quiet period. If no priority holder waits, regulars go on as normal.
+- The counter starts at 0 when a session opens: the first priority holder waits N regular calls, with no instant jump at opening. Triage calls add no credit. A regular call adds a credit even if it ends as No-show. Undo of Next also undoes the credit change (C1).
+
+**Business settings** (all set by the business; no platform limits): priority on/off (default OFF), price, ratio N (any whole number ≥ 1, so 1-in-1 is allowed; the form prefills 1-in-2 when switched on), optional daily sales cap ("Sold out"), validity window, cancel refund % (default 50).
+
+**What regulars see.** "Priority lane on · 1 in N" on the business page, the join screen and the ticket. Their people ahead and wait estimate include the expected priority calls, shown as a range (C3): the low end counts only priority holders already checked in; the high end assumes every N-th call goes to priority. The shared estimate and the load-test people-ahead invariant use the same rule (Step 4 work).
+
+**Money** (see also §6.3):
+
+| Case | Fee |
+|---|---|
+| Served | Kept, split business / Qpeer (demo 70/30) |
+| Cancelled by the customer before check-in | Refund at the business's % (default 50) |
+| Never checked in by the end of the window | No refund |
+| Checked in, then missed and never rejoined | No refund |
+| Checked in, but the queue closed before serving them | Full refund, automatic |
+| The business cancels or closes early | Full refund, automatic |
+| Queue closed while paused (C6) | Counts as "closed before serving": every checked-in holder gets a full refund |
+
+Checked-in priority holders never carry over to the next day, even with a multi-day window. They get a refund instead (C6).
+
+**Misuse:**
+- The pass is tied to the buyer's account. It cannot be transferred.
+- 1 pass per account per queue per day. The device hash is recorded on purchases and upgrades, so the same phone cannot buy a second pass with another account (the device-hash rule now covers paid priority too).
+- Check-in needs GPS. A fake check-in only leads to Grace → Missed for the person who faked it.
+- Every call is logged with its time, so staff favouritism can be audited.
+- Paid tickets that miss get no no-show strike. Losing the fee is the penalty. Strikes stay for free walk-ins only (C5).
+- The signed ticket QR carries only the first name and the last 4 phone digits. The QR is signed, not encrypted. Staff see the full name in the console when online (C4).
+
+**Why no platform cap (owner).** Businesses decide. Public ratings (§6.7) penalise unfair use: regulars rate low, the business's reputation drops on the map, and customers switch to other places.
+
+Fits OPD, government offices, labs, service centres and salons. Doctors with long fixed sessions need time-slot appointments instead: a separate, later feature, not v1. Optional later: a customer "Running late" button that moves the person back N places by choice, before they are called.
+
+**Wait estimate:** an EWMA of the intervals between Next calls (paused time excluded, outliers capped at 5× the recent median), plus an exponentially weighted variance for the range. The estimated call time = the remainder of the current interval + people ahead × EWMA. The range uses the variance (see the earlier ETA documents). With the priority lane on, people ahead is itself a range (C3, see "Priority Pass"), and the shown range covers both ends.
 
 **Timers:** a Durable Object has **one alarm**, so QueueDO keeps a small scheduler and always sets the alarm to the earliest of:
 - the next grace-period expiry
@@ -218,13 +258,14 @@ Proposed refinements R1–R4 (awaiting the owner's OK) are listed in the backend
 | `devices` | user_id, expo_push_token, updated_at |
 | `businesses` | id, owner_user_id, name, category, address, lat, lng, geohash, hours_json, status, created_at |
 | `business_members` | business_id, user_id, role (owner / staff) |
-| `queues` | id, business_id, name, status, settings_json (radius, walk-in quota, fees, grace minutes, priority limit, split %) |
+| `queues` | id, business_id, name, status, settings_json (radius, walk-in quota, fees, grace minutes, Priority Pass settings, split %) |
 | `queue_snapshots` | queue_id (pk), business_id, lat, lng, waiting, eta_low_s, eta_high_s, is_open, updated_at |
 | `token_history` | id, queue_id, number, class, method, user_id, final_state, joined_at, called_at, served_at |
-| `payments` | id, user_id, queue_id, token_id, kind, amount_paise, razorpay_order_id (unique), razorpay_payment_id (unique), status, created_at |
+| `payments` | id, user_id, queue_id, token_id, kind (reservation / priority / upgrade), amount_paise, device_hash (priority and upgrade), razorpay_order_id (unique), razorpay_payment_id (unique), status, created_at |
 | `ledger_entries` | id, payment_id, business_id, kind (capture / refund / forfeit / business_share / platform_share), amount_paise, created_at (**append-only**) |
 | `analytics_hourly` | queue_id, hour_start, joins, leaves, served, no_shows, sum_wait_s, sum_interval_s, intervals, eta_hits, eta_total |
 | `free_lane_strikes` | user_id, strikes, window_start |
+| `ratings` (x) | id, token_id (unique), business_id, user_id, lane (regular / priority), experience_stars, service_stars, created_at |
 
 Multi-table writes (for example payment + ledger rows) use **D1 batches**, which run as one transaction.
 
@@ -263,11 +304,35 @@ Customer (signed in, not anonymous) taps Reserve
 If the quota filled up in between → automatic refund + ledger refund
 ```
 
-**Fee after a missed turn (decided 2026-10-18, built in Step 4):** the fee is kept only if the ticket expires and the person never arrived. If the person is served, even after a rejoin, the fee paid for holding the place (no refund). If the business cancels or closes early, the fee is refunded.
+**Fee after a missed turn (decided 2026-10-18, built in Step 4):** the fee is kept only if the ticket expires and the person never arrived. If the person is served, even after a rejoin, the fee paid for holding the place (no refund). If the business cancels or closes early, the fee is refunded. A paid ticket that misses gets no no-show strike (C5).
+
+**Priority Pass purchase (decided 2026-10-18, Step 4):**
+```text
+Customer (signed in, not anonymous) taps Buy Priority Pass
+→ app shows the preview: priority wait ~X min · regular wait ~Y min · save ~Z min
+→ POST /orders {kind: priority, deviceHash} → Worker checks: priority on, not sold out,
+  1 pass per account and per device hash per queue per day, no active ticket in this queue
+  (holding a WAITING ticket → the app offers the upgrade instead)
+→ Razorpay Checkout → verify + webhook (same idempotent confirm as a reservation)
+→ QueueDO books the pass → ticket BOOKED (not in the line yet)
+→ on arrival: POST /tokens/:id/checkin {lat, lng, accuracy, mocked} → walk-in GPS check
+→ ticket WAITING in the priority lane, P number, ordered by check-in time
+```
+
+**Upgrade "Skip ahead" (decided 2026-10-18, Step 4):**
+```text
+WAITING ticket, estimated saving ≥ threshold (default 5 min) → offer "Skip ahead for ₹X, ~N min faster"
+→ POST /tokens/:id/upgrade {deviceHash} → same checks as a pass → Razorpay order
+→ verify + webhook → QueueDO moves the same ticket into the priority lane at the upgrade time
+  (only if it is still WAITING; otherwise automatic full refund)
+```
+
+Priority fee rules (served, cancel before check-in, never checked in, missed, closed before serving): §5.2 "Priority Pass".
 
 ### 6.4 Calling, no-show, grace and forfeit
 ```text
-Staff taps Next → QueueDO calls the next token → interval recorded → updates + alerts
+Staff taps Next → QueueDO picks triage, else a due priority holder, else the next regular
+  (credit counter, §5.2) → interval recorded → updates + alerts
 Staff taps No-show → token enters GRACE (default 10 min) → alarm set → alert grace_started
   • arrives in time → staff taps Admit → served next
   • alarm fires → MISSED (out of the live order)
@@ -279,6 +344,20 @@ Rules and edge cases: §5.2 "Missed turn and late arrival" (decided 2026-10-18).
 
 ### 6.5 Cancel and refund
 A customer cancels before the cancel window closes → Worker calls the Razorpay Refunds API → ledger refund → token LEFT. After the window, cancelling = leaving without a refund.
+
+Priority Pass (2026-10-18): a customer who cancels a BOOKED pass (before check-in) gets the business's cancel refund % (default 50) back. After check-in, cancelling = leaving without a refund. Full refunds when the queue closes before serving a checked-in holder, or when the business cancels or closes early, are automatic.
+
+### 6.7 Ratings (decided by the owner, 2026-10-18; Step 6 extra)
+Verified reviews, in the style of Trustpilot.
+- Every SERVED customer gets an in-app option to rate two things, 0–5 stars each: **customer experience** and **service quality**.
+- Ratings show on the map, the business card and the business page, where people decide which queue to join.
+- Purpose: they close the fairness loop. A business that favours priority too much gets low ratings from regulars and loses customers to other places.
+- Each rating stores the lane (regular or priority) of the rated ticket.
+
+Recommended, awaiting the owner's OK (proposed):
+- **RT1** Show ratings split by lane: "Regular customers 2.1★ · Priority customers 4.8★", next to "Priority lane on · 1 in N", so a blended average cannot hide unfairness.
+- **RT2** Integrity: only a served ticket can rate, once per ticket. Ratings show only after a minimum count (for example 5). The business cannot delete ratings but can reply in public.
+- **RT3** Known limit: for a monopoly provider (the only hospital nearby), ratings do not move customers, but they stay public evidence for oversight.
 
 ### 6.6 Map
 `GET /map?bbox` → one D1 query on `queue_snapshots` joined with `businesses` (an index on lat/lng with a bounding box) → markers with waiting count and wait range, at most about 30 s old.
@@ -315,7 +394,7 @@ Both run only against the **dev** environment.
 | `dev` | Deployed Worker `qpeer-api-dev` + D1 `qpeer-dev` | Phone testing, Razorpay webhooks (need a public URL), seeding |
 | `demo` | Deployed Worker `qpeer-api` + D1 `qpeer-demo` | The demo itself, with clean seeded data |
 
-**Demo settings (placeholders, not business decisions):** reservation fee ₹20, priority fee ₹100, business share 70%, grace 10 min, walk-in quota 50%, join radius 150 m, cancel window up to 15 min before the estimated call.
+**Demo settings (placeholders, not business decisions):** reservation fee ₹20, priority fee ₹100, business share 70%, grace 10 min, walk-in quota 50%, join radius 150 m, cancel window up to 15 min before the estimated call. Priority Pass (2026-10-18): OFF by default; when switched on the form prefills 1 priority per 2 regulars, validity "today", cancel refund 50%, no daily cap, upgrade offer hidden below 5 min saving.
 
 ---
 
@@ -357,9 +436,9 @@ qpeer/
 | **1. Business** | Onboarding, pin drop, queues, QR | A business created on the phone appears in D1 with a working QR |
 | **2. Queue core** | Walk-in join with GPS, console, live position, wait range, grace, alerts | Two phones: join → Next → live update + alerts. Integration tests pass. |
 | **3. Map** | Snapshots, map + markers + list, business detail with public stats | The seeded businesses and live counts show on the map, updating within 30 s |
-| **4. Payments** | Accounts upgrade, orders, Checkout, verify + webhook, refunds, ledger | Test payment → token. No-show → forfeit recorded. Cancel → refund recorded. |
+| **4. Payments** | Accounts upgrade, orders, Checkout, verify + webhook, refunds, ledger, missed-turn rules, Priority Pass + check-in + upgrade + Next credit rule (§5.2, decided 2026-10-18) | Test payment → token. No-show → forfeit recorded. Cancel → refund recorded. Pass → check-in → called by the 1-in-N rule. |
 | **5. Insights + demo data** | Analytics and earnings screens, seed and simulate scripts | The full demo script runs end to end on the `demo` environment |
-| **6. Extras** | Add person + claim code, Priority Pass setting (behind a per-business setting once the professor confirms, §5.2), reviews | Only if time allows |
+| **6. Extras** | Add person + claim code, verified ratings (§6.7). Priority Pass moved to Step 4 (2026-10-18). | Only if time allows |
 
 ---
 
@@ -372,4 +451,4 @@ qpeer/
 | **Demo city** | **Jammu, J&K, India**. Seed data is centred on about 32.73° N, 74.86° E and spread across the city's main neighbourhoods. |
 | **Repository location** | `G:\dev\qpeer` (local git repository on this laptop) |
 
-Later decisions (Priority Pass rules, real fees, OTP provider for real SMS) stay in the SRS TBD list and don't block v1. The Priority Pass now has a proposed design (§5.2, 2026-10-18) that waits for the owner and the professor.
+Later decisions (real fees, OTP provider for real SMS) stay in the SRS TBD list and don't block v1. The Priority Pass rules were decided by the owner on 2026-10-18 (§5.2).

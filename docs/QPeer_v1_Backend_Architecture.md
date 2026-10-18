@@ -168,6 +168,8 @@ All errors are `{ error: <code>, message?: <fallback text>, requestId, details? 
 | 409 | `device_in_queue` | another account on the same phone (device hash) holds an active free walk-in token in this queue (C2; no token id is returned) |
 | 409 | `queue_closed` / `queue_paused` / `queue_full` | joins rejected by queue state |
 | 409 | `quota_full` | remote reservations quota reached for this hour |
+| 409 | `priority_off` / `sold_out` | Priority Pass switched off, or the daily sales cap reached (Step 4) |
+| 409 | `pass_limit` | this account or this phone (device hash) already bought a pass for this queue today (Step 4) |
 | 409 | `invalid_state` | action not allowed in the token's/queue's current state |
 | 422 | `too_far` / `mock_location` / `no_location_fix` | walk-in location check failed |
 | 423 | `free_lane_blocked` | too many recent no-shows |
@@ -195,13 +197,15 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `push_tickets` | id (Expo ticket id), token_id, expo_push_token, kind, sent_at, receipt_checked_at, status | idx(receipt_checked_at) | 2 |
 | `free_lane_strikes` | id (outbox id), user_id, token_id, device_hash (C2), at (one row per no-show) | idx(user_id, at), idx(device_hash, at) | 2 |
 | `outbox_receipts` | id (QueueDO outbox id), kind, applied_at — dedupe for additive analytics upserts | pk(id) | 2 |
-| `payments` | id, user_id, queue_id, business_id, token_id, kind (`reservation`/`priority`), amount_paise, razorpay_order_id, razorpay_payment_id, status, refund_id, expires_at | unique(razorpay_order_id), unique(razorpay_payment_id), idx(user_id), idx(status, expires_at) | 4 |
+| `payments` | id, user_id, queue_id, business_id, token_id, kind (`reservation`/`priority`/`upgrade`), amount_paise, device_hash (priority and upgrade, 2026-10-18), razorpay_order_id, razorpay_payment_id, status, refund_id, refund_paise (partial refunds), expires_at | unique(razorpay_order_id), unique(razorpay_payment_id), idx(user_id), idx(status, expires_at), idx(queue_id, device_hash, created_at) | 4 |
 | `ledger_entries` | id, payment_id, business_id, kind (`capture`/`refund`/`forfeit`/`business_share`/`platform_share`), amount_paise, at | idx(business_id, at), idx(payment_id) — **append-only** | 4 |
 | `webhook_events` | id (Razorpay event id), type, received_at, processed_at | pk(id) — dedupe | 4 |
 | `analytics_hourly` | queue_id, business_id, hour_start (IST hour, epoch ms), joins, leaves, served, no_shows, cancels, sum_wait_ms, waits, sum_interval_ms, intervals, eta_hits, eta_total | pk(queue_id, hour_start), idx(business_id, hour_start) | 2 (written), 5 (read) |
-| `reviews` *(x)* | id, token_id, business_id, user_id, stars, text | unique(token_id) | 6 |
+| `ratings` *(x)* | id, token_id, business_id, queue_id, user_id, lane (`regular`/`priority`), experience_stars (0–5), service_stars (0–5), created_at. Replaces the older `reviews` (stars + text) row, superseded 2026-10-18. | unique(token_id), idx(business_id, created_at) | 6 |
 
-**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, `priorityFeePaise` 10000, `priorityPerRegular` 0 (off), `businessSharePct` 70, `graceMinutes` 10, `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2, `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
+**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, Priority Pass (2026-10-18, all business-set, no platform limits): `priorityEnabled` false, `priorityFeePaise` 10000 (pass and upgrade price), `priorityPerRegular` N (whole number ≥ 1; the form prefills 2 when switched on; replaces the old "0 = off"), `priorityDailyCap` null (no cap), `priorityValidityMin` 0 (= today; else hours to days), `priorityCancelRefundPct` 50, `upgradeMinSavingMin` 5; `businessSharePct` 70, `graceMinutes` 10, `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2, `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
+
+**Step 4 data (2026-10-18):** token state `BOOKED`, `tokens.checked_in_at` (check-in or upgrade time), `tokens.session_id` empty while BOOKED (the pass gets its session and P number at check-in), `payments.device_hash`, `payments.refund_paise`.
 
 **Migration 0005 (fix batch):** `tokens.device_hash`, `tokens.expires_at`, `free_lane_strikes.device_hash` (+ index), `devices.device_hash`, `queue_snapshots.in_service`. All nullable or defaulted, so the old Worker keeps working against the migrated D1 (migrate first, then deploy).
 
@@ -225,12 +229,14 @@ A **session** is one open→close cycle (normally one day). Opening a queue star
 
 **Ticket validity and carry-over (C4).** With `ticketValidityMin > 0` a token gets `expires_at = joinedAt + validity`. The alarm ends WAITING tokens whose validity ran out as `EXPIRED` / `validity` (also while the queue is closed). On close (manual or auto) a WAITING token with `expires_at > now` is **not** ended: it is marked `carried`, keeps its number, its old `sessionId` and its sort key, and stays WAITING in the DO (and in D1) while the queue is closed. Because sort keys only grow, carried tokens are at the front of their class when the next session opens, in their original order; triage still goes first. New tokens of the new session start at #1 (no clash: the D1 unique key includes the session). The console and ticket show a "Kept" marker; a carried token's overnight wait is not counted as a wait/ETA sample. CALLED and GRACE tokens end on close as before. Until-close tickets (`ticketValidityMin = 0`, the default) behave exactly as before.
 
+**Priority holders at close (C6, decided 2026-10-18).** Checked-in priority tokens never carry over, even with a multi-day pass window: on close (manual, auto, or while paused) they end and get a full refund. BOOKED passes are not part of any session; they stay BOOKED until checked in or until their window ends (then `EXPIRED` / `validity`, no refund). The credit counter resets to 0 when a session opens.
+
 ### 9.2 DO storage (its own SQLite)
 
 | Table | Contents |
 |---|---|
-| `meta` | key/value: queueId, businessId, sessionId, status (`closed`/`open`/`paused`), nextNumber per series, nowServing, lastServed, settings JSON + version, EWMA mean/variance, lastCallAt, pausedSince, pausedTotalMs, lastNextUndo, hours (B20), keepOpenUntil (B20) |
-| `tokens` | id, number, series, class, method, userId, state, sortKey, joinedAt, calledAt, counter, graceUntil, paymentOrderId, alertFlags, deviceHash (C2), expiresAt (C4), carried (C4) — schema v2 adds the last three with `ALTER`s |
+| `meta` | key/value: queueId, businessId, sessionId, status (`closed`/`open`/`paused`), nextNumber per series, nowServing, lastServed, settings JSON + version, EWMA mean/variance, lastCallAt, pausedSince, pausedTotalMs, lastNextUndo, hours (B20), keepOpenUntil (B20), priorityCredits (Step 4) |
+| `tokens` | id, number, series, class, method, userId, state, sortKey, joinedAt, calledAt, counter, graceUntil, paymentOrderId, alertFlags, deviceHash (C2), expiresAt (C4), carried (C4) — schema v2 adds the last three with `ALTER`s; Step 4 adds checkedInAt and the `BOOKED` state |
 
 **Now serving** (coordinator report 2026-10-16, INC-048): the CALLED token called last; when nobody is at a counter, the last token SERVED this session (`lastServed`); null when closed. It is recomputed after every change, so a called token that leaves, is skipped, misses its turn or is undone stops showing at once. Snapshot, token views and console all read the same value.
 | `intervals` | recent Next-to-Next intervals (last ~50) for the median used in outlier capping |
@@ -240,33 +246,47 @@ A **session** is one open→close cycle (normally one day). Opening a queue star
 ### 9.3 Token states
 
 ```text
+BOOKED (Priority Pass, paid) ─check-in (GPS)─► WAITING (priority lane, P number)
+   ├─cancel before check-in─► CANCELLED (refund at priorityCancelRefundPct)
+   └─window ends───────────► EXPIRED (end reason `validity`, no refund)
+
 WAITING ─next─► CALLED ─served─► SERVED
    │              └─no-show─► GRACE ─admit─► CALLED (front)  ─served─► SERVED
    │                              └─timer─► MISSED ─"I'm here" (once)─► WAITING (behind next 3)
-   │                                           └─close / business limit─► EXPIRED + strike
-   │            (a rejoined ticket that misses again: GRACE ─timer─► EXPIRED + strike)
+   │                                           └─close / business limit─► EXPIRED (+ strike if free walk-in)
+   │            (a rejoined ticket that misses again: GRACE ─timer─► EXPIRED, + strike if free walk-in)
+   ├─upgrade (paid)► WAITING (same token, priority lane at the upgrade time)
    ├─leave───────► LEFT
    ├─cancel──────► CANCELLED (refund decided by the Worker)
    ├─validity ran out (C4) ► EXPIRED (end reason `validity`)
-   └─queue closed► EXPIRED   (unless still valid: carried over, stays WAITING)
+   └─queue closed► EXPIRED   (unless still valid: carried over, stays WAITING; never for checked-in priority, C6)
 ```
 
-Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while `WAITING`, `CALLED`, `GRACE` or `MISSED`.
+Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while `BOOKED`, `WAITING`, `CALLED`, `GRACE` or `MISSED`.
 
 **MISSED and rejoin (decided 2026-10-18, Step 4; HLD §5.2 has the full rules and edge cases).** Same for walk-ins and remote joiners.
 - No-show → GRACE with the existing `grace_started` alert (no new alert at grace start). Admit during GRACE → served right after the current person.
 - GRACE timer → `MISSED`, not `EXPIRED`. A MISSED token is out of the live order and is not counted as waiting.
 - "I'm here" = `POST /v1/tokens/:id/rejoin { lat, lng, accuracy, mocked }` → the same GPS walk-in check as joining (location never stored) → DO `rejoin(tokenId, userId)` → `WAITING`, re-sequenced behind the next 3 WAITING tokens (the Skip rule), or to the end if fewer wait. **Once per ticket** (a `rejoined` flag on the token). Simultaneous rejoins are ordered by the server receive time of a successful check (the DO serializes them).
-- Second miss (a rejoined token's GRACE ends), or no rejoin by queue close (or the business limit) → `EXPIRED` + one no-show strike (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash).
+- Second miss (a rejoined token's GRACE ends), or no rejoin by queue close (or the business limit) → `EXPIRED`. Free walk-ins also get one no-show strike (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash). Paid tokens (remote, priority) get no strike: losing the fee is the penalty (C5, 2026-10-18).
 - Only the owner's rejoin moves a token back. Staff never reposition it.
-- Paid tokens: forfeit only when the token expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Business cancel or early close → refund.
+- Paid tokens: forfeit only when the token expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Business cancel or early close → refund. Priority money rules: §10.5.
 - Replaces the dropped idea "NEXT calls only checked-in people". Check-in is used only for rejoin after MISSED and for Priority Pass activation.
+
+**BOOKED, check-in and upgrade (decided 2026-10-18, Step 4; HLD §5.2).**
+- A pass is created only by `confirmPayment` (verify or webhook), never from the client alone. DO `book(...)` → `BOOKED`, no number, no session, not in the live order, not counted as waiting.
+- Check-in = `POST /v1/tokens/:id/checkin { lat, lng, accuracy, mocked }` → the walk-in GPS check within `joinRadiusM` (mocked rejected, location never stored; a counter-QR photo alone is not enough) → DO `checkIn(tokenId, userId)` → `WAITING` in the priority lane, `checkedInAt = now`, next P number of the current session, signed ticket re-issued. Allowed only while the queue is open and the pass window is valid. After check-in the window no longer applies.
+- Upgrade = `POST /v1/tokens/:id/upgrade` → Razorpay order → `confirmPayment` → DO `upgrade(tokenId)`: the same token moves into the priority lane at the upgrade time. Only from `WAITING`; if the token is no longer WAITING when the payment confirms → automatic full refund.
+- One active token per user per queue (BOOKED counts). Buying a pass while holding a WAITING token is an upgrade, never a second token.
 
 ### 9.4 Order and "people ahead"
 
 `sortKey = classRank * 1e15 + sequence * 1024`, where `classRank` is 0 for triage, 1 for priority, 2 for regular, and `sequence` increases per allocation (for remote reservations: at payment confirmation). The gaps of 1024 let a skip take a key between two neighbours; when a gap is used up, the waiting list is renumbered (`ordering.ts`).
 - **People ahead** = `COUNT(*) WHERE state = 'WAITING' AND sortKey < mine`, using an index on `(state, sortKey)`. This is exact after leaves, cancels and skips, and fast for thousands of tokens, so the Fenwick tree from the early design isn't needed.
-- **Priority limit** (when enabled): a priority token's sequence is pushed back so that at most 1 priority entry is served per `priorityPerRegular` regular tokens.
+- **Priority limit** (superseded 2026-10-18 by the lane + credit rule below): a priority token's sequence was pushed back so that at most 1 priority entry is served per `priorityPerRegular` regular tokens.
+- **Priority lane (decided 2026-10-18, Step 4).** Priority tokens are numbered in their own series (P1, P2…, `series = 'P'`). Their `sequence` is taken at check-in (or upgrade), so the lane is ordered by check-in time, not purchase time. Whether an upgraded token keeps its R number or takes a P number is an engine detail to settle in Step 4.
+- **Next rule (credit counter).** `next` picks: triage head; else the priority-lane head if `priorityCredits ≥ N`; else the regular head; else (no regulars) the priority head. Each regular call does `credits = min(credits + 1, N)`; a priority call does `credits −= N` (never below 0). Triage calls change nothing. A regular call that ends as No-show still counts. `undoNext` restores the credit value from before the call. Credits start at 0 when a session opens (C1). Staff cannot call a chosen priority person; only `next` decides.
+- **People ahead with the priority lane on.** For a priority token: triage ahead + priority tokens ahead in the lane + the regular calls still needed before each of those is due. For a regular token: a range (C3). Low = regulars ahead + triage + the priority calls that the credit rule will make for holders **already checked in**. High = as if every N-th call goes to priority (regulars ahead × (1 + 1/N), rounded up). Shared function in `packages/shared`, used by the DO, the purchase preview ("priority ~X · regular ~Y · save ~Z") and the upgrade offer (hidden below `upgradeMinSavingMin`). The load-test people-ahead invariant (§19.1) must use the same rule (Step 4 work).
 - **Skip** gives the token a new sequence equal to "after the next N waiting tokens" (N = 3 by default) — decided once, documented in tests.
 - **Rejoin after MISSED** (2026-10-18) uses the same key rule as Skip: behind the next 3 WAITING tokens, or the end. MISSED tokens are excluded from people ahead. When a called token becomes No-show or MISSED, nobody else's people-ahead changes. On a rejoin, only tokens behind the insert point get +1.
 
@@ -281,7 +301,10 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 | `allocate({ method, userId, cls, paymentOrderId?, deviceHash? })` | New token at the end of its class | Checks: open, not full, one active free token per user, paid cap per user, **one active free walk-in per device hash (C2, `device_in_queue`)**, walk-in quota for `remote`. **Idempotent by `paymentOrderId`.** |
 | `setHours(hours)` · `keepOpen()` · `autoCloseCheck(hours)` | B20 auto-close: store hours; push the auto-close 1 h later; cron safety net | `keepOpen` fails `invalid_state` when closed or hours unknown |
 | `checkQuota(userId)` | Can a remote reservation be made right now? | Used before creating a Razorpay order |
-| `next(counter)` / `undoNext()` | Call the next token; undo within 30 s | Records interval |
+| `next(counter)` / `undoNext()` | Call the next token; undo within 30 s | Records interval. Step 4: picks by the credit rule (§9.4); undo restores the credits. |
+| `book({ userId, paymentOrderId, deviceHash, validUntil })` | New Priority Pass in `BOOKED` (Step 4) | Only from `confirmPayment`. Checks: priority on, daily cap, one active token per user. **Idempotent by `paymentOrderId`.** |
+| `checkIn(tokenId, userId)` | `BOOKED` → `WAITING` in the priority lane (Step 4) | Worker runs the GPS check first. Fails `invalid_state` if closed or the window ended. |
+| `upgrade(tokenId, paymentOrderId)` | `WAITING` regular → priority lane at upgrade time (Step 4) | Idempotent by `paymentOrderId`; fails `invalid_state` if not WAITING (→ refund). |
 | `skip(tokenId)` / `noShow(tokenId)` / `admit(tokenId)` / `served(tokenId)` | Staff actions | |
 | `rejoin(tokenId, userId)` | "I'm here" after MISSED (Step 4) | Worker runs the GPS check first. Once per ticket; fails `invalid_state` otherwise. |
 | `leave(tokenId, userId)` / `cancel(tokenId, userId)` | Customer actions | `cancel` returns whether a refund applies (inside cancel window) |
@@ -297,6 +320,7 @@ Every mutating method updates the token row, recalculates the wait estimate, enq
 - `ewma = α·interval + (1−α)·ewma` (α = 0.3), with matching exponentially weighted variance.
 - **Cold start:** before 3 intervals exist, `ewma = serviceMinutesHint` from settings.
 - For a token with `k = peopleAhead + 1`: `expectedCall = lastCallAt + k·ewma` (minus elapsed time of the current interval); range = `k·ewma ± 1.28·σ·√k`, low clamped to "now".
+- **With the priority lane on (C3, 2026-10-18):** `k` is a range (§9.4); the low end of the wait uses the low `k`, the high end the high `k`. Regulars also see "Priority lane on · 1 in N".
 - **Be-back-by** = expected call − 5 min buffer. **Leave-home-by** = expected call − (straight-line distance ÷ 20 km/h) − 10 min buffer.
 - The math lives in `packages/shared` (pure functions) so the app can display consistent values; the DO is the source of the numbers it sends.
 - ETA accuracy for analytics: when a token is called, record whether the call time fell inside the range shown at join.
@@ -363,11 +387,11 @@ created ──(captured, verified)──► captured ──► allocated
 
 ### 10.2 Flow
 
-1. **Create order** `POST /v1/queues/:id/orders { kind }` — `requireRegistered`; DO `checkQuota`; amount from queue settings; create Razorpay order (receipt = our payment id); insert `payments` row `created` with `expires_at` = now + 30 min.
+1. **Create order** `POST /v1/queues/:id/orders { kind }` — `requireRegistered`; DO `checkQuota`; amount from queue settings; create Razorpay order (receipt = our payment id); insert `payments` row `created` with `expires_at` = now + 30 min. For `kind: priority` (and `POST /v1/tokens/:id/upgrade`, kind `upgrade`) the body carries `deviceHash`; the Worker checks priority on, not sold out, 1 pass per account **and** per device hash per queue per IST day (`pass_limit`), and stores `device_hash` on the payment (§10.5).
 2. **App pays** with Razorpay Checkout using the order id.
 3. **Client confirmation** `POST /v1/payments/verify { orderId, paymentId, signature }` — verify `HMAC_SHA256(orderId|paymentId, keySecret)`; then `confirmPayment(orderId, paymentId)`.
 4. **Webhook** `POST /v1/webhooks/razorpay` — verify `X-Razorpay-Signature` = `HMAC_SHA256(rawBody, webhookSecret)` **on the raw body before parsing**; dedupe by event id in `webhook_events`; `payment.captured` → `confirmPayment(...)`; `refund.processed` → mark refund done.
-5. **`confirmPayment`** (shared by 3 and 4, idempotent): if already `allocated`, return the token. Else D1 status → `captured`; DO `allocate(... paymentOrderId)`; on success → `allocated` + token id; on `quota_full`/`queue_closed` → refund via API → `refunded`. Ledger rows are written in one D1 batch with the status change.
+5. **`confirmPayment`** (shared by 3 and 4, idempotent): if already `allocated`, return the token. Else D1 status → `captured`; DO `allocate(... paymentOrderId)` (priority: `book`, upgrade: `upgrade`); on success → `allocated` + token id; on `quota_full`/`queue_closed` → refund via API → `refunded`. Ledger rows are written in one D1 batch with the status change.
 6. **Cancel** (`TOK-05`/`PAY-07`): DO `cancel` says whether the window applies → Refunds API → `refunded`.
 7. **Forfeit**: DO expiry of a paid token → outbox → payment `forfeited` + ledger `forfeit`, `business_share`, `platform_share`.
 8. **Queue closed**: DO `close` returns paid active tokens → refunds.
@@ -386,6 +410,21 @@ created ──(captured, verified)──► captured ──► allocated
 - Payments `created` past `expires_at` → `expired`.
 - Fetch Razorpay payments for the last day (test mode) and compare with D1; log mismatches as errors.
 
+### 10.5 Priority Pass and upgrade money rules (decided 2026-10-18, Step 4)
+
+| Case | Payment | Ledger |
+|---|---|---|
+| Served | `allocated` stays; fee kept | capture split stands (demo 70/30) |
+| Customer cancels a BOOKED pass | `refunded` (partial) at `priorityCancelRefundPct` (default 50) via the Refunds API, `refund_paise` set | `refund −refund_paise` + reversing shares in proportion |
+| Never checked in by the end of the window | `forfeited` | `forfeit` marker |
+| Checked in, missed, never rejoined | `forfeited` (no no-show strike, C5) | `forfeit` marker |
+| Checked in, queue closed before serving (also closed while paused, C6) | `refunded` (full), automatic | full refund entries |
+| Business cancels or closes early | `refunded` (full), automatic | full refund entries |
+| Upgrade confirmed after the token left WAITING | `refunded` (full), automatic | full refund entries |
+
+- Checked-in priority tokens never carry over; `close` returns them for a full refund (C6).
+- **Anti-misuse:** the pass is tied to the buyer's account (no transfer). `payments.device_hash` is recorded for `priority` and `upgrade`, and the 1-pass-per-queue-per-day rule is checked per user and per device hash. This extends the C2 device-hash rule, which so far ignored paid flows. Every call is logged with its time (audit for staff favouritism).
+
 ---
 
 ## 11. Notifications
@@ -402,7 +441,8 @@ created ──(captured, verified)──► captured ──► allocated
 
 - `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` (any signed-in user) → **one** D1 statement (`modules/map/service.ts`): a CTE picks listed businesses (status `active`, has pin, ≥ 1 active queue) inside the box through `idx(status, lat, lng)`, nearest to the box centre first, `limit + 1` rows; the outer select joins their active queues and `queue_snapshots`. `limit` defaults to 200 (max 300); `truncated: true` tells the app to zoom in. Each box side may be at most 1.5° (else 400 `invalid_input`). `openNow` is evaluated in SQL with **the same rule as the badge** (B16, INC-043): some active queue's snapshot is open and not paused, whatever the hours; so the limit applies after the filter. `isOpenNow` in responses still reports the hours (information only); the app shows "Open (after usual hours)" when a queue is open outside them (shared `openLook`). `GET /v1/queues/:id` adds `business.isOpenNow` and `business.todayHours` for the join screen. Response `MapResponse { items: MapBusiness[], truncated, serverTime }`; no user-specific data. The request log records the path only, never the box.
 - Business detail `GET /v1/businesses/:id` → profile + queues with snapshots + `isOpenNow` + `todayHours` + `stats` (MAP-05: `servedCount`, `avgWaitMs` = Σwait/waits, `avgServiceMs` = Σinterval/intervals, `etaAccuracyPct` = eta_hits/eta_total, over the last 28 days of `analytics_hourly`; each average null below 20 samples). **MAP-06 visibility:** members always get `stats`; non-members get it once the business has been listed for 14 days (`businesses.first_listed_at`) or when the owner set `publicStats` (`PATCH /v1/businesses/:id { publicStats }`), otherwise `stats: null`.
-- `GET /v1/queues/:id` exposes `joinRadiusM` to everyone (the only public queue setting).
+- `GET /v1/queues/:id` exposes `joinRadiusM` to everyone (the only public queue setting). Step 4 adds the public Priority Pass fields: `priority: { enabled, perRegular, feePaise, soldOut }` for the "Priority lane on · 1 in N" label.
+- **Ratings (decided 2026-10-18, Step 6 extra).** `POST /v1/tokens/:id/rating { experience: 0–5, service: 0–5 }` (owner of a `SERVED` token, once per token: `unique(token_id)`; the row stores the ticket's lane). Map items, the business card and `GET /v1/businesses/:id` carry `rating: { experienceAvg, serviceAvg, count }`. Proposed, awaiting the owner: split by lane (RT1), minimum count before showing and public business replies (RT2) — §23.
 - Snapshots are at most ~30 s old (MAP-02); the app polls the visible area every 30 s while the map is visible.
 - Geohash is stored for later (clustering on the server, larger areas); v1 uses the bounding box only.
 - Dev only: `POST /v1/dev/seed-map` / `POST /v1/dev/unseed-map` (registered user; 404 unless `ENVIRONMENT` is `local` or `dev`) create/delete 8 "Demo · " businesses (11 queues) around Jammu, owned by the fixed user `seed-map-owner`, ids prefixed `5eed0000-` (queues `5eed0001-`). Seeding is idempotent, opens every queue and tops each up to a few triage tokens so the map shows waiting counts.
@@ -500,6 +540,7 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 - **Helper routes** `GET /v1/loadtest/stats` (push counts per token+kind, analytics rows, snapshots, per-queue DO status/waiting/outbox backlog), `GET /v1/loadtest/queues/:id/audit` (DO `auditTokens()` dump + D1 token rows), `POST /v1/loadtest/reset` (closes every queue, then — once every DO outbox is empty — wipes the D1 tables; 409 while draining). All 404 unless `ENVIRONMENT=loadtest` **and** the caller was verified by the load-test key. ≤ 40 queues per request (subrequest limit).
 - **Simulator**: refuses any base URL but `https://qpeer-api-loadtest.qpeer-api.workers.dev` (or `--local` wrangler dev) and checks `/v1/health` says `loadtest`. Owners create businesses around Jammu with 2 queues (grace 1 min), customers (anonymous + some phone-registered, most with a fake push device) join in a burst and spread out, with a few too-far / mocked / no-fix / double-join probes; 40 % hold a WebSocket, the rest poll; some leave. Staff loops per queue: Next every 5–40 s (scaled for short runs), skip, no-show → admit, served, undo, triage, pause/resume. Map clients poll `/v1/map`. Every request takes one unit of a hard budget (default 15 000; the load phase stops early to leave room for the checks).
 - **Invariant checker** (after a 35 s quiet period, then again after closing every queue and draining): D1 tokens == DO tokens; numbers unique and gap-free per session+series; snapshot == DO; `/v1/map` summary == Σ queues == DO; people-ahead exact (DO rank and sampled `GET /tokens/:id`); WebSocket clients converge (a mismatch is re-checked against a fresh audit after 3 s, twice, because grace expiries keep changing the DO after the load stops); queue order (triage first, untouched regulars FIFO, console positions 1..n); people-ahead never rises without a skip/triage/undo; terminal states never move back except Undo; analytics totals == simulator log and final states; pushes deduplicated and every called token alerted once; rejection codes; no unexpected responses; no join coordinates in a `wrangler tail` capture (`--tail-log`). Reports go to `scripts/loadtest/reports/<timestamp>.md|.json`.
+- **Step 4 work (2026-10-18):** with the priority lane on, "people-ahead exact" and the queue-order check must follow the credit rule and the C3 range (§9.4), using the same shared function as the DO.
 
 ---
 
@@ -525,6 +566,9 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 | Join | `POST /v1/queues/:id/join` `{ lat, lng, accuracyM, mocked, deviceHash? }` → `TokenView` with `signedTicket` | A | JON-04–07, C2, C3 |
 | Tokens | `GET /v1/me/tokens?status=active\|recent` | A | TOK-06 |
 | Tokens | `GET /v1/tokens/:id` · `POST /v1/tokens/:id/leave` · `POST /v1/tokens/:id/cancel` | A (owner of token) | TOK-01, TOK-05 |
+| Tokens | `POST /v1/tokens/:id/rejoin` · `POST /v1/tokens/:id/checkin` `{ lat, lng, accuracy, mocked }` | A (owner of token) | QUE-23, PRI-03 (Step 4) |
+| Tokens | `POST /v1/tokens/:id/upgrade` `{ deviceHash }` → Razorpay order | R (owner of token) | PRI-05 (Step 4) |
+| Tokens | `POST /v1/tokens/:id/rating` `{ experience, service }` | A (owner of a served token) | RAT-01 (Step 6) |
 | Live | `GET /v1/queues/:id/live` (WebSocket) | A | TOK-02 |
 | Map | `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` | A | MAP-01–04, NFR-04 |
 | Payments | `POST /v1/queues/:id/orders` · `POST /v1/payments/verify` · `GET /v1/me/payments` | R | PAY-01–05, PAY-11 |
@@ -568,7 +612,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Question | Step |
 |---|---|
 | Razorpay Route availability in test mode (split in ledger only if not) | 4 |
-| Priority Pass rules (limit or none) — setting already supported. Proposed design 2026-10-18 below, pending the owner and the professor. | 6 |
+| Priority Pass rules — decided by the owner 2026-10-18 (below), built in Step 4. | done |
 
 ### Decided in Step 2
 
@@ -618,7 +662,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Auto-close (B20, INC-047) | 30 min after the day's last hours range; opened outside hours (or on a closed day) → 23:59 IST of the opening day (a business working off-hours keeps the evening and taps Keep open past midnight); never sooner than 30 min after opening. DO alarm closes on time; the 15-min cron is the safety net. Keep open = +1 h per tap from the current auto-close time (`meta.keep_open_until`, reset on open/close). Owner can't switch auto-close off in v1. |
 | Wait text (B19, INC-046/049) | One helper (`waitText`/`waitSummary`): "No wait", "Next in ~N min", "N waiting · ~N min"; the midpoint of the DO's range, aged by the snapshot's `updatedAt`. The ticket formats its own range the same way. |
 | Now serving (INC-048) | Called token called last, else the last served this session, else none. A token that left/was skipped/missed its turn while called never shows. |
-| Device hash (C2, INC-042) | SHA-256(ANDROID_ID + fixed public salt `qpeer-device-v1:`), computed on the phone (`@noble/hashes`); only the hash travels and is stored (D1 tokens/strikes/devices, DO tokens). Second free walk-in on the same phone in the same queue: same account → `already_in_queue` + tokenId; other account → `device_in_queue` (no token id: it belongs to someone else). 3 no-shows per device hash in 30 days block free joins (read at join, 7 days after the last). Missing hash = old rules. Paid/remote/staff flows ignore it. |
+| Device hash (C2, INC-042) | SHA-256(ANDROID_ID + fixed public salt `qpeer-device-v1:`), computed on the phone (`@noble/hashes`); only the hash travels and is stored (D1 tokens/strikes/devices, DO tokens). Second free walk-in on the same phone in the same queue: same account → `already_in_queue` + tokenId; other account → `device_in_queue` (no token id: it belongs to someone else). 3 no-shows per device hash in 30 days block free joins (read at join, 7 days after the last). Missing hash = old rules. Paid/remote/staff flows ignore it (superseded 2026-10-18 for Priority Pass purchases and upgrades: the hash is recorded and limited there, §10.5). |
 | Signed ticket (C3) | Ed25519 (Workers WebCrypto `Ed25519` works in workerd and the test pool; ES256 not needed). Text `QPT1.<b64url payload>.<b64url sig>` (~370 chars): `{v, q, t, n, s, c, sid, iat = joinedAt, exp = expiresAt ?? joinedAt + 24 h, kid}`; deterministic, so GET returns the same ticket. Signed on join and `GET /v1/tokens/:id` for active tokens only, never on socket messages (the app keeps it). Verified on the phone with `@noble/curves` (bundled public keys + cached `/v1/ticket-keys`); the console's "Verify a ticket" also reads the live status when online. No key → no ticket, nothing breaks. |
 | Ticket validity + carry-over (C4) | `ticketValidityMin` (0 = until close). Carried tokens keep number, session id and place — no reissue (the customer's number and signed ticket stay valid), "Kept" marker in console and ticket. Expired-by-time → `EXPIRED` / `validity` via the alarm, also while closed. Carried waits are not wait/ETA samples. Carry-over needs no new numbering rule because sort keys only grow. |
 | App storage (C1) | `@react-native-async-storage/async-storage` 2.2.0 (SQLite on Android, no config plugin, async API fast enough for a preload at start) over `expo-sqlite/kv-store` (sync reads, but a bigger native library for a few small keys). One `lib/storage.ts`: typed keys with zod schemas and a version per key; anything unreadable reads as missing. Saved: ticket views (+ signed ticket, ended ones for 24 h, ≤ 30), battery-tip dismissal, console queue, map filters/sort/view, last camera (not the user's position), ticket public keys. |
@@ -632,7 +676,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Arrives during GRACE | Admit → served right after the current person (no place lost). |
 | GRACE ends | New state `MISSED` (not `EXPIRED`), out of the live order. Ticket text: "You missed your turn. When you're here, tap I'm here to rejoin." |
 | "I'm here" | `POST /v1/tokens/:id/rejoin` with the same GPS walk-in check as joining (location never stored) → WAITING behind the next 3 WAITING (the Skip rule), or the end if fewer wait. Once per ticket. Simultaneous rejoins ordered by the server receive time of a successful check. |
-| Second miss / no rejoin | A rejoined ticket that misses again, or a MISSED ticket not rejoined by queue close (or the business limit) → `EXPIRED` + one no-show strike (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash). The strike is now taken at this expiry, no longer at the end of GRACE. |
+| Second miss / no rejoin | A rejoined ticket that misses again, or a MISSED ticket not rejoined by queue close (or the business limit) → `EXPIRED` + one no-show strike for free walk-ins only (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash). The strike is now taken at this expiry, no longer at the end of GRACE. Paid tickets get no strike (C5, 2026-10-18). |
 | Who moves a ticket | Only its owner, by rejoining. Staff never reposition it. |
 | People ahead | No change for others when a called ticket becomes No-show or MISSED. On a rejoin, only tokens behind the insert point get +1. |
 | Remote fee | Kept only if the ticket expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Refunded if the business cancels or closes early. |
@@ -648,15 +692,57 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | R3 Missed alert | One push when a ticket becomes MISSED: new kind `missed`, "You missed your turn. Tap I'm here when you arrive." |
 | R4 Engine details | MISSED tickets never carry over at close, even with multi-day `ticketValidityMin` (they expire at close). A missed priority/triage holder rejoins within their own class range (behind 3 of their class, per the skip class rule, G1). "I'm here" rejects mocked locations like join. Analytics count served-after-rejoin as served and misses as no-shows, and leave away time out of wait statistics. |
 
-### Proposed 2026-10-18, pending the owner and the professor: Priority Pass (B)
+### Decided 2026-10-18 (owner): Priority Pass "flexible pass" and upgrade (B, built in Step 4)
 
-Supersedes "VIP: pay to skip" as the recommended design. Not final.
+Replaces the "Proposed 2026-10-18 … Priority Pass (B)" table of the same day (default N = 3, `ticketValidityMin` window, GPS-or-counter-QR check-in, partial refund "still open") and "VIP: pay to skip". Both superseded 2026-10-18. HLD §5.2 has the customer-facing text.
+
+| Question | Decision |
+|---|---|
+| Model | No time slots. A paid pass for one queue that enters the line when the holder arrives. Per-business setting, OFF by default. |
+| Buy | Signed-in, non-anonymous only. Price and validity window set by the business (default "today"; hours to days). Honest preview before paying: "Priority holders wait about X min · regular wait about Y min · you save about Z min". Token created only after server-side confirmation (verify + webhook); no confirmation → no token. |
+| BOOKED | New state: paid, not in the line, holder anywhere (§9.3). |
+| Check-in | GPS within `joinRadiusM` (the walk-in check; a counter-QR photo alone is not enough; mocked rejected) → WAITING in the priority lane, ordered by check-in time. After check-in the window no longer applies; the holder stays until served or the queue closes. |
+| Numbers | Own series P1, P2… (§9.4). |
+| Missed turn | Same rules as everyone: Grace → Missed → one rejoin → Expired. |
+| Upgrade (v1, main revenue path) | A WAITING ticket shows "Skip ahead for ₹X, about N min faster". Paying moves the same ticket into the priority lane at the upgrade time (no check-in). Only WAITING tickets (not CALLED/GRACE/MISSED). One active ticket per person per queue: buying a pass while holding a ticket upgrades it, never a second ticket. |
+| Next rule | Engine-enforced; staff cannot pick a priority person. Triage first (daily cap); else the priority head if due; else the next regular. Due = credit counter: +1 per regular call, −N per priority call, capped at N (no burst after a quiet period). No priority waiting → regulars as normal. |
+| Settings | All business-set, no platform limits: on/off (default OFF), price, ratio N (any whole number ≥ 1, 1-in-1 allowed; the form prefills 1-in-2 when switched on), optional daily sales cap ("Sold out"), validity window, cancel refund % (default 50). |
+| What regulars see | "Priority lane on · 1 in N" on the business page, join screen and ticket. People ahead and wait include expected priority calls (shared estimate + load-test invariant updated in Step 4). |
+| Money | Served → kept, split business/Qpeer (demo 70/30). Customer cancels before check-in → refund at the business's % (default 50). Never checked in by the end of the window → no refund. Checked in, missed, never rejoined → no refund. Checked in but the queue closed before serving them, or the business cancels or closes early → full refund, automatic (§10.5). |
+| Anti-misuse | Pass tied to the buyer's account (no transfer). 1 pass per account per queue per day, and the device hash recorded on purchases and upgrades so the same phone can't buy a second pass with another account (C2 rule extended to paid priority). Check-in needs GPS (a fake check-in only leads to Grace → Missed for the faker). Every call logged with its time (audit for staff favouritism). |
+| No platform cap (owner's reasoning) | Businesses decide. Public ratings penalise unfair use: regulars rate low, reputation drops on the map, customers switch to alternatives. |
+| Fit | OPD, government offices, labs, service centres, salons. Doctors with long fixed sessions need time-slot appointments: a separate later feature, not v1. |
+| Later option | A customer "Running late" button that moves the person back N places by choice, before being called. |
+
+### Decided 2026-10-18 (owner): clarifications C1–C6
+
+The owner agreed the orchestrator's points.
+
+| Question | Decision |
+|---|---|
+| C1 Credit counter | Starts at 0 when a session opens (the first priority holder waits N regular calls; no instant jump at opening). Triage calls add no credit. Regular calls add credit even if they end as No-show. Undo of Next also undoes the credit change. |
+| C2 Upgrade offer | Hidden when the estimated saving is below a threshold (`upgradeMinSavingMin`, default 5 min). Never "save ~0 min" next to a price. |
+| C3 Regular estimate | A range. Low = current estimate counting only priority holders already checked in. High = as if every N-th call goes to priority. The load-test checker uses the same rule. |
+| C4 Ticket QR | The signed ticket QR carries the first name + last 4 phone digits only (signed, not encrypted). Staff see the full name in the console when online. |
+| C5 Strikes | Paid/remote tickets that miss get no no-show strike; losing the fee is the penalty. Strikes stay for free walk-ins only (answers the earlier open question; A table above, §9.3 and HLD §5.2 / §6.4 aligned). |
+| C6 Close | A queue that closes while paused counts as "closed before serving": every checked-in priority holder gets a full refund. Checked-in holders never carry over to the next day (refund instead), even with multi-day validity. |
+
+### Decided 2026-10-18 (owner): ratings (Step 6 extra)
+
+Replaces the older `reviews` idea (one per served token within 7 days, stars + text), superseded 2026-10-18.
+
+| Question | Decision |
+|---|---|
+| Who rates | Every SERVED customer, in the app. |
+| What | Two ratings, 0–5 stars each: customer experience and service quality. |
+| Where shown | Map, business card, business page (where people choose a queue). |
+| Why | Completes the fairness loop: a business that favours priority too much gets rated low by regulars and loses customers. |
+| Data | `ratings` table (§8), `POST /v1/tokens/:id/rating` (§12). The lane is stored per rating. |
+
+### Proposed 2026-10-18, awaiting the owner's OK (RT1–RT3)
 
 | Question | Proposal |
 |---|---|
-| Model | "Flexible pass", per-business setting, OFF by default. Buy now, valid for a window (`ticketValidityMin`). The ticket enters the live order only when the holder checks in on arrival (GPS or the counter QR; staff can verify the signed ticket QR). |
-| Order among holders | By check-in time, not purchase time. |
-| Fairness | At most 1 priority per N regulars (default N = 3, business-adjustable; `priorityPerRegular`) + a daily sales cap per queue ("Sold out"). Triage still goes first. The current priority wait is shown before purchase. |
-| Money | Expired without check-in → fee forfeited (or a partial refund: still open). Business cancel or early close → full refund. |
-| Fit | OPD, government offices, labs, service centres, salons. Doctors with long fixed sessions need time-slot appointments: a separate later feature, not v1. |
-| Later option | A customer "Running late" button that moves the person back N places by choice, before being called. |
+| RT1 Split by lane | Show "Regular customers 2.1★ · Priority customers 4.8★" next to "Priority lane on · 1 in N", so a blended average can't hide unfairness. |
+| RT2 Integrity | Only a served ticket can rate, once per ticket. Ratings shown only after a minimum count (e.g. 5). The business cannot delete ratings but can reply publicly. |
+| RT3 Known limit | For a monopoly provider (only hospital nearby), ratings don't move customers but remain public evidence for oversight. |
