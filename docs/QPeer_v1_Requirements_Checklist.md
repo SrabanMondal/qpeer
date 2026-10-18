@@ -85,7 +85,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 **Queues**
 - [x] **BIZ-10** Create a queue (name, e.g. "OPD", "Sample collection")
 - [ ] **BIZ-11** **Rename** a queue. **Archive** a queue (only when it has no waiting tokens).
-- [ ] **BIZ-12** Queue settings with defaults: join radius, walk-in quota, reservation fee, grace minutes, cancel window, counters, max size. **Edit later**; changes apply to new tokens only.
+- [ ] **BIZ-12** Queue settings with defaults: join radius, walk-in quota, reservation fee, grace minutes, rejoin delay (min, default 15) and late window (min, default 15, or "no limit") (R1, 2026-10-18), cancel window, counters, max size. **Edit later**; changes apply to new tokens only.
 - [ ] **BIZ-13** Open / close a queue for the day from the console. Closed queues reject joins.
 - [ ] **BIZ-14** QR code per queue: show full screen, **share as an image**, save to the gallery for printing *(full screen + share link work; image share/save needs the next native build)*
 - [x] **BIZ-15** Business list, empty state ("Create your first business"), and loading/error states on every business screen
@@ -114,10 +114,13 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 **Missed turn and rejoin** (decided 2026-10-18, Step 4; HLD §5.2)
 - [ ] **QUE-22** GRACE ends → new state MISSED (not EXPIRED). MISSED is out of the live order and not counted as waiting. Ticket text: "You missed your turn. When you're here, tap I'm here to rejoin."
-- [ ] **QUE-23** "I'm here" rejoin: same GPS walk-in check as joining (location never stored) → behind the next 3 WAITING, or the end if fewer wait. Once per ticket. Simultaneous rejoins ordered by tap time (server receive time of a successful check).
+- [ ] **QUE-23** "I'm here" rejoin: same GPS walk-in check as joining (location never stored; mocked rejected) → placed by QUE-27. Once per ticket. Simultaneous rejoins ordered by tap time (server receive time of a successful check).
 - [ ] **QUE-24** Second miss, or no rejoin by queue close (or the business limit) → EXPIRED + one no-show strike (per user and per device hash) for free walk-ins only. Paid tickets get no strike (C5, 2026-10-18).
 - [ ] **QUE-25** No repositioning by staff: a ticket moves back only when its owner rejoins
 - [ ] **QUE-26** People ahead: no change for others when a called ticket becomes No-show or MISSED. On a rejoin, only people behind the insert point get +1.
+- [ ] **QUE-27** Rejoin position (R1, decided 2026-10-18): within `lateWindowMin` after MISSED → behind max(1, ceil(`rejoinDelayMin` ÷ avgServiceMin)) WAITING, using the queue's EWMA service time (configured service time at cold start), or the end if fewer wait. After the window → the end of the line. "No limit" window allowed. Skip keeps its fixed "behind 3".
+- [ ] **QUE-28** Engine details (R4, decided 2026-10-18): MISSED tickets never carry over at close (they expire); a missed priority/triage holder rejoins within their own class; analytics count served-after-rejoin as served, each miss as a no-show, and leave away time out of wait statistics.
+- [ ] **QUE-29** PENDING (owner's OK, R2): 4-character check code under the ticket number ("#14 · K7P2"), unambiguous alphabet, stored on the token and in the signed ticket. Staff "Rejoin for customer" after MISSED needs the number + check code (or a valid signed-QR scan). Same once-only and position rule as QUE-27. Neither known → serve as a new walk-in.
 
 **Wait estimates**
 - [ ] **QUE-13** EWMA of Next intervals with outlier capping. Cold start uses the queue's configured service time.
@@ -152,6 +155,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [x] **TOK-06** "My tokens" list: active first, then recent history. Empty state.
 - [ ] **TOK-07** Directions button opens the phone's maps app at the business pin
 - [ ] **TOK-08** MISSED ticket screen with an **I'm here** button (runs the location check, clear errors for too far / fake location, hidden after the one rejoin)
+- [ ] **TOK-09** GRACE ticket screen (R3, decided 2026-10-18): a large, clear live countdown "Come now — m:ss left" on the server-corrected clock (the existing grace card, made prominent)
 
 ## M6 Alerts
 
@@ -162,7 +166,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [x] **ALR-05** Tapping an alert opens that token's screen
 - [x] **ALR-06** Android notification channel with high importance. In-app guide to turn off battery optimisation.
 - [ ] **ALR-07** Business console alerts: late arrival waiting in grace (optional sound)
-- [ ] **ALR-08** PENDING (owner's OK, R3): one `missed` alert when a ticket becomes MISSED ("You missed your turn. Tap I'm here when you arrive.")
+- [ ] **ALR-08** Decided 2026-10-18 (R3), Step 4: one `missed` alert when a ticket becomes MISSED ("You missed your turn. Tap I'm here when you arrive.")
 
 ## M7 Map & discovery
 
@@ -237,8 +241,8 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **RAT-01** Every SERVED customer can rate in the app: customer experience and service quality, 0–5 stars each. The lane (regular or priority) is stored.
 - [ ] **RAT-02** Ratings show on the map, the business card and the business page
 - [ ] **RAT-03** One rating per served ticket (server-side)
-- [ ] **RAT-04** PENDING (owner's OK, RT1): ratings split by lane ("Regular customers 2.1★ · Priority customers 4.8★") next to "Priority lane on · 1 in N"
-- [ ] **RAT-05** PENDING (owner's OK, RT2): show ratings only after a minimum count (e.g. 5); the business cannot delete ratings but can reply publicly
+- [ ] **RAT-04** Decided 2026-10-18 (RT1): ratings split by lane ("Regular customers 2.1★ · Priority customers 4.8★") next to "Priority lane on · 1 in N"
+- [ ] **RAT-05** Decided 2026-10-18 (RT2): show ratings only after at least 5 ratings (per lane); stars only, no text; the business cannot delete ratings but can reply publicly
 
 ---
 

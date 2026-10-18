@@ -203,7 +203,7 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `analytics_hourly` | queue_id, business_id, hour_start (IST hour, epoch ms), joins, leaves, served, no_shows, cancels, sum_wait_ms, waits, sum_interval_ms, intervals, eta_hits, eta_total | pk(queue_id, hour_start), idx(business_id, hour_start) | 2 (written), 5 (read) |
 | `ratings` *(x)* | id, token_id, business_id, queue_id, user_id, lane (`regular`/`priority`), experience_stars (0–5), service_stars (0–5), created_at. Replaces the older `reviews` (stars + text) row, superseded 2026-10-18. | unique(token_id), idx(business_id, created_at) | 6 |
 
-**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, Priority Pass (2026-10-18, all business-set, no platform limits): `priorityEnabled` false, `priorityFeePaise` 10000 (pass and upgrade price), `priorityPerRegular` N (whole number ≥ 1; the form prefills 2 when switched on; replaces the old "0 = off"), `priorityDailyCap` null (no cap), `priorityValidityMin` 0 (= today; else hours to days), `priorityCancelRefundPct` 50, `upgradeMinSavingMin` 5; `businessSharePct` 70, `graceMinutes` 10, `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2, `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
+**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, Priority Pass (2026-10-18, all business-set, no platform limits): `priorityEnabled` false, `priorityFeePaise` 10000 (pass and upgrade price), `priorityPerRegular` N (whole number ≥ 1; the form prefills 2 when switched on; replaces the old "0 = off"), `priorityDailyCap` null (no cap), `priorityValidityMin` 0 (= today; else hours to days), `priorityCancelRefundPct` 50, `upgradeMinSavingMin` 5; `businessSharePct` 70, `graceMinutes` 10, missed-turn rejoin (R1, decided 2026-10-18): `rejoinDelayMin` 15 (penalty in minutes of service, turned into people at rejoin time, §9.4), `lateWindowMin` 15 (null = no limit; "I'm here" after the window → end of the line); `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2, `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
 
 **Step 4 data (2026-10-18):** token state `BOOKED`, `tokens.checked_in_at` (check-in or upgrade time), `tokens.session_id` empty while BOOKED (the pass gets its session and P number at check-in), `payments.device_hash`, `payments.refund_paise`.
 
@@ -236,7 +236,7 @@ A **session** is one open→close cycle (normally one day). Opening a queue star
 | Table | Contents |
 |---|---|
 | `meta` | key/value: queueId, businessId, sessionId, status (`closed`/`open`/`paused`), nextNumber per series, nowServing, lastServed, settings JSON + version, EWMA mean/variance, lastCallAt, pausedSince, pausedTotalMs, lastNextUndo, hours (B20), keepOpenUntil (B20), priorityCredits (Step 4) |
-| `tokens` | id, number, series, class, method, userId, state, sortKey, joinedAt, calledAt, counter, graceUntil, paymentOrderId, alertFlags, deviceHash (C2), expiresAt (C4), carried (C4) — schema v2 adds the last three with `ALTER`s; Step 4 adds checkedInAt and the `BOOKED` state |
+| `tokens` | id, number, series, class, method, userId, state, sortKey, joinedAt, calledAt, counter, graceUntil, paymentOrderId, alertFlags, deviceHash (C2), expiresAt (C4), carried (C4) — schema v2 adds the last three with `ALTER`s; Step 4 adds checkedInAt, the `BOOKED` and `MISSED` states, missedAt and the `rejoined` flag |
 
 **Now serving** (coordinator report 2026-10-16, INC-048): the CALLED token called last; when nobody is at a counter, the last token SERVED this session (`lastServed`); null when closed. It is recomputed after every change, so a called token that leaves, is skipped, misses its turn or is undone stops showing at once. Snapshot, token views and console all read the same value.
 | `intervals` | recent Next-to-Next intervals (last ~50) for the median used in outlier capping |
@@ -252,8 +252,10 @@ BOOKED (Priority Pass, paid) ─check-in (GPS)─► WAITING (priority lane, P n
 
 WAITING ─next─► CALLED ─served─► SERVED
    │              └─no-show─► GRACE ─admit─► CALLED (front)  ─served─► SERVED
-   │                              └─timer─► MISSED ─"I'm here" (once)─► WAITING (behind next 3)
-   │                                           └─close / business limit─► EXPIRED (+ strike if free walk-in)
+   │                              └─timer─► MISSED ─"I'm here" (once)─► WAITING (within lateWindowMin: behind
+   │                                           │                          ceil(rejoinDelayMin ÷ avgServiceMin) ≥ 1;
+   │                                           │                          after it: end of the line)
+   │                                           └─close / business limit─► EXPIRED (+ strike if free walk-in; never carried over, R4)
    │            (a rejoined ticket that misses again: GRACE ─timer─► EXPIRED, + strike if free walk-in)
    ├─upgrade (paid)► WAITING (same token, priority lane at the upgrade time)
    ├─leave───────► LEFT
@@ -266,8 +268,9 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 
 **MISSED and rejoin (decided 2026-10-18, Step 4; HLD §5.2 has the full rules and edge cases).** Same for walk-ins and remote joiners.
 - No-show → GRACE with the existing `grace_started` alert (no new alert at grace start). Admit during GRACE → served right after the current person.
-- GRACE timer → `MISSED`, not `EXPIRED`. A MISSED token is out of the live order and is not counted as waiting.
-- "I'm here" = `POST /v1/tokens/:id/rejoin { lat, lng, accuracy, mocked }` → the same GPS walk-in check as joining (location never stored) → DO `rejoin(tokenId, userId)` → `WAITING`, re-sequenced behind the next 3 WAITING tokens (the Skip rule), or to the end if fewer wait. **Once per ticket** (a `rejoined` flag on the token). Simultaneous rejoins are ordered by the server receive time of a successful check (the DO serializes them).
+- GRACE timer → `MISSED`, not `EXPIRED` (`missedAt = now`). A MISSED token is out of the live order and is not counted as waiting. One `missed` push is sent (R3, §11). During GRACE the ticket shows a large server-corrected countdown "Come now — m:ss left" (the token view carries `graceUntil`).
+- "I'm here" = `POST /v1/tokens/:id/rejoin { lat, lng, accuracy, mocked }` → the same GPS walk-in check as joining (location never stored; mocked rejected, R4) → DO `rejoin(tokenId, userId)` → `WAITING`. Position (R1, decided 2026-10-18): if `now − missedAt ≤ lateWindowMin` (or `lateWindowMin` is null), behind K WAITING tokens with K = max(1, ceil(`rejoinDelayMin` ÷ avgServiceMin)), where avgServiceMin is the queue's EWMA interval (cold start: `serviceMinutesHint`); fewer than K waiting → the end. After the window → the end of the line. K is taken at the moment of the rejoin. **Once per ticket** (a `rejoined` flag on the token). Simultaneous rejoins are ordered by the server receive time of a successful check (the DO serializes them).
+- A missed priority or triage holder rejoins inside their own class range (the skip class rule, G1; R4). MISSED tokens never carry over at close, even with a multi-day `ticketValidityMin`: they expire at close (R4).
 - Second miss (a rejoined token's GRACE ends), or no rejoin by queue close (or the business limit) → `EXPIRED`. Free walk-ins also get one no-show strike (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash). Paid tokens (remote, priority) get no strike: losing the fee is the penalty (C5, 2026-10-18).
 - Only the owner's rejoin moves a token back. Staff never reposition it.
 - Paid tokens: forfeit only when the token expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Business cancel or early close → refund. Priority money rules: §10.5.
@@ -288,7 +291,7 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 - **Next rule (credit counter).** `next` picks: triage head; else the priority-lane head if `priorityCredits ≥ N`; else the regular head; else (no regulars) the priority head. Each regular call does `credits = min(credits + 1, N)`; a priority call does `credits −= N` (never below 0). Triage calls change nothing. A regular call that ends as No-show still counts. `undoNext` restores the credit value from before the call. Credits start at 0 when a session opens (C1). Staff cannot call a chosen priority person; only `next` decides.
 - **People ahead with the priority lane on.** For a priority token: triage ahead + priority tokens ahead in the lane + the regular calls still needed before each of those is due. For a regular token: a range (C3). Low = regulars ahead + triage + the priority calls that the credit rule will make for holders **already checked in**. High = as if every N-th call goes to priority (regulars ahead × (1 + 1/N), rounded up). Shared function in `packages/shared`, used by the DO, the purchase preview ("priority ~X · regular ~Y · save ~Z") and the upgrade offer (hidden below `upgradeMinSavingMin`). The load-test people-ahead invariant (§19.1) must use the same rule (Step 4 work).
 - **Skip** gives the token a new sequence equal to "after the next N waiting tokens" (N = 3 by default) — decided once, documented in tests.
-- **Rejoin after MISSED** (2026-10-18) uses the same key rule as Skip: behind the next 3 WAITING tokens, or the end. MISSED tokens are excluded from people ahead. When a called token becomes No-show or MISSED, nobody else's people-ahead changes. On a rejoin, only tokens behind the insert point get +1.
+- **Rejoin after MISSED** (R1, decided 2026-10-18) uses the same key mechanics as Skip but its own count: behind K = max(1, ceil(`rejoinDelayMin` ÷ avgServiceMin)) WAITING tokens within the late window, else the end of the line (§9.3). Example: 3 min per person → behind 5; 30 min per person → behind 1. Skip keeps its fixed N = 3. MISSED tokens are excluded from people ahead. When a called token becomes No-show or MISSED, nobody else's people-ahead changes. On a rejoin, only tokens behind the insert point get +1.
 
 ### 9.5 RPC interface (called only by the Worker)
 
@@ -432,7 +435,7 @@ created ──(captured, verified)──► captured ──► allocated
 - `devices` holds Expo push tokens per user (upsert on app start and on token change; removed on sign-out) — ALR-02.
 - Sending: the DO outbox calls the Expo Push API (`https://exp.host/--/api/v2/push/send`) in batches of up to 100, stores ticket ids in `push_tickets`; an hourly cron checks receipts and deletes `DeviceNotRegistered` tokens.
 - Alert kinds (ALR-03): `head_back`, `next`, `called`, `grace_started`, `refund_issued`, `queue_paused`, `queue_closed`. Each is sent at most once per token (flag set in the DO before sending). `grace_started` ("you were called, come now") is also the alert for the missed-turn flow; there is no new alert at grace start.
-- Proposed (R3, awaiting the owner's OK): `missed`, sent once when a token becomes MISSED: "You missed your turn. Tap I'm here when you arrive."
+- `missed` (R3, decided 2026-10-18, Step 4): sent once when a token becomes MISSED: "You missed your turn. Tap I'm here when you arrive."
 - Android channel `queue-alerts` (high importance) is created by the app; the payload names it.
 
 ---
@@ -442,7 +445,7 @@ created ──(captured, verified)──► captured ──► allocated
 - `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` (any signed-in user) → **one** D1 statement (`modules/map/service.ts`): a CTE picks listed businesses (status `active`, has pin, ≥ 1 active queue) inside the box through `idx(status, lat, lng)`, nearest to the box centre first, `limit + 1` rows; the outer select joins their active queues and `queue_snapshots`. `limit` defaults to 200 (max 300); `truncated: true` tells the app to zoom in. Each box side may be at most 1.5° (else 400 `invalid_input`). `openNow` is evaluated in SQL with **the same rule as the badge** (B16, INC-043): some active queue's snapshot is open and not paused, whatever the hours; so the limit applies after the filter. `isOpenNow` in responses still reports the hours (information only); the app shows "Open (after usual hours)" when a queue is open outside them (shared `openLook`). `GET /v1/queues/:id` adds `business.isOpenNow` and `business.todayHours` for the join screen. Response `MapResponse { items: MapBusiness[], truncated, serverTime }`; no user-specific data. The request log records the path only, never the box.
 - Business detail `GET /v1/businesses/:id` → profile + queues with snapshots + `isOpenNow` + `todayHours` + `stats` (MAP-05: `servedCount`, `avgWaitMs` = Σwait/waits, `avgServiceMs` = Σinterval/intervals, `etaAccuracyPct` = eta_hits/eta_total, over the last 28 days of `analytics_hourly`; each average null below 20 samples). **MAP-06 visibility:** members always get `stats`; non-members get it once the business has been listed for 14 days (`businesses.first_listed_at`) or when the owner set `publicStats` (`PATCH /v1/businesses/:id { publicStats }`), otherwise `stats: null`.
 - `GET /v1/queues/:id` exposes `joinRadiusM` to everyone (the only public queue setting). Step 4 adds the public Priority Pass fields: `priority: { enabled, perRegular, feePaise, soldOut }` for the "Priority lane on · 1 in N" label.
-- **Ratings (decided 2026-10-18, Step 6 extra).** `POST /v1/tokens/:id/rating { experience: 0–5, service: 0–5 }` (owner of a `SERVED` token, once per token: `unique(token_id)`; the row stores the ticket's lane). Map items, the business card and `GET /v1/businesses/:id` carry `rating: { experienceAvg, serviceAvg, count }`. Proposed, awaiting the owner: split by lane (RT1), minimum count before showing and public business replies (RT2) — §23.
+- **Ratings (decided 2026-10-18, Step 6 extra).** `POST /v1/tokens/:id/rating { experience: 0–5, service: 0–5 }` (owner of a `SERVED` token, once per token: `unique(token_id)`; the row stores the ticket's lane). Map items, the business card and `GET /v1/businesses/:id` carry `rating`, split by lane (RT1, decided 2026-10-18): `{ regular: { experienceAvg, serviceAvg, count }, priority: { … } }`. A lane's averages are null until it has at least 5 ratings (RT2). Stars only, no text. The business cannot delete ratings; it can reply in public (RT2; the reply fields on the row are a Step 6 detail) — §23.
 - Snapshots are at most ~30 s old (MAP-02); the app polls the visible area every 30 s while the map is visible.
 - Geohash is stored for later (clustering on the server, larger areas); v1 uses the bounding box only.
 - Dev only: `POST /v1/dev/seed-map` / `POST /v1/dev/unseed-map` (registered user; 404 unless `ENVIRONMENT` is `local` or `dev`) create/delete 8 "Demo · " businesses (11 queues) around Jammu, owned by the fixed user `seed-map-owner`, ids prefixed `5eed0000-` (queues `5eed0001-`). Seeding is idempotent, opens every queue and tops each up to a few triage tokens so the map shows waiting counts.
@@ -613,6 +616,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 |---|---|
 | Razorpay Route availability in test mode (split in ledger only if not) | 4 |
 | Priority Pass rules — decided by the owner 2026-10-18 (below), built in Step 4. | done |
+| R2 staff "Rejoin for customer" with a ticket check code (proposed below, awaiting the owner) | 4 |
 
 ### Decided in Step 2
 
@@ -675,22 +679,27 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Called, not present | Staff tap No-show → GRACE (`graceMinutes`) with the existing `grace_started` alert. Staff keep calling others; nobody is blocked. |
 | Arrives during GRACE | Admit → served right after the current person (no place lost). |
 | GRACE ends | New state `MISSED` (not `EXPIRED`), out of the live order. Ticket text: "You missed your turn. When you're here, tap I'm here to rejoin." |
-| "I'm here" | `POST /v1/tokens/:id/rejoin` with the same GPS walk-in check as joining (location never stored) → WAITING behind the next 3 WAITING (the Skip rule), or the end if fewer wait. Once per ticket. Simultaneous rejoins ordered by the server receive time of a successful check. |
+| "I'm here" | `POST /v1/tokens/:id/rejoin` with the same GPS walk-in check as joining (location never stored) → WAITING, placed by the R1 rule below (first written as "behind the next 3, the Skip rule"; revised 2026-10-18). Once per ticket. Simultaneous rejoins ordered by the server receive time of a successful check. |
 | Second miss / no rejoin | A rejoined ticket that misses again, or a MISSED ticket not rejoined by queue close (or the business limit) → `EXPIRED` + one no-show strike for free walk-ins only (existing rule: 3 in 30 days block free joins for 7 days, per user and per device hash). The strike is now taken at this expiry, no longer at the end of GRACE. Paid tickets get no strike (C5, 2026-10-18). |
 | Who moves a ticket | Only its owner, by rejoining. Staff never reposition it. |
 | People ahead | No change for others when a called ticket becomes No-show or MISSED. On a rejoin, only tokens behind the insert point get +1. |
 | Remote fee | Kept only if the ticket expires and the person never arrived. Served (even after a rejoin) = the fee paid for holding the place. Refunded if the business cancels or closes early. |
 | "NEXT calls only checked-in people" | Dropped (presence tracking is unreliable). Check-in is used only for rejoin after MISSED and for Priority Pass activation. |
-| Misuse and edge cases | Owner's table in HLD §5.2 (late on purpose, repeat misses, reinstall, many queues, "I'm here" from home, wrong No-show, fewer than 3 waiting, simultaneous rejoins, dead phone, didn't hear the call). |
+| Misuse and edge cases | Owner's table in HLD §5.2 (late on purpose, repeat misses, reinstall, many queues, "I'm here" from home, wrong No-show, too few waiting, simultaneous rejoins, dead phone, didn't hear the call). |
 
-### Proposed 2026-10-18, awaiting the owner's OK (R1–R4)
+### Decided 2026-10-18 (owner): missed-turn refinements R1, R3, R4 (built in Step 4)
+
+| Question | Decision |
+|---|---|
+| R1 Rejoin position (revised, decided) | Two business settings; the penalty is minutes of service, not people. `rejoinDelayMin` (default 15): the engine turns it into people with the queue's own service-time estimate (EWMA interval; `serviceMinutesHint` at cold start): behind K = max(1, ceil(rejoinDelayMin ÷ avgServiceMin)) WAITING tokens, or the end if fewer wait. Example: clinic 3 min/person → behind 5; salon 30 min/person → behind 1. `lateWindowMin` (default 15; the business can raise it or set null = no limit): "I'm here" within the window after MISSED → the K rule; after the window → the end of the line. Replaces the fixed "behind 3" of A4. Skip keeps its fixed "behind 3" (Step 2 decision). |
+| R3 Missed alert + grace countdown | One push when a ticket becomes MISSED: kind `missed`, "You missed your turn. Tap I'm here when you arrive." The ticket screen in GRACE shows a large live countdown "Come now — m:ss left" on the server-corrected clock (the Step 2 grace card, made prominent). |
+| R4 Engine details | MISSED tickets never carry over at close, even with multi-day `ticketValidityMin` (they expire at close). A missed priority/triage holder rejoins within their own class range (the skip class rule, G1). "I'm here" rejects mocked locations like join. Analytics count served-after-rejoin as served and misses as no-shows, and leave away time out of wait statistics. |
+
+### Proposed 2026-10-18 (revised), awaiting the owner's OK (R2)
 
 | Question | Proposal |
 |---|---|
-| R1 Late-on-purpose loophole | "Behind 3" applies only if "I'm here" is tapped within a business-set window after MISSED (default 15 min). Later rejoins go to the end of the line. |
-| R2 Staff-assisted rejoin | After MISSED, staff may "Rejoin for customer" only after verifying the signed ticket QR at the counter. Same once-only rule and same position rule as R1 / A4. Covers a dead phone. Staff still never reposition by choice. |
-| R3 Missed alert | One push when a ticket becomes MISSED: new kind `missed`, "You missed your turn. Tap I'm here when you arrive." |
-| R4 Engine details | MISSED tickets never carry over at close, even with multi-day `ticketValidityMin` (they expire at close). A missed priority/triage holder rejoins within their own class range (behind 3 of their class, per the skip class rule, G1). "I'm here" rejects mocked locations like join. Analytics count served-after-rejoin as served and misses as no-shows, and leave away time out of wait statistics. |
+| R2 Staff-assisted rejoin (dead phone) | Every ticket shows a short 4-character **check code** under its number, for example "#14 · K7P2". Unambiguous alphabet (no 0/O, 1/I/L). Stored on the token and included in the signed ticket. After MISSED, staff "Rejoin for customer" needs the ticket number + check code, or a valid signed-QR scan when the phone works. Same once-only rule and same position rule as R1. If the person knows neither, staff serve them as a new walk-in (later: Add person). Staff still never reposition by choice. |
 
 ### Decided 2026-10-18 (owner): Priority Pass "flexible pass" and upgrade (B, built in Step 4)
 
@@ -737,12 +746,8 @@ Replaces the older `reviews` idea (one per served token within 7 days, stars + t
 | What | Two ratings, 0–5 stars each: customer experience and service quality. |
 | Where shown | Map, business card, business page (where people choose a queue). |
 | Why | Completes the fairness loop: a business that favours priority too much gets rated low by regulars and loses customers. |
-| Data | `ratings` table (§8), `POST /v1/tokens/:id/rating` (§12). The lane is stored per rating. |
+| Data | `ratings` table (§8), `POST /v1/tokens/:id/rating` (§12). The lane is stored per rating. Stars only, no text. |
+| RT1 Split by lane (decided 2026-10-18) | Show "Regular customers 2.1★ · Priority customers 4.8★" next to "Priority lane on · 1 in N", so a blended average can't hide unfairness. |
+| RT2 Integrity (decided 2026-10-18) | Only a served ticket can rate, once per ticket. Ratings shown only after at least 5 ratings (counted per lane, since RT1 shows lanes apart). The business cannot delete ratings but can reply publicly. |
 
-### Proposed 2026-10-18, awaiting the owner's OK (RT1–RT3)
-
-| Question | Proposal |
-|---|---|
-| RT1 Split by lane | Show "Regular customers 2.1★ · Priority customers 4.8★" next to "Priority lane on · 1 in N", so a blended average can't hide unfairness. |
-| RT2 Integrity | Only a served ticket can rate, once per ticket. Ratings shown only after a minimum count (e.g. 5). The business cannot delete ratings but can reply publicly. |
-| RT3 Known limit | For a monopoly provider (only hospital nearby), ratings don't move customers but remain public evidence for oversight. |
+Recorded note, not a rule: **RT3** for a monopoly provider (the only hospital nearby), ratings don't move customers but remain public evidence for oversight.

@@ -103,7 +103,7 @@ app/
 │   ├── console/[queueId]     Now serving, Next, Skip, Pause, No-show, grace list, Close
 │   ├── analytics             Charts + plain-language insights
 │   ├── earnings              Payments, refunds, forfeits, shares
-│   └── settings              Radius, walk-in quota, fees, grace time, Priority Pass
+│   └── settings              Radius, walk-in quota, fees, grace time, rejoin delay + late window, Priority Pass
 └── profile                   Mode switch (Customer ↔ Business), sign out
 ```
 
@@ -158,7 +158,7 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 
 **Ticket states:** **BOOKED** (Priority Pass paid, not yet in the line; added 2026-10-18), WAITING, CALLED, GRACE, **MISSED** (added 2026-10-18), SERVED, EXPIRED, LEFT, CANCELLED. A ticket is active while BOOKED, WAITING, CALLED, GRACE or MISSED. BOOKED and MISSED tickets are not in the live order and do not count as waiting.
 
-**Order (updated 2026-10-18):** two lanes. The regular lane is ordered by join sequence. A remote reservation gets its place in the sequence **when payment is confirmed**. The priority lane is ordered by check-in time (or upgrade time). Next follows the rule in "Priority Pass" below: triage first, then the head of the priority lane when it is due, else the next regular. A ticket that rejoins after MISSED goes behind the next 3 waiting people (see below). Staff never move a ticket by choice.
+**Order (updated 2026-10-18):** two lanes. The regular lane is ordered by join sequence. A remote reservation gets its place in the sequence **when payment is confirmed**. The priority lane is ordered by check-in time (or upgrade time). Next follows the rule in "Priority Pass" below: triage first, then the head of the priority lane when it is due, else the next regular. A ticket that rejoins after MISSED goes behind a number of waiting people set from the business's rejoin delay (see below). Staff never move a ticket by choice.
 
 **People ahead:** an indexed `COUNT` of waiting tokens before mine in that order. With SQLite inside the Durable Object this is fast for thousands of tokens, so v1 doesn't need the Fenwick tree from the earlier design. Add it only if profiling shows a need. With the priority lane on, a regular's people ahead also includes the expected priority calls (see "Priority Pass").
 
@@ -166,29 +166,35 @@ The Worker forwards queue operations to `env.QUEUE.idFromName(queueId)`.
 
 1. The person is called but is not there. Staff tap **No-show**. The ticket enters GRACE (business setting, for example 10 min). The existing `grace_started` alert tells the person "you were called, come now". Staff keep calling others. Nobody is blocked.
 2. The person arrives during GRACE. Staff tap **Admit**. The person is served right after the current person. They lose no place.
-3. GRACE ends. The ticket becomes **MISSED** (not EXPIRED). The ticket screen says: "You missed your turn. When you're here, tap I'm here to rejoin."
-4. The person taps **I'm here**. The app runs the same GPS walk-in check as joining (location is never stored). The ticket goes behind the next 3 WAITING people (the same rule as Skip). If fewer than 3 wait, it goes to the end. This is allowed **once per ticket**. Rejoins at the same time are ordered by tap time (the server receive time of a successful check).
-5. The person misses a second time, or never rejoins before the queue closes (or the business limit) → EXPIRED. A free walk-in also gets one no-show strike. The existing rule stays: 3 strikes in 30 days block free joins for 7 days, per user and per device hash. Paid tickets (remote reservation, Priority Pass) get no strike: losing the fee is the penalty (C5, decided 2026-10-18).
+3. GRACE ends. The ticket becomes **MISSED** (not EXPIRED). One push alert is sent (kind `missed`): "You missed your turn. Tap I'm here when you arrive." The ticket screen says: "You missed your turn. When you're here, tap I'm here to rejoin." (R3, decided 2026-10-18.) During GRACE the ticket screen shows a large live countdown, "Come now — m:ss left", on the server-corrected clock.
+4. The person taps **I'm here**. The app runs the same GPS walk-in check as joining (location is never stored; mocked locations are rejected). This is allowed **once per ticket**. Rejoins at the same time are ordered by tap time (the server receive time of a successful check). Where the ticket goes depends on two business settings (R1, decided 2026-10-18):
+   - **Rejoin delay** `rejoinDelayMin` (default 15 min). The penalty is minutes of service, not a fixed number of people. The engine turns it into people with the queue's own service-time estimate (the EWMA interval between Next calls; the configured service time at cold start): behind ceil(rejoinDelayMin ÷ avgServiceMin) WAITING people, at least 1. If fewer wait, the ticket goes to the end. Example: a clinic at 3 min per person → behind 5. A salon at 30 min per person → behind 1.
+   - **Late window** `lateWindowMin` (default 15 min; the business can raise it or set "no limit"). "I'm here" within the window after MISSED → the rejoin-delay rule above. After the window → the end of the line.
+   - Skip keeps its own fixed rule (behind the next 3). Rejoin differs on purpose: a missed person was away, so the penalty follows the queue's speed.
+5. The person misses a second time, or never rejoins before the queue closes (or the business limit) → EXPIRED. A MISSED ticket never carries over to the next session, even with a multi-day ticket validity (R4). A free walk-in also gets one no-show strike. The existing rule stays: 3 strikes in 30 days block free joins for 7 days, per user and per device hash. Paid tickets (remote reservation, Priority Pass) get no strike: losing the fee is the penalty (C5, decided 2026-10-18).
 6. A ticket moves back only when its owner asks to rejoin. Staff never reposition it. People ahead for others: no change when a called ticket becomes No-show or MISSED. On a rejoin, only the people behind the insert point get +1.
 7. Remote join fee: see §6.3.
 8. This replaces the dropped idea "NEXT calls only checked-in people" (presence tracking is unreliable). Check-in is used only for rejoin after MISSED and for Priority Pass activation.
+9. Engine details (R4, decided 2026-10-18): a missed priority or triage holder rejoins inside their own class (the skip class rule, G1). Analytics count a ticket served after a rejoin as served, count each miss as a no-show, and leave the time away out of wait statistics.
+10. **Staff "Rejoin for customer"** (R2, still PROPOSED, awaiting the owner): see the backend doc §23. It covers a dead phone after MISSED.
 
 **Misuse and edge cases (decided by the owner, 2026-10-18):**
 
 | Case | What happens |
 |---|---|
-| Joins, goes shopping, comes back late on purpose | One rejoin behind 3. A second miss expires the ticket and adds a strike (free walk-ins only; a paid ticket loses its fee instead). |
+| Joins, goes shopping, comes back late on purpose | One rejoin, behind about `rejoinDelayMin` minutes of service; after the late window, to the end of the line (R1). A second miss expires the ticket and adds a strike (free walk-ins only; a paid ticket loses its fee instead). |
 | Misses on purpose again and again across days | 3 no-shows in 30 days block free joins for 7 days (built, also per phone). |
 | Reinstalls the app for a fresh ticket | Blocked by the device check (built). |
 | Takes tickets in many queues "just in case" | One per queue. Each miss adds a strike. Optional later: a limit on active free tickets per person. |
 | Taps "I'm here" from home | Location check, the same 150 m rule as joining. |
 | Staff mark someone No-show by mistake | The customer got the alert and Grace protects them. Every action is logged with its time for later review. |
-| Fewer than 3 waiting at rejoin | To the end of the line. |
-| Two missed people rejoin at the same time | Each goes behind 3, in tap order. |
-| Phone dead at the counter | Staff look up the number or scan the saved ticket QR, then Admit (during GRACE; after MISSED see R2 in the backend doc §23). |
-| Called person is inside but didn't hear | The alert plus Grace covers it. Admit serves them next. |
+| Fewer waiting at rejoin than the rejoin delay needs | To the end of the line. |
+| Two missed people rejoin at the same time | Each gets the same rule, in tap order. |
+| Taps "I'm here" with a fake location | Rejected, like a join (R4). |
+| Phone dead at the counter | During GRACE: staff look up the number or scan the saved ticket QR, then Admit. After MISSED: R2 (proposed) lets staff rejoin them with the ticket number + check code; until then, staff serve them as a new walk-in. |
+| Called person is inside but didn't hear | The alert plus Grace covers it, with the large countdown on the ticket. Admit serves them next. |
 
-Proposed refinements R1–R4 (awaiting the owner's OK) are listed in the backend architecture doc §23.
+R1, R3 and R4 were decided by the owner on 2026-10-18. R2 is still proposed (backend architecture doc §23).
 
 **Priority Pass, "flexible pass" (decided by the owner, 2026-10-18; built in Step 4).** This replaces the proposal of the same day and the older "VIP: pay to skip" idea (both superseded 2026-10-18). There are no time slots. The pass is a paid pass for one queue. It enters the line when the holder arrives.
 
@@ -258,7 +264,7 @@ Fits OPD, government offices, labs, service centres and salons. Doctors with lon
 | `devices` | user_id, expo_push_token, updated_at |
 | `businesses` | id, owner_user_id, name, category, address, lat, lng, geohash, hours_json, status, created_at |
 | `business_members` | business_id, user_id, role (owner / staff) |
-| `queues` | id, business_id, name, status, settings_json (radius, walk-in quota, fees, grace minutes, Priority Pass settings, split %) |
+| `queues` | id, business_id, name, status, settings_json (radius, walk-in quota, fees, grace minutes, rejoin delay, late window, Priority Pass settings, split %) |
 | `queue_snapshots` | queue_id (pk), business_id, lat, lng, waiting, eta_low_s, eta_high_s, is_open, updated_at |
 | `token_history` | id, queue_id, number, class, method, user_id, final_state, joined_at, called_at, served_at |
 | `payments` | id, user_id, queue_id, token_id, kind (reservation / priority / upgrade), amount_paise, device_hash (priority and upgrade), razorpay_order_id (unique), razorpay_payment_id (unique), status, created_at |
@@ -335,8 +341,10 @@ Staff taps Next → QueueDO picks triage, else a due priority holder, else the n
   (credit counter, §5.2) → interval recorded → updates + alerts
 Staff taps No-show → token enters GRACE (default 10 min) → alarm set → alert grace_started
   • arrives in time → staff taps Admit → served next
-  • alarm fires → MISSED (out of the live order)
-      • taps "I'm here" + GPS check (once per ticket) → WAITING behind the next 3 (or the end)
+  • alarm fires → MISSED (out of the live order) → alert missed
+      • taps "I'm here" + GPS check (once per ticket)
+          within lateWindowMin → WAITING behind ceil(rejoinDelayMin ÷ avgServiceMin) (≥ 1, or the end)
+          after the window     → WAITING at the end of the line
       • misses again, or never rejoins by close → EXPIRED
         → remote/priority: ledger "forfeit" + shares; free walk-in: strike +1
 ```
@@ -348,15 +356,18 @@ A customer cancels before the cancel window closes → Worker calls the Razorpay
 Priority Pass (2026-10-18): a customer who cancels a BOOKED pass (before check-in) gets the business's cancel refund % (default 50) back. After check-in, cancelling = leaving without a refund. Full refunds when the queue closes before serving a checked-in holder, or when the business cancels or closes early, are automatic.
 
 ### 6.7 Ratings (decided by the owner, 2026-10-18; Step 6 extra)
-Verified reviews, in the style of Trustpilot.
+Verified ratings, in the style of Trustpilot (stars only).
 - Every SERVED customer gets an in-app option to rate two things, 0–5 stars each: **customer experience** and **service quality**.
 - Ratings show on the map, the business card and the business page, where people decide which queue to join.
 - Purpose: they close the fairness loop. A business that favours priority too much gets low ratings from regulars and loses customers to other places.
 - Each rating stores the lane (regular or priority) of the rated ticket.
+- Stars only, no written text.
 
-Recommended, awaiting the owner's OK (proposed):
-- **RT1** Show ratings split by lane: "Regular customers 2.1★ · Priority customers 4.8★", next to "Priority lane on · 1 in N", so a blended average cannot hide unfairness.
-- **RT2** Integrity: only a served ticket can rate, once per ticket. Ratings show only after a minimum count (for example 5). The business cannot delete ratings but can reply in public.
+Decided by the owner, 2026-10-18:
+- **RT1** Ratings are shown split by lane: "Regular customers 2.1★ · Priority customers 4.8★", next to "Priority lane on · 1 in N", so a blended average cannot hide unfairness.
+- **RT2** Integrity: only a served ticket can rate, once per ticket. Ratings show only after at least 5 ratings (counted per lane). The business cannot delete ratings but can reply in public.
+
+Recorded note (not a rule):
 - **RT3** Known limit: for a monopoly provider (the only hospital nearby), ratings do not move customers, but they stay public evidence for oversight.
 
 ### 6.6 Map
