@@ -1,7 +1,7 @@
 # QPeer — National-Level Vision, Social Impact & Future Scope
 
 > **Status (October 2026): superseded vision. Keep this document as background on social impact only.**
-> The project no longer treats QPeer as free public infrastructure for government offices and public hospitals. QPeer is now a queue marketplace for private walk-in businesses: a live queue map, a free walk-in lane, paid reservations, a Priority Pass, analytics, and verified reviews. See `QPeer_Pitch_Problem_Solution_Impact.md` for the current vision and `QPeer_Platform_Architecture_and_Build_Plan.md` for the current technical plan.
+> The project no longer treats QPeer as free public infrastructure for government offices and public hospitals. QPeer is now a queue marketplace for private walk-in businesses: a live queue map, a free walk-in lane, paid reservations, a Priority Pass, analytics, and verified ratings. See `QPeer_Pitch_Problem_Solution_Impact.md` for the current vision and `QPeer_Platform_Architecture_and_Build_Plan.md` for the current technical plan.
 > The ETA section (11–13) and the accessibility, inclusion and privacy sections are still valid.
 
 ## 1. Executive Vision

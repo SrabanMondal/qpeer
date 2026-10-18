@@ -4,7 +4,8 @@
 > Two changes:
 > - Walk-ins are now checked with **static QR + a one-time GPS check** (default radius 150 m with a forgiving accuracy allowance, location never stored). The BLE sections describe an optional strict mode for later.
 > - The "no accounts, no phone number" rule now applies **only to the free walk-in lane**.
-> Paid reservations, Priority Pass and reviews need a light account. Map, payments, reviews and analytics are covered in `QPeer_Platform_Architecture_and_Build_Plan.md`.
+> Paid reservations, Priority Pass and ratings need a light account. Map, payments, ratings and analytics are covered in `QPeer_Platform_Architecture_and_Build_Plan.md`.
+> - *Updated 2026-10-18:* the triage lane (§5, §24B) is now separate from the paid Priority Pass, which follows a 1-in-N credit rule set by each business. Missed turns go GRACE → MISSED → one rejoin → EXPIRED (§10). The GPS checks for "I'm here" and for Priority Pass check-in work like the walk-in check: the location is never stored. v1 counts people ahead with an indexed SQL `COUNT` in the Durable Object instead of a Fenwick tree; the formulas below stay as the design idea. Current rules: `QPeer_v1_High_Level_Design.md` §5.2.
 
 ## 1. Project Overview
 
@@ -193,18 +194,21 @@ NEXT  #n  → add(n, -1)
 regular_ahead(#m) = prefix_sum(m - 1)
 ```
 
-When priority participants are present, they are tracked in a dedicated Priority Lane (`#P1`, `#P2`, ...). Each participant's waiting count remains exact and cheap:
+Two small lanes sit beside the regular queue: the free **triage lane** (`T1`, `T2`, …, inserted by staff for medical urgency) and the paid **priority lane** (`P1`, `P2`, …, Priority Pass holders, ordered by check-in time). Each participant's waiting count remains exact and cheap:
 
+- **Triage is always served first.** Every participant counts the active triage tokens ahead of them.
+- **The paid priority lane is not served before the whole regular queue.** It follows a **credit rule**: each regular call adds 1 credit (capped at N), and the head of the priority lane is called only when credits reach N (then N credits are spent). N is the business's ratio, "1 priority per N regulars". Staff cannot pick a priority person by hand.
 - **For a regular participant (#m):**
   ```text
-  people_ahead(#m) = active_priority_ahead + prefix_sum(m - 1)
+  people_ahead(#m) = active_triage_ahead + prefix_sum(m - 1) + expected_priority_calls(m)
   ```
+  `expected_priority_calls` is a range. Low: only priority holders already checked in. High: as if every N-th call goes to priority.
 - **For a priority participant (#Pk):**
   ```text
-  people_ahead(#Pk) = active_earlier_priority_ahead
+  people_ahead(#Pk) = active_triage_ahead + earlier_priority_ahead + regular calls still needed before #Pk is due
   ```
 
-Each operation remains $O(\log n)$ for the regular queue and $O(1)$ / $O(k)$ for the small priority lane (where $k \ll n$), so queue advancement stays extremely cheap even with 10,000 participants, and the queue object can answer "how many are ahead of me?" for any participant on demand without renumbering or fractional keys.
+Each operation remains $O(\log n)$ for the regular queue and $O(1)$ / $O(k)$ for the small lanes (where $k \ll n$), so queue advancement stays extremely cheap even with 10,000 participants, and the queue object can answer "how many are ahead of me?" for any participant on demand without renumbering or fractional keys.
 
 ---
 
@@ -474,18 +478,20 @@ After expiry, the active queue state can be deleted. This provides an additional
 
 The original assumption of strict progression where missed turns were immediately skipped caused user friction. To prevent front-desk arguments and accommodate delayed patients, a temporary holding state is introduced:
 
-* **Updated State Machine:** The serverless participant state machine expands from `WAITING`, `CALLED`, and `EXPIRED` to include a `GRACE` state.
-* **The Holding Queue:** If a participant is a no-show when called, the clerk selects "No Show". The participant is dropped from the active prefix-sum calculation in the Fenwick Tree (allowing the line to advance instantly) and moved to a "Late Arrivals" holding tray on the clerk's dashboard.
-* **Automated Expiry via Alarms:** A serverless alarm (e.g., Cloudflare Durable Object Alarm) initiates a 10–15 minute countdown. If the user fails to arrive before the alarm triggers, their token transitions permanently to `EXPIRED`.
-* **Fast-Track Readmission:** If the user arrives during the grace period, the clerk selects "Admit Late Arrival". The user is injected into the counter immediately following the currently active consultation, bypassing the remaining queue without being forced to restart at the back.
+* **Updated State Machine:** The serverless participant state machine expands from `WAITING`, `CALLED`, and `EXPIRED` to include `GRACE` and, since 2026-10-18, `MISSED`.
+* **The Holding Queue:** If a participant is a no-show when called, the clerk selects "No Show". The participant is dropped from the active people-ahead count (allowing the line to advance instantly) and moved to a "Late Arrivals" holding tray on the clerk's dashboard.
+* **Grace via Alarms:** A serverless alarm (Cloudflare Durable Object Alarm) starts the grace countdown (a business setting, default 10 min). The ticket shows a large "Come now — m:ss left" countdown.
+* **Fast-Track Readmission:** If the user arrives during the grace period, the clerk selects "Admit". The user is served right after the current person, without being forced to restart at the back.
+* **Missed, then one rejoin:** When the alarm fires, the token becomes `MISSED` (out of the line, not ended), and one `missed` alert is sent. The participant can tap **I'm here** once. The app repeats the walk-in GPS check; the location is used only for that check and is **never stored**, exactly as for joining. Within the business's late window the token goes back by about `rejoinDelayMin` minutes of service (converted to people with the queue's own service time, at least 1); after the window it goes to the end.
+* **Expiry:** A second miss, or no rejoin before the queue closes, ends the token as `EXPIRED`.
 
 ```text
-[ WAITING ] ──(Called)──> [ CALLED ] ──(No-Show)──> [ GRACE ] ──(Timer Expires)──> [ EXPIRED ]
-                             │                         │
-                         (Served)                 (Late Arrival)
-                             │                         │
-                             v                         v
-                        [ COMPLETED ]         [ RE-ADMITTED (NEXT) ]
+[ WAITING ] ──(Called)──> [ CALLED ] ──(No-Show)──> [ GRACE ] ──(Timer)──> [ MISSED ] ──(Close / 2nd miss)──> [ EXPIRED ]
+                             │                         │                       │
+                         (Served)                  (Admit)              ("I'm here", once,
+                             │                         │                 GPS check, not stored)
+                             v                         v                       v
+                        [ COMPLETED ]         [ RE-ADMITTED (NEXT) ]   [ WAITING, moved back ]
 ```
 
 ---
@@ -1128,11 +1134,16 @@ while individual participants remain represented by anonymous cryptographic iden
 
 The baseline model utilized strict chronological ordering. The system is updated to handle triage and out-of-band priorities without compromising the privacy-first design, breaking the Fenwick-tree indexing, or opening the system to unchecked nepotism.
 
-* **Dedicated Priority Lane:** Instead of assigning arbitrary fractional indices (e.g., `#47.5`) that break integer-indexed Fenwick trees, priority participants receive a dedicated Priority Lane identifier (e.g., `#P1`, `#P2`, `#P3`).
+* **Dedicated Lanes:** Instead of assigning arbitrary fractional indices (e.g., `#47.5`) that break integer-indexed Fenwick trees, triage participants receive a dedicated triage identifier (`T1`, `T2`, …) and paid Priority Pass holders a priority identifier (`P1`, `P2`, …).
   ```text
-  Priority Lane (Head of Service)
-  #P1
-  #P2
+  Triage Lane (Head of Service, free, staff only)
+  T1
+  T2
+  ...
+
+  Priority Lane (paid, mixed in at 1 per N regular calls)
+  P1
+  P2
   ...
 
   Regular Queue (Fenwick Tree Indexed)
@@ -1142,15 +1153,16 @@ The baseline model utilized strict chronological ordering. The system is updated
   ...
   ```
 * **Queue Order & People-Ahead Calculations:**
-  - Priority lane participants are served before the regular queue in priority order.
+  - Triage participants are served before everyone, in triage order.
+  - Paid priority participants are **not** served before the whole regular queue. A credit counter decides: +1 per regular call (capped at N), −N per priority call. The priority head is called only when it is due. N is set by each business.
   - Active regular participants retain their sequential, immutable integer tokens (`#n`) tracked via the Fenwick tree.
   - For any regular participant `#m`:
-    $$\text{people\_ahead}(\#m) = \text{active priority participants ahead} + \text{prefix\_sum}(m - 1)$$
+    $$\text{people\_ahead}(\#m) = \text{triage ahead} + \text{prefix\_sum}(m - 1) + \text{expected priority calls (a range)}$$
   - For any priority participant $\#Pk$:
-    $$\text{people\_ahead}(\#Pk) = \text{earlier active priority participants ahead}$$
+    $$\text{people\_ahead}(\#Pk) = \text{triage ahead} + \text{earlier priority ahead} + \text{regular calls before } \#Pk \text{ is due}$$
   - No existing participant records require renumbering or array shifts, preserving both $O(\log n)$ operations and display-friendly tokens.
-* **Systemic Quotas:** To prevent abuse, priority inserts are hard-capped by volume (e.g., max 3 per day, or 1 per 15 regular tokens).
-* **Public Transparency:** When a priority token is inserted, all actively waiting participants receive an in-app banner ("Emergency / Triage Token Inserted: #P-1"), keeping counter staff publicly accountable to the waiting crowd.
+* **Business-Set Limits:** Triage inserts have a daily cap that the business sets (default 5 per day). The paid priority ratio N is also a business setting; QPeer sets no platform cap. Public ratings, split by regular and priority customers, are the check on unfair use.
+* **Public Transparency:** When a triage token is inserted, all actively waiting participants receive an in-app banner ("Emergency / Triage Token Inserted: T1"), keeping counter staff publicly accountable to the waiting crowd. When the paid lane is on, everyone sees "Priority lane on · 1 in N".
 * **Cross-System Auditing:** Because QPeer intentionally avoids collecting permanent user databases or identity data, internal audits of priority misuse rely on cross-referencing QPeer's timestamped priority logs with the facility's primary service database (e.g., hospital admission records) to verify the legitimacy of the triage.
 * **The "Red Channel" Bypass:** For true emergencies, the patient bypasses QPeer entirely. The clerk selects "Pause Queue", which temporarily halts the adaptive ETA algorithm and alerts waiting users that the counter is paused for an emergency, requiring zero digital tokens.
 

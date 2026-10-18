@@ -4,6 +4,8 @@
 
 > **Check the queue from home. Join it from anywhere. Pay only if you want to skip the trip or the wait.**
 
+*Updated 2026-10-18: the Priority Pass, missed-turn and ratings sections now match the decided v1 design.*
+
 ---
 
 ## 1. What QPeer Is
@@ -14,7 +16,7 @@ A customer opens QPeer and sees nearby places on a map, each with:
 
 - **how many people are waiting now**
 - **the estimated wait time**
-- **the star rating and reviews from verified visitors**
+- **two star ratings from verified visitors: the experience, and the service quality**
 - **the average service and waiting time over recent weeks**
 
 Then the customer chooses how to join:
@@ -23,7 +25,7 @@ Then the customer chooses how to join:
 |---|---|---|
 | **Walk-in** | **Free** | Go to the place, scan the QR code at the counter, get a token, and wait anywhere nearby. |
 | **Reserve from home** | Small fee | Book a place in the queue without travelling. QPeer says when to leave home. |
-| **Priority Pass** | Higher fee | Get served earlier for the same service. *(The exact rules are still being decided. See Section 5.)* |
+| **Priority Pass** | Higher fee | Join a faster priority lane when you arrive. Each business sets a fair limit, for example 1 priority customer for every 3 regular ones. *(See Section 5.)* |
 
 Part of every fee goes to the business, and part goes to QPeer.
 
@@ -72,7 +74,8 @@ Watch the counter for hours                ↓
 Get served                                 ↓
                                         Arrive on time, get served
                                            ↓
-                                        Rate the visit (verified, because QPeer knows you were served)
+                                        Rate the visit: experience and service quality
+                                        (verified, because QPeer knows you were served)
 ```
 
 ### The business's journey
@@ -111,9 +114,19 @@ For a small fee, a customer can join the queue without travelling to the premise
 - **Part of each hour's places are kept for walk-ins**, so remote bookings can't fill the day before anyone arrives.
 - **The fee works as a deposit.** If you don't show up, you lose it, and part of it goes to the business. A no-show costs the business nothing.
 
-### 4.4 Priority Pass *(rules still to be decided)*
+**If you miss your turn.** Life happens, so one late arrival is forgiven. When you are called and are not there, you get a few minutes of grace with a clear countdown on your phone. If you still don't come, your ticket is marked "missed", not cancelled. When you arrive, you tap "I'm here" and rejoin the line a little further back. How far back depends on the queue's speed and on a setting the business chooses. You can do this once. If you miss again, the ticket ends.
 
-For a higher fee, customers can be served earlier for the same service. Section 5 explains the open decision about how it works.
+### 4.4 Priority Pass
+
+For a higher fee, customers join a **priority lane**. The business decides whether to offer it, and sets the price and the limit. The rules are the same for every business:
+
+- **Buy now, use when you arrive.** You can buy the pass from anywhere. It starts to count only when you check in at the premises. Priority customers are served in the order they arrive, not the order they paid.
+- **A fair limit, enforced by the app.** The business picks a ratio such as "1 priority for every 3 regular customers". The app calls people in that pattern. Staff can't pick a priority customer by hand.
+- **Everyone can see it.** Regular customers see "Priority lane on · 1 in 3", and their wait estimate includes the priority customers.
+- **An honest preview.** Before paying, you see "priority wait about X min, regular wait about Y min, you save about Z min".
+- **Skip ahead.** A customer already waiting can upgrade to the priority lane for the same price. The app offers this only when it saves at least 5 minutes.
+- **Fair refunds.** Cancel before you check in and you get part of the fee back (the business sets how much). If the business closes before serving you, or cancels, you get the full fee back automatically.
+- **Medical triage is never sold.** Urgent cases that staff mark as triage always go first.
 
 ### 4.5 Analytics for the business
 
@@ -128,13 +141,15 @@ The business sees its own queue data. This covers more than the daily totals: it
 
 This helps owners answer practical questions: *When do we need another counter? Is service getting slower? Which hours should we staff more?*
 
-### 4.6 Verified reviews and ratings
+### 4.6 Verified ratings
 
-After a visit, customers can give a star rating and write a review. **Only people whose token was actually served can review**, so QPeer reviews come from real visits, which most review sites can't promise.
+After a visit, customers give two star ratings: one for **the experience** (the wait, the fairness, the place) and one for **the service quality**. There is no written text. **Only people whose token was actually served can rate, once per visit**, so QPeer ratings come from real visits, which most review sites can't promise. A business can't delete a rating, but it can reply in public. Ratings appear only after a business has at least 5 of them.
+
+Ratings are shown **separately for regular and priority customers**, for example "Regular customers 4.2★ · Priority customers 4.6★". A business that lets priority customers crowd out everyone else gets low ratings from regular customers, and the map shows it. This is how QPeer keeps the Priority Pass fair without one rule for every business.
 
 Over time each business on the map shows:
 
-- star rating and reviews
+- the two ratings, split by regular and priority customers
 - average waiting time
 - average service time
 - how accurate its estimated wait times are
@@ -145,28 +160,22 @@ Customers can then pick the best place to go, and judge whether a reservation or
 
 ---
 
-## 5. Open Decision: How the Priority Pass Works
+## 5. How the Priority Pass Stays Fair
 
-This decision is still open and needs agreement from the project team before launch.
+*Decided 2026-10-18.* We looked at two options. "VIP entry: pay to skip the whole queue" was the simplest to sell, but every pass would delay every free customer with no limit. We chose a **limited priority lane** instead.
 
-**Option A: "VIP Entry: pay to skip the queue"**
-A paid pass moves the customer ahead of free customers. This is the simplest to explain and the strongest marketing message.
+**How it works:**
 
-**Option B: Limited priority**
-A paid pass moves the customer ahead, but with limits that protect everyone else:
+- The business turns the Priority Pass on or off. It is off by default.
+- The business sets the price and the ratio, for example "1 priority customer for every 3 regular ones". Any ratio is allowed; the business decides.
+- The app enforces the ratio when staff tap "Next". Staff can't call a priority customer out of turn.
+- Priority customers are served in the order they check in at the premises.
+- Free customers see the lane openly ("Priority lane on · 1 in 3"), and their wait estimates include it.
+- Medical triage always comes first and is never sold.
 
-- a maximum number of passes per hour, for example 1 for every 10 regular tokens
-- free customers see it openly, for example "2 priority entries ahead of you", and their time estimates include them
-- never used for medical urgency. Medical triage always comes first and is never sold.
-- not offered at public hospitals or government offices
+**Why there is no fixed limit from QPeer:** each business knows its own customers. Instead of one rule for everyone, QPeer makes unfairness visible. Ratings are split between regular and priority customers. If a business sells too much priority, regular customers rate it low, the map shows it, and people go elsewhere. For a place with no nearby alternative, such as the only hospital in a town, ratings don't move customers, but they stay as public evidence.
 
-**Why the limits matter:** Each priority pass delays every free customer. Without limits:
-
-- free customers' time estimates become unreliable, which damages the trust in the map (4.1) and the reviews (4.6)
-- free customers may turn against the business and leave bad reviews
-- selling priority in healthcare can raise ethical and legal problems
-
-India already accepts paid fast lanes when they have clear rules, such as Tatkal train tickets, Tatkal passports and paid special-entry darshan at temples. Option B follows that model.
+India already accepts paid fast lanes when they have clear rules, such as Tatkal train tickets, Tatkal passports and paid special-entry darshan at temples. The Priority Pass follows that model.
 
 ---
 
@@ -253,9 +262,9 @@ Exact fee amounts and revenue shares will be set after interviews and pilots wit
 ### What makes QPeer different
 
 1. **Live queue data on a map.** QPeer shows the real number of people waiting, not just an estimate of how busy a place is.
-2. **One queue, three ways in.** Free walk-in, paid reservation and Priority Pass all share one fair and visible order.
-3. **Verified-visit reviews.** Only customers who were actually served can rate a business.
-4. **Queue performance in the ratings.** Ratings include waiting time and how accurate the estimates were, not just star ratings.
+2. **One queue, three ways in.** Free walk-in, paid reservation and Priority Pass all share one fair and visible order, with the priority ratio enforced by the app.
+3. **Verified-visit ratings.** Only customers who were actually served can rate a business, once per visit.
+4. **Fairness you can see.** Ratings are split between regular and priority customers, and the business page also shows real waiting time and how accurate the estimates were.
 5. **The business earns money.** Unlike queue machines and waitlist software, QPeer is an income source, not just a cost.
 6. **Built for walk-in businesses in India**: QR joining, paper-slip fallback, regional languages, and prices that suit Indian businesses.
 
@@ -268,7 +277,7 @@ Making money and doing good don't conflict here, because the free walk-in lane i
 - **Time saved:** no wasted trips, and no hours standing at a counter
 - **Less crowding:** people wait anywhere, and crowds spread across nearby businesses
 - **Easier for people who struggle to stand in line:** the elderly, the sick, pregnant women, people with disabilities, and parents with small children
-- **Clearer for customers:** live numbers and verified reviews show which businesses serve people well
+- **Clearer for customers:** live numbers and verified ratings show which businesses serve people well
 - **Better service over time:** analytics and public waiting-time ratings encourage businesses to add counters and speed up service
 - **Privacy in the free lane:** walk-in customers don't give any personal details
 
@@ -312,10 +321,10 @@ Once QPeer connects thousands of businesses and has years of real waiting-time d
 | Risk | Plan |
 |---|---|
 | The map is empty at first, so few people use it | Fill one category in one city before expanding |
-| Paid entries make free customers angry | Limits on priority, a share of places kept for walk-ins, open display, and a free lane that always moves |
+| Paid entries make free customers angry | A priority ratio enforced by the app, a share of places kept for walk-ins, open display, ratings split by regular and priority customers, and a free lane that always moves |
 | People think ratings are paid for | Ratings come only from verified visits, and higher rankings are never sold |
 | Businesses with slow service don't want public wait times | Start with private analytics, and show public numbers once businesses opt in or have been listed for a set time |
-| Remote bookers don't show up | Deposits, "leave home by" alerts and a grace period |
+| Remote bookers don't show up | Deposits, "leave home by" alerts, a grace period with a countdown, and one rejoin after a missed turn |
 | Large map or booking platforms copy the idea | Move fast in one niche, and build strong relationships with businesses and a record of real waiting-time data |
 
 ---

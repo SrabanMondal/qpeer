@@ -1,5 +1,7 @@
 # QPeer: Platform Architecture, Tech Stack & Build Plan
 
+*Updated 2026-10-18: Priority Pass (§3.4), missed turn (§3.3), ratings (§3.7) and the build phases now match the decided v1 design. The current detail lives in `QPeer_v1_High_Level_Design.md` and `QPeer_v1_Backend_Architecture.md`.*
+
 This document turns the marketplace vision (`QPeer_Pitch_Problem_Solution_Impact.md`) into a technical plan. It extends the existing technical documents; it doesn't replace them:
 
 - `QPeer_Privacy_Preserving_Serverless_Queue.md`: queue core, Fenwick tree, fan-out, ETA
@@ -17,8 +19,8 @@ The QPeer code will be built by AI coding engines (agy and opencode), coordinate
 | Apps | Separate provider app and participant app | **One app** with a Customer mode and a Business mode |
 | Ways to join | On-site only (QR + BLE) or manual | On-site (free) + **remote reservation (paid)** + **Priority Pass (paid)** + manual |
 | Abuse check | BLE proximity | **GPS check** for walk-ins (rotating screen QR as an upgrade, BLE as optional strict mode later). **Payment** for remote joins and Priority Pass. |
-| Identity | Anonymous everywhere | Anonymous walk-in lane. **Light account** (phone OTP) for paid features and reviews. Businesses have verified accounts. |
-| New parts | (none) | Map and discovery, payments with revenue split, reviews, analytics with trends |
+| Identity | Anonymous everywhere | Anonymous walk-in lane. **Light account** (phone OTP) for paid features. Businesses have verified accounts. |
+| New parts | (none) | Map and discovery, payments with revenue split, verified ratings, analytics with trends |
 
 ---
 
@@ -37,7 +39,7 @@ The QPeer code will be built by AI coding engines (agy and opencode), coordinate
 |---|---|---|
 | API | **Workers** + Hono (a small router) | All HTTP endpoints, payment webhooks |
 | Live queues | **Durable Objects**: one per queue | Queue state, Fenwick tree, WebSockets, ETA, grace-period alarms |
-| Database | **D1** (SQLite) | Businesses, locations, accounts, reservations, payments ledger, reviews, analytics buckets, map snapshot |
+| Database | **D1** (SQLite) | Businesses, locations, accounts, reservations, payments ledger, ratings, analytics buckets, map snapshot |
 | Scheduled jobs | **Cron Triggers** | Daily and weekly analytics rollups, expiry clean-up |
 | Files (later) | **R2** | Business photos |
 
@@ -79,7 +81,7 @@ npm workspaces, TypeScript everywhere, and shared types between the app and the 
 - Each queue's Durable Object writes a small **snapshot** to D1 (waiting count, ETA, open or closed) when it changes, at most every ~30 seconds.
 - The map asks the API for "snapshots inside this map area", which is **one D1 query**. It never contacts hundreds of live queues at once.
 - Markers are grouped when zoomed out, and each marker shows the live wait.
-- Ratings and averages come from the analytics and reviews tables.
+- Ratings and averages come from the analytics and ratings tables.
 
 **Difficulty: moderate.** These are standard map patterns, and the engines can build them. The hard part of the map is business, not code: a map is only useful when it shows enough businesses (see the pitch, Stage 1).
 
@@ -101,7 +103,7 @@ npm workspaces, TypeScript everywhere, and shared types between the app and the 
 - Reject only readings with **no useful location fix**, where the reported uncertainty is more than about 1 km. In that case the app asks the customer to step outside or switch on precise location, or staff add them manually.
 - **One active free token per device** at a time.
 - Repeated no-shows in the free lane **temporarily block that device** from joining it.
-- The existing grace period and expiry rules still apply.
+- The missed-turn rules apply: grace period → missed → one "I'm here" rejoin with the same GPS check → expired (§3.3).
 
 **What it can't stop:** a determined cheater using a GPS-spoofing app. At the price of a reservation fee, the loss is small and acceptable.
 
@@ -118,22 +120,32 @@ npm workspaces, TypeScript everywhere, and shared types between the app and the 
 - The customer needs an account (phone OTP). They pay through Razorpay, and the server confirms the payment through a webhook.
 - The Durable Object places them **in the same sequence at the moment of payment** and marks them `REMOTE`.
 - **Walk-in quota:** at most X% of each hour's places can go to remote bookings. X is set per business.
-- **Deposit rule:** if the customer doesn't arrive before the grace period ends, the fee is not refunded and the business gets its share. Cancelling early gets a refund under a policy set per business.
+- **Deposit rule:** the fee is kept (and the business gets its share) only if the ticket expires and the customer never arrived. Served, even after a rejoin, means the fee paid for holding the place. Cancelling early gets a refund under a policy set per business. A business cancel or early close refunds the fee.
 - **"Leave home by"** = estimated call time − travel time (from the map distance) − a buffer.
 
-### 3.4 Priority Pass (rules still to be decided)
+**Missed turn (decided 2026-10-18, built in Step 4).** The same for every ticket, free or paid:
+1. Called, not there → staff tap No-show → **grace** (business setting, e.g. 10 min) with an alert and a large countdown on the ticket. Arrives in time → served next.
+2. Grace ends → **MISSED** (out of the line, not cancelled) with one `missed` alert.
+3. **"I'm here"** with the walk-in GPS check, once per ticket. Within the business's late window (default 15 min) the ticket goes back about `rejoinDelayMin` minutes of service (default 15): the engine turns that into people with the queue's own service time, at least 1. After the window → the end of the line.
+4. A second miss, or no rejoin by close → **EXPIRED**. Free walk-ins get a no-show strike; paid tickets lose the fee instead. Staff never move a ticket by choice.
 
-Each queue has priority classes:
+### 3.4 Priority Pass (decided 2026-10-18, built in Step 4)
+
+Each queue has three classes:
 
 ```text
-Triage (staff, free, unlimited)  >  Priority Pass (paid)  >  Regular (walk-in, remote, manual)
+Triage (staff, free, daily cap)  >  Priority lane (paid, 1 in N)  >  Regular (walk-in, remote, manual)
 ```
 
-This builds on the priority lane in the edge-case document. Priority Pass entries get their own token series (`#V1`, `#V2`, …).
+Triage always goes first. Priority does not simply go before every regular: the engine mixes the two lanes by a ratio the business sets.
 
-The open decision in the pitch (Option A: no limit vs Option B: limited) is **one configuration value**: the maximum number of priority passes per N regular tokens. A value of 0 means no limit. The build doesn't have to wait for the decision.
-
-Regular customers' "people ahead" and ETA always include active priority entries, so estimates stay honest.
+- **Per business, OFF by default.** The business sets the price, the ratio N ("1 priority per N regulars", any whole number ≥ 1), an optional daily sales cap ("Sold out"), the validity window (default today) and the cancel refund % (default 50). QPeer sets no platform limit.
+- **Buy, then check in.** A signed-in customer pays (the ticket is created only after the server confirms the payment). The pass is **BOOKED**: paid, not in the line. On arrival the customer checks in with the walk-in GPS check. The ticket then enters the priority lane, ordered by check-in time, with its own number series (`P1`, `P2`, …).
+- **Skip ahead (upgrade).** A WAITING ticket can move into the priority lane for the pass price. The offer is hidden when the saving is under 5 min.
+- **Next rule = a credit counter.** Each regular call adds 1 credit (capped at N). A priority call costs N credits. Next calls the priority head only when it is due. The counter starts at 0 when a session opens. Staff can't pick a priority person by hand.
+- **Honest numbers.** Regulars see "Priority lane on · 1 in N". Their people ahead and wait are a range that includes the expected priority calls. Buyers see "priority ~X min · regular ~Y min · save ~Z min" before paying.
+- **Refunds in brief.** Cancel before check-in → the business's %. Never checked in by the end of the window → no refund. Checked in but the queue closed before serving, or the business cancels or closes early → full refund, automatic.
+- **The check on unfair use** is public ratings split by lane (§3.7).
 
 ### 3.5 Revenue split
 
@@ -146,11 +158,12 @@ Regular customers' "people ahead" and ETA always include active priority entries
 - A daily Cron Trigger calculates trends: peak hours by weekday, weekly average wait, abandonment rate, service speed and how accurate the ETAs were.
 - **Comparison with nearby businesses:** same category, nearby geohash, shown only when at least 5 businesses are in the group, so no single business can be identified.
 
-### 3.7 Verified reviews
+### 3.7 Verified ratings (decided 2026-10-18, built in Step 6)
 
-- When a token is served, the server issues a **signed review permit** tied to that token. Each permit can be used once and expires after 7 days.
-- Walk-in customers can review without an account, because the permit proves the visit. Only the token is linked to the review.
-- A business's rating = verified stars + measured wait and service averages + ETA accuracy. Rankings never use money.
+- Only the owner of a **served** ticket can rate, once per ticket (enforced by the server). No review permits and no written text.
+- Two ratings, 0–5 stars each: **customer experience** and **service quality**. Each rating stores the lane (regular or priority) of the ticket.
+- Ratings are shown **split by lane** ("Regular customers 4.2★ · Priority customers 4.6★") next to "Priority lane on · 1 in N", and only after at least 5 ratings. The business can't delete a rating but can reply in public.
+- The business page also shows the measured wait and service averages and ETA accuracy, kept apart from the stars. Rankings never use money.
 
 ### 3.8 Integrations (later)
 
@@ -170,9 +183,9 @@ Each phase ends with a working app and a clear test. Later phases build on earli
 | **1. Queue core** | Business creates queue, static QR, join (gate off), NEXT, skip, pause, manual add + claim code, grace period, live position, EWMA ETA with range | Backend tests (atomic numbering, Fenwick counts after leaves, grace-period alarms). Joining and serving works on two phones. |
 | **2. Walk-in gate** | GPS check on join (forgiving radius check, mock-location rejection), one free token per device, no-show block, claim-code conversion | A join from a few kilometres away is rejected, and a test mock location is rejected. Someone on-site joins in under 10 s, even with poor indoor GPS. |
 | **3. Map & discovery** | Business profile + pin, snapshots, map with groups and live waits, list view, filters | 50 seeded businesses load in under 1 s, and live counts update within 30 s. |
-| **4. Accounts + reservations + payments** | Phone OTP, Razorpay test mode, Route split, walk-in quota, deposits, refunds, leave-by alerts | Full flow in Razorpay **test mode**: pay → join → no-show → forfeit split recorded. Cancel → refund. |
-| **5. Analytics + reviews** | Event buckets, daily rollups, trend charts, nearby comparison, review permits, ratings | Simulated 30-day dataset produces correct peaks and trends. A review without a served token is rejected. |
-| **6. Priority Pass** | Priority class, configurable limit, open display to waiting customers | Regular ETAs include priority entries. Limit enforced. Triage always first. |
+| **4. Accounts + reservations + payments + Priority Pass + missed turn** | Phone OTP, Razorpay test mode, Route split, walk-in quota, deposits, refunds, leave-by alerts. Priority Pass (BOOKED, GPS check-in, P series, 1-in-N credit rule, "Skip ahead" upgrade, refunds). Missed turn (MISSED state, "I'm here" rejoin, `missed` alert). | Full flow in Razorpay **test mode**: pay → join → no-show → missed → no rejoin → forfeit split recorded. Cancel → refund. With 1 in N, every N-th call goes to a due priority holder; regular ETAs are a range that includes priority calls; triage always first. A rejoin lands where the rejoin-delay rule says. |
+| **5. Analytics + demo data** | Event buckets, trend charts, nearby comparison, Jammu demo seed, live simulator | Simulated 30-day dataset produces correct peaks and trends. |
+| **6. Extras** | Staff "Add person" + claim code, verified ratings (two ratings, split by lane, shown after 5) | A rating without a served ticket, or a second rating for one ticket, is rejected. |
 | **7. Integrations** | Auto-advance webhook, TV display with the rotating QR option | A billing system's test call advances the queue. With rotating QR on, a 2-minute-old screenshot fails to join. |
 | *Later* | BLE strict mode, browser joining for walk-ins | Only if abuse or adoption data shows a need |
 
@@ -188,7 +201,7 @@ The first pilot can launch after **Phase 3**, as a free queue + map with no paym
 | Reliable push alerts | **Medium** | Battery savers on Indian phones. Needs a setup guide inside the app and testing on real devices. |
 | Live queue correctness | **Medium** | Concurrency is handled by Durable Objects. Needs strong tests. |
 | Map + discovery | **Medium-low** | Standard patterns |
-| Analytics + reviews | **Low** | Database records, scheduled jobs, charts |
+| Analytics + ratings | **Low** | Database records, scheduled jobs, charts |
 | Walk-in GPS check | **Low** | Standard location API. Fake-location apps can beat it, which is accepted (§3.2). |
 
 ---
@@ -200,7 +213,7 @@ The engines and Claude can't do these:
 - **Create accounts:** Expo (EAS), Cloudflare, Firebase, Mapbox, Razorpay (needs a registered business + KYC), Google Play Console, Apple Developer (only if launching on iOS)
 - **Test on real phones:** **two phones** (one as the business, one as the customer) for location checks, alerts and payment screens. Install each development build and report what happens.
 - **Legal:** terms of service, privacy policy, refund and cancellation policy, and business registration for payments
-- **Decide** the Priority Pass rules (pitch §5) and the walk-in quota and deposit defaults
+- **Decide** the walk-in quota and deposit defaults. (The Priority Pass, missed-turn and ratings rules were decided on 2026-10-18; see pitch §5.)
 
 ---
 
