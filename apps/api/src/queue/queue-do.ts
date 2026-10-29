@@ -749,7 +749,11 @@ export class QueueDO extends DurableObject<Env> {
     return ok(null);
   }
 
-  /** Can a remote reservation be made right now? (used before creating an order, Step 4) */
+  /**
+   * Can a remote reservation be made right now? (used before creating an
+   * order, Step 4). Open, not full, the user has no active ticket here,
+   * remote quota left.
+   */
   async checkQuota(userId: string): Promise<DoResult<{ available: true }>> {
     const s = this.store;
     const status = s.get("status");
@@ -759,11 +763,13 @@ export class QueueDO extends DurableObject<Env> {
     if (s.countState("WAITING") >= settings.maxSize) {
       return fail("queue_full", "Queue is full");
     }
-    const paid = s
-      .activeForUser(userId)
-      .filter((t) => t.payment_order_id !== null).length;
-    if (paid >= settings.paidPerUserCap) {
-      return fail("quota_full", "Paid token limit reached for this queue");
+    // One active ticket per person per queue (owner, 2026-10-18), paid or
+    // free, BOOKED and MISSED included (INC-065).
+    const mine = this.activeTicketOf(userId);
+    if (mine) {
+      return fail("already_in_queue", "You already have a ticket here", {
+        tokenId: mine.id,
+      });
     }
     if (!this.remoteQuotaAvailable()) {
       return fail("quota_full", "Reservations are full right now");
@@ -866,11 +872,17 @@ export class QueueDO extends DurableObject<Env> {
             tokenId: free.id,
           });
         }
-      } else if (
-        mine.filter((t) => t.payment_order_id !== null).length >=
-        settings.paidPerUserCap
-      ) {
-        return fail("quota_full", "Paid token limit reached for this queue");
+      } else {
+        // A paid reservation: one active ticket per person per queue, so
+        // any other active ticket (paid or free, BOOKED or MISSED too) →
+        // `already_in_queue` and the payment is refunded in full (INC-065).
+        // `paidPerUserCap` is retired (kept in the settings, never read).
+        const other = mine.find((t) => t.method !== "staff");
+        if (other) {
+          return fail("already_in_queue", "You already have a ticket here", {
+            tokenId: other.id,
+          });
+        }
       }
     }
     // C2 (INC-042): one free walk-in per phone, whatever the account (a
@@ -949,6 +961,11 @@ export class QueueDO extends DurableObject<Env> {
     return ok({ id, created: true });
   }
 
+  /** The user's active ticket here (any active state; staff-made ones aside). */
+  private activeTicketOf(userId: string) {
+    return this.store.activeForUser(userId).find((t) => t.method !== "staff");
+  }
+
   private remoteQuotaAvailable(): boolean {
     const settings = this.store.get("settings");
     const cap = Math.floor(
@@ -979,7 +996,8 @@ export class QueueDO extends DurableObject<Env> {
 
   /**
    * Read-only checks before the Worker creates a Razorpay order (PAY-01,
-   * PRI-02, PRI-05). Reservation: open, not full, paid cap, remote quota.
+   * PRI-02, PRI-05). Reservation: open, not full, no active ticket here
+   * (→ `already_in_queue` with its id), remote quota.
    * Pass: lane on, not sold out, no active ticket here (→ `already_in_queue`
    * with its id: the app offers the upgrade instead). Upgrade: own WAITING
    * regular ticket, lane on, not sold out, saving ≥ threshold (C2).

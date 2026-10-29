@@ -399,8 +399,9 @@ async function throwIfTicketActive(ctx: PayCtx, p: Payment): Promise<void> {
  * `captured` payments here whose ticket is not made yet are confirmed now; a
  * paid upgrade of this ticket counts too. If one of them holds an active
  * ticket → 409 `already_in_queue` with its `tokenId` (the app opens it).
- * Paid reservations are capped per user (`paidPerUserCap`, default 2), so an
- * allocated reservation alone does not block a second one.
+ * Any other active ticket of the user here (an allocated reservation, a free
+ * one, a pass) is refused by the DO's `checkPurchase` right after: one active
+ * ticket per person per queue (INC-065).
  */
 async function openTicketInstead(
   ctx: PayCtx,
@@ -480,7 +481,8 @@ async function reuseUnlessPaid(
 
 /**
  * POST /v1/queues/:id/orders (registered). Reservation: queue open, not
- * full, paid cap, walk-in quota (DO `checkPurchase`). Pass: lane on, not
+ * full, no active ticket here (`already_in_queue` + `tokenId`), walk-in
+ * quota (DO `checkPurchase`). Pass: lane on, not
  * sold out, no active ticket here, pass limit per account and phone.
  */
 export async function createOrder(

@@ -78,6 +78,11 @@ const settingsFields = {
   maxSize: int(10, 2000),
   serviceMinutesHint: int(1, 120),
   triageDailyCap: int(0, 50),
+  /**
+   * Retired (INC-065): one active ticket per person per queue applies to paid
+   * reservations too. Still accepted and stored so older settings and apps
+   * keep validating; the server never reads it.
+   */
   paidPerUserCap: int(0, 10),
   /**
    * Ticket validity (C4), minutes from joining; 0 = until the queue closes
