@@ -1,0 +1,456 @@
+{
+  "runId": "1029185383",
+  "startedAt": "2026-10-29T18:53:25.202Z",
+  "finishedAt": "2026-10-29T18:56:26.497Z",
+  "target": "https://qpeer-api-loadtest.qpeer-api.workers.dev",
+  "preset": "baseline",
+  "config": {
+    "businesses": 5,
+    "queuesPerBusiness": 2,
+    "customers": 50,
+    "durationS": 120,
+    "budget": 15000,
+    "wsShare": 0.4,
+    "mapClients": 1,
+    "seed": 299992649
+  },
+  "stoppedBy": "duration",
+  "requestsUsed": 488,
+  "clientConnectRetries": 0,
+  "clientNetworkRetries": 0,
+  "counts": {
+    "tokens": 82,
+    "joinsOk": 46,
+    "triageOk": 16,
+    "probes": 7,
+    "pausedRejections": 0,
+    "fullRejections": 0,
+    "mapPolls": 10,
+    "consoleResponses": 120,
+    "joinRetriesRecovered": 0,
+    "joinRetriesAlreadyInQueue": 0
+  },
+  "endpoints": [
+    {
+      "endpoint": "GET /health",
+      "count": 1,
+      "p50": 478,
+      "p95": 478,
+      "p99": 478,
+      "max": 478,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "GET /loadtest/queues/:id/audit",
+      "count": 20,
+      "p50": 206,
+      "p95": 231,
+      "p99": 240,
+      "max": 240,
+      "statuses": {
+        "200": 20
+      }
+    },
+    {
+      "endpoint": "GET /loadtest/stats",
+      "count": 3,
+      "p50": 259,
+      "p95": 1309,
+      "p99": 1309,
+      "max": 1309,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "GET /map",
+      "count": 11,
+      "p50": 177,
+      "p95": 485,
+      "p99": 485,
+      "max": 485,
+      "statuses": {
+        "200": 11
+      }
+    },
+    {
+      "endpoint": "GET /tokens/:id",
+      "count": 149,
+      "p50": 185,
+      "p95": 724,
+      "p99": 994,
+      "max": 998,
+      "statuses": {
+        "200": 149
+      }
+    },
+    {
+      "endpoint": "POST /businesses",
+      "count": 5,
+      "p50": 209,
+      "p95": 235,
+      "p99": 235,
+      "max": 235,
+      "statuses": {
+        "201": 5
+      }
+    },
+    {
+      "endpoint": "POST /businesses/:id/queues",
+      "count": 10,
+      "p50": 893,
+      "p95": 1231,
+      "p99": 1231,
+      "max": 1231,
+      "statuses": {
+        "201": 10
+      }
+    },
+    {
+      "endpoint": "POST /loadtest/queues/:id/priority-pass",
+      "count": 20,
+      "p50": 289,
+      "p95": 926,
+      "p99": 957,
+      "max": 957,
+      "statuses": {
+        "201": 20
+      }
+    },
+    {
+      "endpoint": "POST /loadtest/reset",
+      "count": 1,
+      "p50": 578,
+      "p95": 578,
+      "p99": 578,
+      "max": 578,
+      "statuses": {
+        "200": 1
+      }
+    },
+    {
+      "endpoint": "POST /me/devices",
+      "count": 28,
+      "p50": 197,
+      "p95": 540,
+      "p99": 544,
+      "max": 544,
+      "statuses": {
+        "200": 28
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/close",
+      "count": 10,
+      "p50": 230,
+      "p95": 265,
+      "p99": 265,
+      "max": 265,
+      "statuses": {
+        "200": 10
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/join",
+      "count": 53,
+      "p50": 302,
+      "p95": 901,
+      "p99": 932,
+      "max": 932,
+      "statuses": {
+        "201": 46,
+        "409": 3,
+        "422": 4
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/next",
+      "count": 88,
+      "p50": 245,
+      "p95": 912,
+      "p99": 1065,
+      "max": 1065,
+      "statuses": {
+        "200": 68,
+        "409": 20
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/open",
+      "count": 10,
+      "p50": 285,
+      "p95": 460,
+      "p99": 460,
+      "max": 460,
+      "statuses": {
+        "200": 10
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/pause",
+      "count": 3,
+      "p50": 534,
+      "p95": 949,
+      "p99": 949,
+      "max": 949,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/resume",
+      "count": 3,
+      "p50": 261,
+      "p95": 281,
+      "p99": 281,
+      "max": 281,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/admit",
+      "count": 5,
+      "p50": 265,
+      "p95": 909,
+      "p99": 909,
+      "max": 909,
+      "statuses": {
+        "200": 5
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/no-show",
+      "count": 8,
+      "p50": 218,
+      "p95": 463,
+      "p99": 463,
+      "max": 463,
+      "statuses": {
+        "200": 8
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/served",
+      "count": 5,
+      "p50": 217,
+      "p95": 920,
+      "p99": 920,
+      "max": 920,
+      "statuses": {
+        "200": 5
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/tokens/:tid/skip",
+      "count": 6,
+      "p50": 462,
+      "p95": 963,
+      "p99": 963,
+      "max": 963,
+      "statuses": {
+        "200": 6
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/triage",
+      "count": 16,
+      "p50": 223,
+      "p95": 1091,
+      "p99": 1091,
+      "max": 1091,
+      "statuses": {
+        "201": 16
+      }
+    },
+    {
+      "endpoint": "POST /queues/:id/undo-next",
+      "count": 6,
+      "p50": 231,
+      "p95": 589,
+      "p99": 589,
+      "max": 589,
+      "statuses": {
+        "200": 6
+      }
+    },
+    {
+      "endpoint": "POST /tokens/:id/leave",
+      "count": 3,
+      "p50": 285,
+      "p95": 592,
+      "p99": 592,
+      "max": 592,
+      "statuses": {
+        "200": 3
+      }
+    },
+    {
+      "endpoint": "WS /queues/:id/live",
+      "count": 24,
+      "p50": 220,
+      "p95": 848,
+      "p99": 851,
+      "max": 851,
+      "statuses": {
+        "101": 24
+      }
+    }
+  ],
+  "check": {
+    "invariants": [
+      {
+        "name": "Outbox drained after the load phase (queues open)",
+        "ok": true,
+        "detail": "Σ pendingOutbox over all queue DOs == 0 within 60 s",
+        "failures": []
+      },
+      {
+        "name": "D1 tokens == DO tokens (open)",
+        "ok": true,
+        "detail": "every DO token has a D1 row with the same state, rev, number, series, session",
+        "failures": []
+      },
+      {
+        "name": "Numbers unique and gap-free per session + series",
+        "ok": true,
+        "detail": "DO and D1: numbers 1..n with no duplicates and no gaps",
+        "failures": []
+      },
+      {
+        "name": "Snapshot == DO after drain",
+        "ok": true,
+        "detail": "queue_snapshots.waiting/is_open/is_paused == DO",
+        "failures": []
+      },
+      {
+        "name": "/v1/map summary == Σ queues == DO",
+        "ok": true,
+        "detail": "for every load-test business",
+        "failures": []
+      },
+      {
+        "name": "DO people-ahead == rank in the call order",
+        "ok": true,
+        "detail": "peopleAhead of each WAITING token == its index in the lanes merged by the credit rule (shared priority.ts); high end ≥ low end (C3)",
+        "failures": []
+      },
+      {
+        "name": "People ahead shown to customers is exact (sample)",
+        "ok": true,
+        "detail": "16 WAITING tokens sampled after the load stopped",
+        "failures": []
+      },
+      {
+        "name": "WebSocket clients converge to the DO state",
+        "ok": true,
+        "detail": "24 sockets: last token message == DO after 35 s quiet",
+        "failures": []
+      },
+      {
+        "name": "Queue order consistent (DO and every console response)",
+        "ok": true,
+        "detail": "triage before regular; untouched regular tokens in number order; positions 1..n",
+        "failures": []
+      },
+      {
+        "name": "People ahead never rises without a cause",
+        "ok": true,
+        "detail": "a rise between two observations needs a skip, triage insert or undo in that window",
+        "failures": []
+      },
+      {
+        "name": "Outbox drained after close",
+        "ok": true,
+        "detail": "Σ pendingOutbox == 0 within 90 s of closing",
+        "failures": []
+      },
+      {
+        "name": "D1 tokens == DO tokens (closed)",
+        "ok": true,
+        "detail": "after close and drain",
+        "failures": []
+      },
+      {
+        "name": "Every token terminal after close",
+        "ok": true,
+        "detail": "no BOOKED/WAITING/CALLED/GRACE/MISSED left (MISSED never carries over, R4)",
+        "failures": []
+      },
+      {
+        "name": "Credit counter fairness (PRI-06)",
+        "ok": true,
+        "detail": "per session: priority calls ≤ regular calls ÷ N + 1",
+        "failures": []
+      },
+      {
+        "name": "Terminal states never move backwards",
+        "ok": true,
+        "detail": "shown terminal → other state only via Undo (SERVED → CALLED within 30 s); one state per rev; 0 late views with an older rev ignored, as the app does",
+        "failures": []
+      },
+      {
+        "name": "Analytics hourly totals == event log",
+        "ok": true,
+        "detail": "Σ analytics_hourly per queue vs the simulator log and the final token states",
+        "failures": []
+      },
+      {
+        "name": "Pushes: no duplicates; every called token alerted once",
+        "ok": true,
+        "detail": "per (token, kind) from the recording sender",
+        "failures": []
+      },
+      {
+        "name": "Rejections carry the right codes",
+        "ok": true,
+        "detail": "no_location_fix × 1, too_far × 1, mock_location × 2, already_in_queue × 3",
+        "failures": []
+      },
+      {
+        "name": "No unexpected responses",
+        "ok": true,
+        "detail": "5xx, timeouts (status 0), broken connections on non-idempotent calls, bad bodies and unexpected error codes",
+        "failures": []
+      },
+      {
+        "name": "Client network failures stay rare",
+        "ok": true,
+        "detail": "0 requests never reached the server after retries (0.00 % of 488, limit 1 %)",
+        "failures": []
+      },
+      {
+        "name": "No coordinates in Worker logs",
+        "ok": null,
+        "detail": "skipped (pass --tail-log <file> with a wrangler tail capture)",
+        "failures": []
+      }
+    ],
+    "ws": {
+      "sockets": 24,
+      "opened": 24,
+      "messages": 557,
+      "tokenMessages": 467,
+      "pongs": 90,
+      "reconnects": 0,
+      "errors": 0
+    },
+    "pushesRecorded": 43,
+    "analyticsTotals": {
+      "joins": 82,
+      "leaves": 3,
+      "served": 45,
+      "noShows": 0,
+      "cancels": 0
+    },
+    "tokenStates": {
+      "SERVED (served)": 45,
+      "LEFT (left)": 3,
+      "EXPIRED (closed)": 34
+    }
+  },
+  "error": null,
+  "green": true
+}
