@@ -54,7 +54,8 @@ export const paymentRoutes = new Hono<AppEnv>()
     );
     return c.json(order, 201);
   })
-  // PAY-03: Checkout's success callback, verified with the key secret.
+  // PAY-03: Checkout's success callback, verified with the key secret, then
+  // checked with Razorpay (captured, or captured now if only authorized).
   .post("/payments/verify", requireRegistered(), async (c) => {
     const body = await parseBody(c, VerifyPaymentBody);
     const user = currentUser(c);
@@ -94,6 +95,15 @@ export const paymentRoutes = new Hono<AppEnv>()
       user,
     );
     if (!r) throw new AppError(404, "not_found", "Not found");
+    // G1: the signature alone is not money; Razorpay did not capture it.
+    if (r.notCaptured) {
+      throw new AppError(
+        409,
+        "invalid_state",
+        "The payment did not complete, so no ticket was made",
+        { paymentStatus: r.notCaptured },
+      );
+    }
     const names = await service.paymentNames(pc.db, r.payment.queueId);
     return c.json({
       payment: service.paymentView(r.payment, names),

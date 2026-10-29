@@ -8,6 +8,7 @@ import {
   expireStaleOrders,
   processDueRefunds,
   reconcile,
+  recoverRecentOrders,
 } from "../modules/payments/service";
 import { autoCloseQueues } from "../modules/queue/auto-close";
 
@@ -50,8 +51,14 @@ export const JOBS: Record<string, { name: string; run: Job }[]> = {
       name: "expire_orders",
       run: (env, now) => expireStaleOrders(db(env.DB), now),
     },
+    // G3: paid orders whose webhook was lost and whose app never verified
+    // (last 2 h), and captured payments still without a ticket.
+    {
+      name: "recover_orders",
+      run: (env, now) => recoverRecentOrders({ db: db(env.DB), env, now }),
+    },
     // Step 4: refunds decided by a QueueDO (auto-close, validity, a failed
-    // inline refund) are made here.
+    // inline refund, a refund.failed webhook) are made here, with backoff.
     {
       name: "refunds",
       run: (env, now) => processDueRefunds({ db: db(env.DB), env, now }, 40),
