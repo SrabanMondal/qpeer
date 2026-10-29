@@ -22,14 +22,10 @@ import { CRON_DAILY, CRON_QUARTER_HOUR, runScheduled } from "../src/cron/jobs";
 import { hmacSha256Hex } from "../src/lib/hmac";
 import { ticketPayload } from "../src/lib/ticket-sign";
 import { pushOverride } from "../src/modules/notifications/expo-push";
-import {
-  type RazorpayPayment,
-  type RazorpayRefund,
-  type RazorpayTransport,
-  razorpayOverride,
-} from "../src/modules/payments/razorpay";
+import { razorpayOverride } from "../src/modules/payments/razorpay";
 import { expectError, expectOk, makeTestApi } from "./helpers";
 import { fakePush, JAMMU, MIN, stubFor } from "./queue-helpers";
+import { fakeRazorpay } from "./razorpay-fake";
 
 /**
  * Step 4 payments through the API (PAY-01…15, PRI-02/05/11): Razorpay is a
@@ -62,57 +58,6 @@ const CLOSED_DAYS: WeeklyHours = {
   sat: [],
   sun: [],
 };
-
-function fakeRazorpay() {
-  const orders: { id: string; amount: number; receipt: string }[] = [];
-  const refunds: RazorpayRefund[] = [];
-  const captured: RazorpayPayment[] = [];
-  let failRefunds = 0;
-  const transport: RazorpayTransport = {
-    async createOrder(i) {
-      const o = {
-        id: `order_${crypto.randomUUID().slice(0, 14)}`,
-        amount: i.amount,
-        receipt: i.receipt,
-      };
-      orders.push(o);
-      return { ...o, currency: "INR", status: "created" };
-    },
-    async createRefund(paymentId, i) {
-      if (failRefunds > 0) {
-        failRefunds--;
-        throw new Error("simulated razorpay outage");
-      }
-      const r: RazorpayRefund = {
-        id: `rfnd_${crypto.randomUUID().slice(0, 14)}`,
-        payment_id: paymentId,
-        amount: i.amount,
-        status: "pending",
-        receipt: i.receipt,
-      };
-      refunds.push(r);
-      return r;
-    },
-    async listRefunds(paymentId) {
-      return refunds.filter((r) => r.payment_id === paymentId);
-    },
-    async listPayments() {
-      return captured;
-    },
-    async orderPayments(orderId) {
-      return captured.filter((p) => p.order_id === orderId);
-    },
-  };
-  return {
-    transport,
-    orders,
-    refunds,
-    captured,
-    failNextRefunds(n: number) {
-      failRefunds = n;
-    },
-  };
-}
 
 type Api = Awaited<ReturnType<typeof makeTestApi>>;
 let api: Api;
@@ -183,8 +128,9 @@ async function buy(
   return { o, ...(await pay(o, tok)) };
 }
 
-async function pay(o: OrderResponse, tok: string) {
-  const paymentId = `pay_${crypto.randomUUID().slice(0, 14)}`;
+/** Checkout success (Razorpay captured it) + client verify; `paymentId` to verify again. */
+async function pay(o: OrderResponse, tok: string, again?: string) {
+  const paymentId = again ?? rzp.attempt(o.orderId, o.amountPaise).id;
   const res = await api.call("POST", "/v1/payments/verify", tok, {
     orderId: o.orderId,
     paymentId,
@@ -308,7 +254,12 @@ describe("Remote reservation (PAY-01…07, HLD §6.3)", () => {
       404,
       "not_found",
     );
-    const paymentId = "pay_parallel1";
+    const paymentId = rzp.attempt(
+      o.orderId,
+      o.amountPaise,
+      "captured",
+      "pay_parallel1",
+    ).id;
     const [v, w] = await Promise.all([
       api.call("POST", "/v1/payments/verify", bob, {
         orderId: o.orderId,
@@ -319,7 +270,7 @@ describe("Remote reservation (PAY-01…07, HLD §6.3)", () => {
     ]);
     expect(w.status).toBe(200);
     const r = await expectOk(v, 200, ConfirmPaymentResponse);
-    const again = await pay(o, bob);
+    const again = await pay(o, bob, paymentId);
     expect(again.r.token?.id).toBe(r.token?.id);
     const rows = await env.DB.prepare(
       "SELECT COUNT(*) AS n FROM tokens WHERE payment_id = ?",
@@ -382,7 +333,7 @@ describe("Remote reservation (PAY-01…07, HLD §6.3)", () => {
       OrderResponse,
     );
     await pay(o1, alice);
-    const { r } = await pay(o2, bob);
+    const { r, paymentId } = await pay(o2, bob);
     expect(r.token).toBeNull();
     expect(r.failure?.code).toBe("quota_full");
     expect(r.payment.status).toBe("refunded");
@@ -400,7 +351,7 @@ describe("Remote reservation (PAY-01…07, HLD §6.3)", () => {
       { kind: "platform_share", amount: -600 },
     ]);
     // Verify again: same answer, no second refund.
-    const again = await pay(o2, bob);
+    const again = await pay(o2, bob, paymentId);
     expect(again.r.failure?.code).toBe("quota_full");
     expect(rzp.refunds.filter((x) => x.receipt === o2.paymentId)).toHaveLength(
       1,

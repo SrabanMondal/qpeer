@@ -1,7 +1,7 @@
 import { sql } from "drizzle-orm";
 import { AppError } from "../../lib/errors";
 import { sha256Hex, verifyHmac } from "../../lib/hmac";
-import { razorpayWebhookSecret } from "./razorpay";
+import { type RazorpayPayment, razorpayWebhookSecret } from "./razorpay";
 import { confirmPayment, markFailed, markRefund, type PayCtx } from "./service";
 
 /**
@@ -12,25 +12,57 @@ import { confirmPayment, markFailed, markRefund, type PayCtx } from "./service";
  * 2. Dedupe by `X-Razorpay-Event-Id` (else the body's SHA-256) in
  *    `webhook_events`: an event already processed answers 200 at once; one
  *    that failed half-way is processed again on redelivery.
- * 3. `payment.captured` → `confirmPayment` (same idempotent path as the
- *    client verify); `payment.failed` → `failed`; `refund.processed` /
- *    `refund.failed` → the refund status. Other events are acknowledged.
+ * 3. `payment.captured` / `order.paid` / `payment.authorized` →
+ *    `confirmPayment` (same idempotent path as the client verify; an
+ *    authorized payment is captured there, G1); `payment.failed` → `failed`;
+ *    `refund.processed` → done; `refund.failed` → `refund_due` again for the
+ *    cron. Other events are acknowledged. A provider error answers 502, so
+ *    Razorpay delivers the event again.
  *
  * Never logs the body or the signature.
  */
 
+interface PaymentEntity {
+  id?: string;
+  order_id?: string;
+  amount?: number;
+  currency?: string;
+  status?: string;
+  created_at?: number;
+  error_code?: string | null;
+}
+
 interface WebhookEvent {
   event?: string;
   payload?: {
-    payment?: {
-      entity?: {
-        id?: string;
-        order_id?: string;
-        amount?: number;
-        error_code?: string | null;
-      };
-    };
+    payment?: { entity?: PaymentEntity };
     refund?: { entity?: { id?: string; payment_id?: string } };
+  };
+}
+
+/**
+ * The signed event's payment entity as Razorpay's word on the payment, or
+ * undefined (then `confirmPayment` fetches it) when the amount is missing.
+ */
+function reportedPayment(
+  type: string,
+  e: PaymentEntity,
+  id: string,
+  orderId: string,
+): RazorpayPayment | undefined {
+  if (typeof e.amount !== "number") return undefined;
+  return {
+    id,
+    order_id: orderId,
+    amount: e.amount,
+    currency: typeof e.currency === "string" ? e.currency : "INR",
+    status:
+      typeof e.status === "string"
+        ? e.status
+        : type === "payment.authorized"
+          ? "authorized"
+          : "captured",
+    created_at: e.created_at,
   };
 }
 
@@ -78,14 +110,17 @@ export async function handleRazorpayWebhook(
   const payment = event.payload?.payment?.entity;
   switch (type) {
     case "payment.captured":
+    case "payment.authorized":
     case "order.paid":
+      // Unknown order: logged and acknowledged (no retry storm); the 15-min
+      // recovery confirms it if the order shows up in D1 later.
       if (payment?.id && payment.order_id) {
         await confirmPayment(
           ctx,
           payment.order_id,
           payment.id,
           null,
-          typeof payment.amount === "number" ? payment.amount : undefined,
+          reportedPayment(type, payment, payment.id, payment.order_id),
         );
       }
       break;
@@ -99,10 +134,9 @@ export async function handleRazorpayWebhook(
       const refund = event.payload?.refund?.entity;
       if (refund?.id) {
         await markRefund(
-          db,
+          ctx,
           refund.id,
           type === "refund.processed" ? "processed" : "failed",
-          now,
         );
       }
       break;

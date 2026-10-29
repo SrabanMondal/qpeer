@@ -159,8 +159,10 @@ function paymentStmts(d1: D1Database, p: PaymentPayload) {
     return [
       d1
         .prepare(
+          // CAST: D1 binds the percentage as a REAL, so the division would
+          // keep paise fractions (floor, like `refundAmount`).
           `UPDATE payments SET status = 'refund_due',
-             refund_paise = (amount_paise * ?) / 100, reason = ?, updated_at = ?
+             refund_paise = CAST((amount_paise * ?) / 100 AS INTEGER), reason = ?, updated_at = ?
            WHERE razorpay_order_id = ? AND status IN ('allocated', 'captured')`,
         )
         .bind(

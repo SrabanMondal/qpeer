@@ -104,6 +104,13 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-054 | 2026-10-29 | `wrangler dev` kept port 8787 after its background task stopped | S4 | tooling | fixed | none | [file](incidents/INC-054-wrangler-dev-kept-running.md) |
 | INC-055 | 2026-10-29 | `db.run(sql…)` inside a Drizzle D1 batch failed every payment | S4 | api | fixed | none | [file](incidents/INC-055-drizzle-run-in-d1-batch.md) |
 | INC-056 | 2026-10-29 | The loadtest deploy hit the free-plan cron trigger limit | S4 | tooling | fixed | none | [file](incidents/INC-056-cron-trigger-limit.md) |
+| INC-057 | 2026-10-29 | A ticket could be made for a payment that was never captured | S1 | api | fixed | G1 (payments review) | [file](incidents/INC-057-ticket-for-uncaptured-payment.md) |
+| INC-058 | 2026-10-29 | A second captured payment on one order was kept | S1 | api | fixed | G2 (payments review) | [file](incidents/INC-058-second-payment-on-order-kept.md) |
+| INC-059 | 2026-10-29 | A lost webhook plus no verify waited a day for recovery | S2 | api | fixed | G3 (payments review) | [file](incidents/INC-059-lost-webhook-waits-a-day.md) |
+| INC-060 | 2026-10-29 | A captured payment of the wrong amount was neither used nor refunded | S1 | api | fixed | G4 (payments review) | [file](incidents/INC-060-amount-mismatch-money-kept.md) |
+| INC-061 | 2026-10-29 | Order creation could send a paid purchase to Checkout again | S2 | api | fixed | G5 (payments review) | [file](incidents/INC-061-pay-again-when-already-paid.md) |
+| INC-062 | 2026-10-29 | A partial refund could ask for a fraction of a paisa | S1 | queue engine, api | fixed | none | [file](incidents/INC-062-fractional-partial-refund.md) |
+| INC-063 | 2026-10-29 | A failed refund was never retried, and refunds could race | S1 | api | fixed | none | [file](incidents/INC-063-failed-refund-never-retried.md) |
 
 ## Load-test runs
 

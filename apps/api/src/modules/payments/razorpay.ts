@@ -57,8 +57,18 @@ export interface RazorpayTransport {
     count: number;
     skip: number;
   }): Promise<RazorpayPayment[]>;
-  /** Payments made against one order. */
-  orderPayments(orderId: string): Promise<RazorpayPayment[]>;
+  /** Payments made against one order (every attempt, any status). */
+  fetchOrderPayments(orderId: string): Promise<RazorpayPayment[]>;
+  /** One payment: its status, amount and order. */
+  fetchPayment(paymentId: string): Promise<RazorpayPayment>;
+  /**
+   * Captures an `authorized` payment (needed when the account's auto-capture
+   * is off). Razorpay answers 400 when it is already captured.
+   */
+  capturePayment(
+    paymentId: string,
+    input: { amount: number; currency: "INR" },
+  ): Promise<RazorpayPayment>;
 }
 
 export class RazorpayError extends Error {
@@ -134,13 +144,24 @@ export function httpTransport(
           `/payments?from=${fromSec}&to=${toSec}&count=${count}&skip=${skip}`,
         )
       ).items,
-    orderPayments: async (orderId) =>
+    fetchOrderPayments: async (orderId) =>
       (
         await call<{ items: RazorpayPayment[] }>(
           "GET",
           `/orders/${encodeURIComponent(orderId)}/payments`,
         )
       ).items,
+    fetchPayment: (paymentId) =>
+      call<RazorpayPayment>(
+        "GET",
+        `/payments/${encodeURIComponent(paymentId)}`,
+      ),
+    capturePayment: (paymentId, input) =>
+      call<RazorpayPayment>(
+        "POST",
+        `/payments/${encodeURIComponent(paymentId)}/capture`,
+        input,
+      ),
   };
 }
 

@@ -3,6 +3,7 @@ import {
   type CreateOrderBody,
   DEMO_BUSINESS_SHARE_PCT,
   type ErrorCode,
+  isActiveState,
   istDayStart,
   MIN_ORDER_PAISE,
   ORDER_TTL_MS,
@@ -41,6 +42,8 @@ import {
   PaymentsConfigError,
   type RazorpayEnv,
   RazorpayError,
+  type RazorpayPayment,
+  type RazorpayRefund,
   razorpayKeyId,
   razorpayTransport,
 } from "./razorpay";
@@ -53,6 +56,12 @@ import {
  * - The ledger is append-only; each entry has a deterministic id, so a
  *   retry can never write it twice.
  * - Status transitions are guarded in SQL (`WHERE status = …`).
+ * - Money counts as received only when Razorpay reports the payment
+ *   `captured` (an `authorized` one is captured first); a client signature
+ *   alone never makes a ticket.
+ * - One order has one paying Razorpay payment. Any other captured payment on
+ *   it (a retry that also went through) or one of the wrong amount is a
+ *   stray: recorded as its own row and refunded in full.
  */
 
 export type PayEnv = Pick<Bindings, "QUEUE" | "DB"> &
@@ -118,6 +127,33 @@ async function paymentByOrder(db: Db, orderId: string) {
 
 async function paymentById(db: Db, id: string) {
   return db.select().from(payments).where(eq(payments.id, id)).get();
+}
+
+/** Reasons of a stray row (see the schema): money that bought nothing. */
+type StrayReason = "duplicate_payment" | "amount_mismatch";
+
+/** Our row id for a stray Razorpay payment (deterministic: a retry finds it). */
+export const strayId = (razorpayPaymentId: string) =>
+  `stray_${razorpayPaymentId}`;
+
+const notStray = sql`(${payments.reason} IS NULL OR ${payments.reason} NOT IN ('duplicate_payment', 'amount_mismatch'))`;
+
+/** Razorpay statuses that mean the customer's money is taken or held. */
+const PAID_AT_RAZORPAY = new Set(["captured", "authorized"]);
+
+/** Paid attempts first by time, so the earliest becomes the order's payment. */
+function paidAttempts(list: RazorpayPayment[]): RazorpayPayment[] {
+  return list
+    .filter((rp) => PAID_AT_RAZORPAY.has(rp.status))
+    .sort((a, b) => (a.created_at ?? 0) - (b.created_at ?? 0));
+}
+
+function providerFields(e: unknown) {
+  return {
+    status: e instanceof RazorpayError ? e.status : null,
+    code: e instanceof RazorpayError ? e.code : null,
+    config: e instanceof PaymentsConfigError,
+  };
 }
 
 async function namesFor(db: Db, queueId: string) {
@@ -186,6 +222,7 @@ async function passLimit(
         inArray(payments.kind, ["priority", "upgrade"]),
         sql`${payments.createdAt} >= ${istDayStart(now)}`,
         sql`${payments.status} NOT IN ('failed', 'expired')`,
+        notStray,
         or(
           eq(payments.userId, q.userId),
           eq(payments.deviceHash, q.deviceHash),
@@ -329,6 +366,106 @@ async function newOrder(
   return row;
 }
 
+/** 409 `already_in_queue` (with its `tokenId`) when the payment's ticket is active. */
+async function throwIfTicketActive(ctx: PayCtx, p: Payment): Promise<void> {
+  if (p.status !== "allocated" || !p.tokenId) return;
+  const r = await queueStub(ctx.env, p.queueId).getToken(p.tokenId);
+  if (r.ok && isActiveState(r.value.token.state)) {
+    throw new AppError(
+      409,
+      "already_in_queue",
+      "You already paid for this. Open your ticket.",
+      { tokenId: p.tokenId, paymentId: p.id },
+    );
+  }
+}
+
+/**
+ * G5: never a second Checkout for something already paid. The user's
+ * `captured` payments here whose ticket is not made yet are confirmed now; a
+ * paid upgrade of this ticket counts too. If one of them holds an active
+ * ticket → 409 `already_in_queue` with its `tokenId` (the app opens it).
+ * Paid reservations are capped per user (`paidPerUserCap`, default 2), so an
+ * allocated reservation alone does not block a second one.
+ */
+async function openTicketInstead(
+  ctx: PayCtx,
+  user: User,
+  q: { queueId: string; kind: PaymentKind; tokenId?: string },
+): Promise<void> {
+  const rows = await ctx.db
+    .select()
+    .from(payments)
+    .where(
+      and(
+        eq(payments.userId, user.id),
+        eq(payments.queueId, q.queueId),
+        eq(payments.kind, q.kind),
+        q.kind === "upgrade"
+          ? and(
+              eq(payments.tokenId, q.tokenId ?? ""),
+              inArray(payments.status, ["captured", "allocated"]),
+            )
+          : eq(payments.status, "captured"),
+      ),
+    )
+    .limit(5)
+    .all();
+  for (const row of rows) {
+    let p = row;
+    if (p.status === "captured" && p.razorpayPaymentId) {
+      const r = await confirmPayment(
+        ctx,
+        p.razorpayOrderId,
+        p.razorpayPaymentId,
+        user,
+      );
+      p = r?.payment ?? p;
+    }
+    await throwIfTicketActive(ctx, p);
+  }
+}
+
+/**
+ * G5: an unpaid order is offered again only if Razorpay has no paid attempt
+ * on it. The app may have lost Checkout's answer and the webhook may be late:
+ * a paid attempt is confirmed now (G1/G2 apply) and the answer is the ticket
+ * (409 `already_in_queue`), or the reason it could not be made (refunded).
+ */
+async function reuseUnlessPaid(
+  ctx: PayCtx,
+  user: User,
+  p: Payment,
+): Promise<Payment> {
+  const transport = await provider("transport", async () =>
+    razorpayTransport(ctx.env),
+  );
+  const attempts = paidAttempts(
+    await provider("order_payments", () =>
+      transport.fetchOrderPayments(p.razorpayOrderId),
+    ),
+  );
+  if (attempts.length === 0) return p;
+  for (const rp of attempts) {
+    await confirmPayment(ctx, p.razorpayOrderId, rp.id, user, rp);
+  }
+  const after = (await paymentById(ctx.db, p.id)) ?? p;
+  // No attempt was really captured (e.g. a held amount that did not match).
+  if (!after.razorpayPaymentId) return after;
+  await throwIfTicketActive(ctx, after);
+  if (after.reason && ALLOCATION_FAILURES.has(after.reason)) {
+    throw new AppError(
+      409,
+      after.reason as ErrorCode,
+      "Your earlier payment for this did not get a ticket and is refunded.",
+      { paymentId: after.id },
+    );
+  }
+  throw new AppError(409, "invalid_state", "This order is already paid.", {
+    paymentId: after.id,
+  });
+}
+
 /**
  * POST /v1/queues/:id/orders (registered). Reservation: queue open, not
  * full, paid cap, walk-in quota (DO `checkPurchase`). Pass: lane on, not
@@ -346,6 +483,7 @@ export async function createOrder(
     throw notFound();
   }
   const keyId = await provider("config", async () => razorpayKeyId(env));
+  await openTicketInstead(ctx, user, { queueId, kind: body.kind });
   const info = unwrap(
     await queueStub(env, queueId).checkPurchase({
       kind: body.kind,
@@ -368,6 +506,7 @@ export async function createOrder(
   } else {
     existing = await reusableOrder(db, user.id, queueId, "reservation", now);
   }
+  if (existing) existing = await reuseUnlessPaid(ctx, user, existing);
   const p =
     existing ??
     (await newOrder(ctx, {
@@ -395,6 +534,11 @@ export async function createUpgradeOrder(
   const names = await namesFor(db, t.queueId);
   if (!names) throw notFound();
   const keyId = await provider("config", async () => razorpayKeyId(env));
+  await openTicketInstead(ctx, user, {
+    queueId: t.queueId,
+    kind: "upgrade",
+    tokenId,
+  });
   const info = unwrap(
     await queueStub(env, t.queueId).checkPurchase({
       kind: "upgrade",
@@ -402,7 +546,7 @@ export async function createUpgradeOrder(
       tokenId,
     }),
   );
-  const existing = await passLimit(
+  let existing = await passLimit(
     db,
     {
       queueId: t.queueId,
@@ -413,6 +557,7 @@ export async function createUpgradeOrder(
     },
     now,
   );
+  if (existing) existing = await reuseUnlessPaid(ctx, user, existing);
   const p =
     existing ??
     (await newOrder(ctx, {
@@ -433,9 +578,13 @@ export interface ConfirmResult {
   payment: Payment;
   token: TokenView | null;
   failure: DoFailure | null;
+  /**
+   * Set when Razorpay does not report this payment as captured (its status
+   * there, or `other_order`): nothing was recorded or allocated.
+   */
+  notCaptured: string | null;
 }
 
-const DONE = new Set(["allocated", "refund_due", "refunded", "forfeited"]);
 const ALLOCATION_FAILURES = new Set<string>([
   "quota_full",
   "queue_closed",
@@ -451,7 +600,7 @@ const ALLOCATION_FAILURES = new Set<string>([
 /** One append-only ledger row; the deterministic id makes a retry a no-op. */
 function ledgerStmt(
   d1: D1Database,
-  p: Payment,
+  p: Pick<Payment, "id" | "businessId">,
   row: [id: string, kind: string, amount: number],
   at: number,
 ): D1PreparedStatement {
@@ -464,7 +613,11 @@ function ledgerStmt(
 }
 
 /** Capture ledger rows (deterministic ids): capture + the business/Qpeer split. */
-function captureLedger(d1: D1Database, p: Payment, at: number) {
+function captureLedger(
+  d1: D1Database,
+  p: Pick<Payment, "id" | "businessId" | "amountPaise" | "businessSharePct">,
+  at: number,
+) {
   const s = splitPaise(p.amountPaise, p.businessSharePct);
   const rows: [string, string, number][] = [
     [`capture:${p.id}`, "capture", p.amountPaise],
@@ -476,19 +629,29 @@ function captureLedger(d1: D1Database, p: Payment, at: number) {
 
 /**
  * The one place that makes paid tickets (architecture doc §10.2 step 5).
- * Idempotent: client verify, webhook and reconciliation may all call it, in
- * any order and at the same time. Captured → DO allocate / book / upgrade
- * (each idempotent by the order id) → `allocated`. If the ticket can't be
- * made (quota filled, queue closed, sold out, ticket no longer WAITING…) the
- * payment is refunded in full (PAY-06). Null for an unknown order.
+ * Idempotent: client verify, webhook, the 15-min recovery and the daily
+ * reconciliation may all call it, in any order and at the same time.
+ *
+ * 1. Razorpay's own word on the payment: `reported` (signed webhook, Razorpay
+ *    API lists) or a fetch (client verify). Only `captured` is money; an
+ *    `authorized` payment of the order's amount is captured first (G1).
+ * 2. A captured payment of the wrong amount (G4), or a second captured
+ *    payment on an order already paid by another one (G2), is a stray:
+ *    recorded as its own row and refunded in full.
+ * 3. Otherwise it becomes the order's payment → DO allocate / book / upgrade
+ *    (each idempotent by the order id) → `allocated`. If the ticket can't be
+ *    made (quota filled, queue closed, sold out, ticket no longer WAITING…)
+ *    the payment is refunded in full (PAY-06).
+ *
+ * Null for an unknown order (logged; a later recovery run finds it).
  */
 export async function confirmPayment(
   ctx: PayCtx,
   orderId: string,
   razorpayPaymentId: string,
   holder: User | null = null,
-  /** Amount Razorpay reports (webhook); a mismatch is flagged, never allocated. */
-  reportedAmount?: number,
+  /** Razorpay's payment entity when the caller already has it from Razorpay. */
+  reported?: RazorpayPayment,
 ): Promise<ConfirmResult | null> {
   const { db, env, now } = ctx;
   let p = await paymentByOrder(db, orderId);
@@ -496,24 +659,214 @@ export async function confirmPayment(
     logPayment("warn", "confirm_unknown_order", { orderId });
     return null;
   }
-  if (reportedAmount !== undefined && reportedAmount !== p.amountPaise) {
-    logPayment("error", "amount_mismatch", { paymentId: p.id });
+  // Recorded as captured before: Razorpay already confirmed it.
+  if (p.razorpayPaymentId === razorpayPaymentId) {
+    return allocateCaptured(ctx, p, holder);
+  }
+  const stray = await paymentById(db, strayId(razorpayPaymentId));
+  if (stray) {
+    await processRefund(ctx, stray.id);
+    return strayResult(ctx, p, stray.id, holder);
+  }
+
+  const rp =
+    reported ??
+    (await provider("fetch_payment", async () =>
+      razorpayTransport(env).fetchPayment(razorpayPaymentId),
+    ));
+  if (rp.id !== razorpayPaymentId || rp.order_id !== orderId) {
+    logPayment("error", "payment_order_mismatch", {
+      paymentId: p.id,
+      razorpayPaymentId,
+    });
+    return {
+      payment: p,
+      token: null,
+      failure: null,
+      notCaptured: "other_order",
+    };
+  }
+  const cap = await ensureCaptured(ctx, p, rp);
+  if (!cap) {
+    logPayment("warn", "not_captured", {
+      paymentId: p.id,
+      razorpayPaymentId,
+      razorpayStatus: rp.status,
+    });
+    return { payment: p, token: null, failure: null, notCaptured: rp.status };
+  }
+  if (cap.amount !== p.amountPaise || (cap.currency ?? "INR") !== "INR") {
+    await recordStray(ctx, p, cap, "amount_mismatch");
+    return strayResult(ctx, p, strayId(cap.id), holder);
+  }
+
+  if (p.razorpayPaymentId === null) {
+    // The order's first captured payment becomes its payment. One D1 batch
+    // (one transaction): the status change and the capture split. The ledger
+    // ids are per order, so a racing second payment writes nothing new.
+    const claim = env.DB.prepare(
+      `UPDATE payments SET status = 'captured', razorpay_payment_id = ?, updated_at = ?
+       WHERE id = ? AND razorpay_payment_id IS NULL
+         AND status IN ('created', 'failed', 'expired')`,
+    ).bind(cap.id, now, p.id);
+    await env.DB.batch([claim, ...captureLedger(env.DB, p, now)]);
+    p = (await paymentById(db, p.id)) ?? p;
+    if (p.razorpayPaymentId === cap.id) {
+      logPayment("info", "captured", { paymentId: p.id, kind: p.kind });
+    }
+  }
+  if (p.razorpayPaymentId !== cap.id) {
+    // G2: the order is already paid by another captured payment.
+    await recordStray(ctx, p, cap, "duplicate_payment");
+    return strayResult(ctx, p, strayId(cap.id), holder);
+  }
+  return allocateCaptured(ctx, p, holder);
+}
+
+/**
+ * G1: money counts only when Razorpay says `captured`. An `authorized`
+ * payment of the order's amount is captured here (auto-capture off). Null:
+ * not money (failed, created, or held for a wrong amount — never captured,
+ * Razorpay releases such a hold by itself). A provider error throws 502.
+ */
+async function ensureCaptured(
+  ctx: PayCtx,
+  p: Payment,
+  rp: RazorpayPayment,
+): Promise<RazorpayPayment | null> {
+  if (rp.status === "captured") return rp;
+  if (rp.status !== "authorized") return null;
+  if (rp.amount !== p.amountPaise) {
+    logPayment("error", "authorized_amount_mismatch", {
+      paymentId: p.id,
+      razorpayPaymentId: rp.id,
+      amountPaise: rp.amount,
+    });
     return null;
   }
-  if (DONE.has(p.status)) return finished(ctx, p, holder);
-
-  if (p.status !== "captured") {
-    // One D1 batch (one transaction): the status change and the capture split.
-    const capture = env.DB.prepare(
-      `UPDATE payments SET status = 'captured',
-         razorpay_payment_id = COALESCE(razorpay_payment_id, ?), updated_at = ?
-       WHERE id = ? AND status IN ('created', 'failed', 'expired')`,
-    ).bind(razorpayPaymentId, now, p.id);
-    await env.DB.batch([capture, ...captureLedger(env.DB, p, now)]);
-    logPayment("info", "captured", { paymentId: p.id, kind: p.kind });
+  const transport = await provider("transport", async () =>
+    razorpayTransport(ctx.env),
+  );
+  try {
+    const c = await transport.capturePayment(rp.id, {
+      amount: rp.amount,
+      currency: "INR",
+    });
+    logPayment("info", "capture_requested", {
+      paymentId: p.id,
+      razorpayPaymentId: rp.id,
+    });
+    return c.status === "captured" ? c : null;
+  } catch (e) {
+    // Already captured by a racing call (Razorpay answers 400 then)?
+    const again = await provider("fetch_payment", () =>
+      transport.fetchPayment(rp.id),
+    );
+    if (again.status === "captured") return again;
+    logPayment("error", "capture_failed", {
+      paymentId: p.id,
+      razorpayPaymentId: rp.id,
+      ...providerFields(e),
+    });
+    throw new AppError(
+      502,
+      "payment_provider_error",
+      "The payment provider did not answer; try again",
+    );
   }
-  p = (await paymentById(db, p.id)) ?? p;
-  if (DONE.has(p.status)) return finished(ctx, p, holder);
+}
+
+/**
+ * G2/G4: a captured payment that buys nothing gets its own row (`stray_<id>`,
+ * the order's kind, its real amount, status `refund_due`) with its capture
+ * split, then a full refund. Ledger: capture + shares, then the refund
+ * reverses them, so it nets to zero and shows in both payment histories.
+ * Idempotent (deterministic row id, ledger ids and refund receipt).
+ */
+async function recordStray(
+  ctx: PayCtx,
+  order: Payment,
+  rp: RazorpayPayment,
+  reason: StrayReason,
+): Promise<void> {
+  const { env, now } = ctx;
+  const id = strayId(rp.id);
+  const row = {
+    id,
+    businessId: order.businessId,
+    amountPaise: rp.amount,
+    businessSharePct: order.businessSharePct,
+  };
+  await env.DB.batch([
+    env.DB.prepare(
+      `INSERT INTO payments (id, user_id, queue_id, business_id, token_id, kind,
+         amount_paise, business_share_pct, device_hash, razorpay_order_id,
+         razorpay_payment_id, status, refund_paise, reason, expires_at,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, NULL, ?, ?, ?, NULL, ?, ?, 'refund_due', ?, ?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    ).bind(
+      id,
+      order.userId,
+      order.queueId,
+      order.businessId,
+      order.kind,
+      rp.amount,
+      order.businessSharePct,
+      `${order.razorpayOrderId}:${rp.id}`,
+      rp.id,
+      rp.amount,
+      reason,
+      now,
+      now,
+      now,
+    ),
+    ...captureLedger(env.DB, row, now),
+  ]);
+  logPayment("error", reason, {
+    paymentId: order.id,
+    strayId: id,
+    razorpayPaymentId: rp.id,
+    amountPaise: rp.amount,
+  });
+  await processRefund(ctx, id);
+}
+
+/**
+ * Answer for a stray payment: a duplicate answers with the order's own
+ * payment and ticket; a wrong amount with the stray row and a failure.
+ */
+async function strayResult(
+  ctx: PayCtx,
+  order: Payment,
+  strayRowId: string,
+  holder: User | null,
+): Promise<ConfirmResult> {
+  const s = await paymentById(ctx.db, strayRowId);
+  if (s?.reason === "duplicate_payment") {
+    const primary = (await paymentById(ctx.db, order.id)) ?? order;
+    return allocateCaptured(ctx, primary, holder);
+  }
+  return {
+    payment: s ?? order,
+    token: null,
+    failure: {
+      code: "invalid_state",
+      message: "The amount paid did not match the order; it is refunded",
+    },
+    notCaptured: null,
+  };
+}
+
+/** Captured order payment → its ticket (DO, idempotent by the order id). */
+async function allocateCaptured(
+  ctx: PayCtx,
+  payment: Payment,
+  holder: User | null,
+): Promise<ConfirmResult> {
+  const { db, env, now } = ctx;
+  let p = payment;
+  if (p.status !== "captured") return finished(ctx, p, holder);
 
   const stub = queueStub(env, p.queueId);
   let r: DoResult<TokenView>;
@@ -551,6 +904,7 @@ export async function confirmPayment(
       payment: p,
       token: await withTicket(env, r.value, holder),
       failure: null,
+      notCaptured: null,
     };
   }
 
@@ -564,7 +918,7 @@ export async function confirmPayment(
   });
   await processRefund(ctx, p.id);
   p = (await paymentById(db, p.id)) ?? p;
-  return { payment: p, token: null, failure };
+  return { payment: p, token: null, failure, notCaptured: null };
 }
 
 /** Answer for a payment that was already handled. */
@@ -585,52 +939,114 @@ async function finished(
     const r = await queueStub(env, p.queueId).getToken(p.tokenId);
     if (r.ok) token = await withTicket(env, r.value.token, holder);
   }
-  return { payment: p, token, failure };
+  return { payment: p, token, failure, notCaptured: null };
 }
 
 // ---------- refunds (PAY-06/07/09, PRI-09/10) ----------
 
+/** A refund attempt holds the payment this long (racing callers skip it). */
+const REFUND_LEASE_MS = 2 * 60_000;
+/** After this many failed refund attempts each new failure logs `refund_stuck` (alert). */
+export const REFUND_ALERT_AFTER = 3;
+
+/**
+ * Wait before the next refund attempt after `failures` failed ones: the next
+ * 15-min run, then 15 min, 30 min, 1 h … at most 6 h.
+ */
+export function refundBackoffMs(failures: number): number {
+  if (failures <= 1) return 0;
+  return Math.min(15 * 60_000 * 2 ** (failures - 2), 6 * 3_600_000);
+}
+
+class RefundBlocked extends Error {}
+
+/** A failed refund attempt: count it, back off, and log (an alert after N). */
+async function refundAttemptFailed(
+  { db, now }: PayCtx,
+  p: Payment,
+  failures: number,
+  e: unknown,
+): Promise<void> {
+  await db.run(sql`UPDATE payments SET refund_attempts = ${failures},
+      refund_retry_at = ${now + refundBackoffMs(failures)}, updated_at = ${now}
+      WHERE id = ${p.id} AND status = 'refund_due'`);
+  logPayment(
+    "error",
+    failures >= REFUND_ALERT_AFTER ? "refund_stuck" : "refund_failed",
+    {
+      paymentId: p.id,
+      failures,
+      blocked: e instanceof RefundBlocked ? e.message : null,
+      ...providerFields(e),
+    },
+  );
+}
+
 /**
  * Makes the Razorpay refund for a `refund_due` payment, then (one D1 batch)
  * marks it `refunded` and writes the ledger refund + reversed shares.
- * Idempotent: a refund with our receipt (= payment id) is looked up before a
- * new one is created. Provider errors leave it `refund_due` for the cron.
- * Returns true when the payment is now refunded.
+ * - One attempt at a time: a short lease on `refund_retry_at`; the same
+ *   column holds the backoff after a failure (`refundBackoffMs`).
+ * - Idempotent: a live (not failed) refund with our receipt (= payment id) is
+ *   reused, never a second one.
+ * - Never more than captured: the amount is capped at the captured amount
+ *   minus Razorpay's other live refunds of this payment.
+ * Provider errors leave it `refund_due` for the 15-min cron. Returns true
+ * when the payment is now refunded.
  */
 export async function processRefund(
-  { db, env, now }: PayCtx,
+  ctx: PayCtx,
   paymentId: string,
 ): Promise<boolean> {
+  const { db, env, now } = ctx;
   const p = await paymentById(db, paymentId);
   if (!p) return false;
   if (p.status !== "refund_due") return p.status === "refunded";
-  const amount = p.refundPaise ?? p.amountPaise;
-  if (!p.razorpayPaymentId || amount <= 0) {
-    logPayment("error", "refund_impossible", { paymentId: p.id, amount });
+  if (!p.razorpayPaymentId) {
+    logPayment("error", "refund_impossible", { paymentId: p.id });
     return false;
   }
-  let refund: { id: string; status: string };
+  const lease =
+    await db.run(sql`UPDATE payments SET refund_retry_at = ${now + REFUND_LEASE_MS}
+      WHERE id = ${p.id} AND status = 'refund_due'
+        AND (refund_retry_at IS NULL OR refund_retry_at <= ${now})`);
+  if (!lease.meta.changes) return false;
+  let refund: RazorpayRefund;
   try {
     const transport = razorpayTransport(env);
-    const earlier = (await transport.listRefunds(p.razorpayPaymentId)).find(
-      (r) => r.receipt === p.id,
+    const live = (await transport.listRefunds(p.razorpayPaymentId)).filter(
+      (r) => r.status !== "failed",
     );
-    refund =
-      earlier ??
-      (await transport.createRefund(p.razorpayPaymentId, {
+    const earlier = live.find((r) => r.receipt === p.id);
+    if (earlier) {
+      refund = earlier;
+    } else {
+      const before = live.reduce((sum, r) => sum + r.amount, 0);
+      // Whole paise only (Razorpay rejects fractions).
+      const want = Math.floor(
+        Math.min(p.refundPaise ?? p.amountPaise, p.amountPaise),
+      );
+      const amount = Math.min(want, p.amountPaise - before);
+      if (amount <= 0) throw new RefundBlocked("nothing_left_to_refund");
+      if (amount < want) {
+        logPayment("error", "refund_capped", {
+          paymentId: p.id,
+          amountPaise: amount,
+          wantedPaise: want,
+        });
+      }
+      refund = await transport.createRefund(p.razorpayPaymentId, {
         amount,
         receipt: p.id,
         notes: { paymentId: p.id, reason: p.reason ?? "refund" },
-      }));
+      });
+      if (refund.status === "failed") throw new RefundBlocked("refund_failed");
+    }
   } catch (e) {
-    logPayment("error", "refund_failed", {
-      paymentId: p.id,
-      status: e instanceof RazorpayError ? e.status : null,
-      code: e instanceof RazorpayError ? e.code : null,
-      config: e instanceof PaymentsConfigError,
-    });
+    await refundAttemptFailed(ctx, p, p.refundAttempts + 1, e);
     return false;
   }
+  const amount = refund.amount;
   const back = refundSplit(p.amountPaise, amount, p.businessSharePct);
   const refundStatus = refund.status === "processed" ? "processed" : "pending";
   const rows: [string, string, number][] = [
@@ -641,7 +1057,7 @@ export async function processRefund(
   await env.DB.batch([
     env.DB.prepare(
       `UPDATE payments SET status = 'refunded', refund_id = ?, refund_paise = ?,
-         refund_status = ?, updated_at = ?
+         refund_status = ?, refund_retry_at = NULL, updated_at = ?
        WHERE id = ? AND status = 'refund_due'`,
     ).bind(refund.id, amount, refundStatus, now, p.id),
     ...rows.map((r) => ledgerStmt(env.DB, p, r, now)),
@@ -697,7 +1113,10 @@ export async function refundDueForToken(
   return done;
 }
 
-/** Cron: every `refund_due` payment (oldest first), at most `limit`. */
+/**
+ * Cron: `refund_due` payments whose backoff is over (oldest first), at most
+ * `limit`. A failed attempt moves a payment to the back (`updated_at`).
+ */
 export async function processDueRefunds(
   ctx: PayCtx,
   limit = 20,
@@ -705,7 +1124,12 @@ export async function processDueRefunds(
   const rows = await ctx.db
     .select({ id: payments.id })
     .from(payments)
-    .where(eq(payments.status, "refund_due"))
+    .where(
+      and(
+        eq(payments.status, "refund_due"),
+        sql`(${payments.refundRetryAt} IS NULL OR ${payments.refundRetryAt} <= ${ctx.now})`,
+      ),
+    )
     .orderBy(payments.updatedAt)
     .limit(limit)
     .all();
@@ -727,15 +1151,43 @@ export async function markFailed(
       updated_at = ${now} WHERE razorpay_order_id = ${orderId} AND status = 'created'`);
 }
 
-/** `refund.processed` / `refund.failed` (PAY-07). */
+/**
+ * `refund.processed` / `refund.failed` (PAY-07). A failed refund means the
+ * money did not go back: the payment returns to `refund_due` (with backoff)
+ * and the 15-min cron makes a new refund (the failed one is ignored then).
+ */
 export async function markRefund(
-  db: Db,
+  ctx: PayCtx,
   refundId: string,
   status: "processed" | "failed",
-  now: number,
 ): Promise<void> {
-  await db.run(sql`UPDATE payments SET refund_status = ${status}, updated_at = ${now}
-      WHERE refund_id = ${refundId}`);
+  const { db, now } = ctx;
+  if (status === "processed") {
+    await db.run(sql`UPDATE payments SET refund_status = 'processed', updated_at = ${now}
+        WHERE refund_id = ${refundId}`);
+    return;
+  }
+  const p = await db
+    .select()
+    .from(payments)
+    .where(eq(payments.refundId, refundId))
+    .get();
+  if (!p) return;
+  if (p.status !== "refunded") {
+    await db.run(sql`UPDATE payments SET refund_status = 'failed', updated_at = ${now}
+        WHERE id = ${p.id}`);
+    return;
+  }
+  const failures = p.refundAttempts + 1;
+  await db.run(sql`UPDATE payments SET status = 'refund_due', refund_status = 'failed',
+      refund_attempts = ${failures}, refund_retry_at = ${now + refundBackoffMs(failures)},
+      updated_at = ${now}
+      WHERE id = ${p.id} AND status = 'refunded' AND refund_id = ${refundId}`);
+  logPayment(
+    "error",
+    failures >= REFUND_ALERT_AFTER ? "refund_stuck" : "refund_failed",
+    { paymentId: p.id, failures, source: "webhook" },
+  );
 }
 
 /** Cron: unpaid orders past their 30 minutes → `expired`. */
@@ -744,6 +1196,110 @@ export async function expireStaleOrders(db: Db, now: number): Promise<number> {
     await db.run(sql`UPDATE payments SET status = 'expired', updated_at = ${now}
       WHERE status = 'created' AND expires_at < ${now}`);
   return r.meta.changes ?? 0;
+}
+
+// ---------- recovery (G3, every 15 min) ----------
+
+export interface RecoverResult {
+  stuck: number;
+  checked: number;
+  confirmed: number;
+  errors: number;
+}
+
+/** Unpaid orders this young are asked about (late captures included). */
+export const RECOVER_WINDOW_MS = 2 * 3_600_000;
+/** A captured payment without its ticket this long is retried. */
+const STUCK_RETRY_MS = 2 * 60_000;
+
+/**
+ * G3: the webhook was lost and the app never called verify (battery died).
+ * Every 15 min: (1) captured payments still without a ticket (the DO step or
+ * its D1 update failed half-way) are confirmed again; (2) our orders still
+ * `created` / `failed` / `expired` from the last 2 h (oldest check first,
+ * at most `limit`) are looked up at Razorpay and any paid attempt is
+ * confirmed (G1 capture, G2/G4 strays apply). The daily reconcile still
+ * compares the whole last day.
+ */
+export async function recoverRecentOrders(
+  ctx: PayCtx,
+  limit = 15,
+): Promise<RecoverResult> {
+  const { db, env, now } = ctx;
+  const out: RecoverResult = { stuck: 0, checked: 0, confirmed: 0, errors: 0 };
+  const stuck = await db
+    .select()
+    .from(payments)
+    .where(
+      and(
+        eq(payments.status, "captured"),
+        lt(payments.updatedAt, new Date(now - STUCK_RETRY_MS)),
+      ),
+    )
+    .orderBy(payments.updatedAt)
+    .limit(limit)
+    .all();
+  for (const p of stuck) {
+    if (!p.razorpayPaymentId) continue;
+    try {
+      await confirmPayment(ctx, p.razorpayOrderId, p.razorpayPaymentId);
+      out.stuck++;
+    } catch (e) {
+      out.errors++;
+      logPayment("error", "recover_stuck_failed", {
+        paymentId: p.id,
+        ...providerFields(e),
+      });
+    }
+  }
+
+  const open = await db
+    .select()
+    .from(payments)
+    .where(
+      and(
+        inArray(payments.status, ["created", "failed", "expired"]),
+        sql`${payments.createdAt} >= ${now - RECOVER_WINDOW_MS}`,
+      ),
+    )
+    .orderBy(payments.updatedAt)
+    .limit(limit)
+    .all();
+  if (open.length === 0) return out;
+  let transport: ReturnType<typeof razorpayTransport>;
+  try {
+    transport = razorpayTransport(env);
+  } catch (e) {
+    logPayment("error", "recover_config", providerFields(e));
+    return { ...out, errors: out.errors + 1 };
+  }
+  for (const p of open) {
+    out.checked++;
+    try {
+      for (const rp of paidAttempts(
+        await transport.fetchOrderPayments(p.razorpayOrderId),
+      )) {
+        const r = await confirmPayment(ctx, p.razorpayOrderId, rp.id, null, rp);
+        if (r && !r.notCaptured) {
+          out.confirmed++;
+          logPayment("warn", "recovered_payment", {
+            paymentId: p.id,
+            razorpayPaymentId: rp.id,
+          });
+        }
+      }
+      // Rotate: the next run asks about the orders checked longest ago.
+      await db.run(sql`UPDATE payments SET updated_at = ${now}
+          WHERE id = ${p.id} AND status IN ('created', 'failed', 'expired')`);
+    } catch (e) {
+      out.errors++;
+      logPayment("error", "recover_failed", {
+        paymentId: p.id,
+        ...providerFields(e),
+      });
+    }
+  }
+  return out;
 }
 
 // ---------- history (PAY-11) ----------
@@ -879,10 +1435,12 @@ const WEBHOOK_KEEP_MS = 30 * 24 * 3_600_000;
 
 /**
  * §10.4: unpaid orders → expired; captured > 10 min without a token →
- * confirm again (else refund); due refunds; Razorpay's captured payments of
- * the last day compared with D1 (a captured payment we missed is confirmed,
- * PAY-05); paid tokens without a payment flagged; old webhook ids deleted.
- * Mismatches are logged as errors.
+ * confirm again (else refund); due refunds; Razorpay's captured (and
+ * authorized) payments of the last day compared with D1: any one that is not
+ * the order's recorded payment goes through `confirmPayment` (a missed
+ * capture is allocated, PAY-05; a second payment or a wrong amount is
+ * refunded as a stray, G2/G4); paid tokens without a payment flagged; old
+ * webhook ids deleted. Mismatches are logged.
  */
 export async function reconcile(
   env: PayEnv,
@@ -929,7 +1487,7 @@ export async function reconcile(
         skip,
       });
       for (const rp of items) {
-        if (rp.status !== "captured" || !rp.order_id) continue;
+        if (!PAID_AT_RAZORPAY.has(rp.status) || !rp.order_id) continue;
         out.providerChecked++;
         const p = await paymentByOrder(db, rp.order_id);
         if (!p) {
@@ -939,19 +1497,22 @@ export async function reconcile(
           });
           continue;
         }
-        if (p.amountPaise !== rp.amount) {
-          out.mismatches++;
-          logPayment("error", "reconcile_amount", { paymentId: p.id });
-          continue;
-        }
-        if (
-          p.status === "created" ||
-          p.status === "failed" ||
-          p.status === "expired"
-        ) {
-          out.mismatches++;
-          logPayment("warn", "reconcile_missed_capture", { paymentId: p.id });
-          await confirmPayment(ctx, rp.order_id, rp.id);
+        if (p.razorpayPaymentId === rp.id) continue;
+        if (await paymentById(db, strayId(rp.id))) continue;
+        // A capture we missed, a second payment on a paid order (G2) or a
+        // wrong amount (G4): confirmPayment allocates or refunds it.
+        out.mismatches++;
+        logPayment("warn", "reconcile_missed_payment", {
+          paymentId: p.id,
+          razorpayPaymentId: rp.id,
+        });
+        try {
+          await confirmPayment(ctx, rp.order_id, rp.id, null, rp);
+        } catch (e) {
+          logPayment("error", "reconcile_confirm_failed", {
+            paymentId: p.id,
+            ...providerFields(e),
+          });
         }
       }
       if (items.length < 100) break;

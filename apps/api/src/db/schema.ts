@@ -351,8 +351,18 @@ export const payments = sqliteTable(
     refundStatus: text("refund_status", {
       enum: ["pending", "processed", "failed"],
     }),
-    /** Why a refund or failure happened (`closed`, `cancelled`, `quota_full`…). */
+    /**
+     * Why a refund or failure happened (`closed`, `cancelled`, `quota_full`…).
+     * `duplicate_payment` / `amount_mismatch` mark a stray row: a second
+     * captured Razorpay payment on an order (or one of the wrong amount) that
+     * buys nothing and is refunded in full. A stray row's `razorpay_order_id`
+     * is `<order id>:<payment id>`, so the order's own row stays unique.
+     */
     reason: text("reason"),
+    /** Failed Razorpay refund attempts (alert after `REFUND_ALERT_AFTER`). */
+    refundAttempts: integer("refund_attempts").notNull().default(0),
+    /** No refund attempt before this time (backoff, and a short lease while one runs). */
+    refundRetryAt: ms("refund_retry_at"),
     expiresAt: ms("expires_at").notNull(),
     createdAt: ms("created_at").notNull(),
     updatedAt: ms("updated_at").notNull(),
