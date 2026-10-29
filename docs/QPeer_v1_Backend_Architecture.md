@@ -225,7 +225,7 @@ One Durable Object per queue, addressed by `idFromName(queueId)`. All operations
 
 A **session** is one open→close cycle (normally one day). Opening a queue starts a session (`sessionId`), numbers restart at 1, and closing ends it (remaining tokens expire, paid ones are refunded). Analytics and history keep the `sessionId`.
 
-**Auto-close (B20, INC-047).** An open (or paused) session closes by itself at `autoCloseAt(hours, openedAt)` (shared `hours.ts`): 30 min after the end of the **last** hours range of the IST day the session opened; if it opened after that (or on a closed day), at 23:59 IST of that day; never sooner than 30 min after opening. The DO keeps the business hours in `meta.hours` (sent by the Worker on open/queue create, on every hours edit, and by the 15-min cron) and closes on its own alarm; the cron (`modules/queue/auto-close.ts`, ≤ 40 open queues per run, stalest snapshot first) hands each open queue its hours and closes overdue sessions — the safety net for DOs that never got the hours (sessions opened before this code). The console shows a warning from 15 min before (`ConsoleState.autoCloseAt`); each **Keep open** (`POST /v1/queues/:id/keep-open`, staff) sets `keep_open_until = max(autoCloseAt, now) + 1 h`. Auto-close runs exactly the manual close (`closeCore`), including the C4 carry-over. Paid-token refunds on auto-close are a Step 4 TODO (logged count only).
+**Auto-close (B20, INC-047).** An open (or paused) session closes by itself at `autoCloseAt(hours, openedAt)` (shared `hours.ts`): 30 min after the end of the **last** hours range of the IST day the session opened; if it opened after that (or on a closed day), at 23:59 IST of that day; never sooner than 30 min after opening. The DO keeps the business hours in `meta.hours` (sent by the Worker on open/queue create, on every hours edit, and by the 15-min cron) and closes on its own alarm; the cron (`modules/queue/auto-close.ts`, ≤ 40 open queues per run, stalest snapshot first) hands each open queue its hours and closes overdue sessions — the safety net for DOs that never got the hours (sessions opened before this code). The console shows a warning from 15 min before (`ConsoleState.autoCloseAt`); each **Keep open** (`POST /v1/queues/:id/keep-open`, staff) sets `keep_open_until = max(autoCloseAt, now) + 1 h`. Auto-close runs exactly the manual close (`closeCore`), including the C4 carry-over. Paid tokens it ends get `payment` outbox items (D1 `refund_due` / `forfeited`); the 15-min `refunds` cron makes the Razorpay refunds (Step 4).
 
 **Ticket validity and carry-over (C4).** With `ticketValidityMin > 0` a token gets `expires_at = joinedAt + validity`. The alarm ends WAITING tokens whose validity ran out as `EXPIRED` / `validity` (also while the queue is closed). On close (manual or auto) a WAITING token with `expires_at > now` is **not** ended: it is marked `carried`, keeps its number, its old `sessionId` and its sort key, and stays WAITING in the DO (and in D1) while the queue is closed. Because sort keys only grow, carried tokens are at the front of their class when the next session opens, in their original order; triage still goes first. New tokens of the new session start at #1 (no clash: the D1 unique key includes the session). The console and ticket show a "Kept" marker; a carried token's overnight wait is not counted as a wait/ETA sample. CALLED and GRACE tokens end on close as before. Until-close tickets (`ticketValidityMin = 0`, the default) behave exactly as before.
 
@@ -464,9 +464,9 @@ created ──(captured, verified)──► captured ──► allocated
 
 | Schedule | Job |
 |---|---|
-| every 15 min | `auto_close` (B20): hand open queues their hours, close overdue sessions (safety net for the DO alarm, §9.1); Step 4: expire unpaid orders |
+| every 15 min (`*/15 * * * *`) | `auto_close` (B20): hand open queues their hours, close overdue sessions (safety net for the DO alarm, §9.1); `expire_orders`: unpaid orders past 30 min → `expired`; `refunds`: make the Razorpay refunds of `refund_due` payments (≤ 40 per run) |
 | hourly | check Expo push receipts; prune dead push tokens |
-| daily 03:00 IST | payment reconciliation; delete `webhook_events` older than 30 days |
+| daily 03:00 IST (`30 21 * * *`) | `reconcile` (§10.4): expire orders, retry captured-without-token, due refunds, compare Razorpay's captured payments of the last day, flag paid tokens without a payment; delete `webhook_events` older than 30 days |
 
 Cron handlers are thin and call the same services as the API, so they are tested the same way.
 
@@ -494,7 +494,7 @@ Cron handlers are thin and call the same services as the API, so they are tested
 |---|---|---|
 | `ENVIRONMENT` | var | `local` / `dev` / `demo` |
 | `FIREBASE_PROJECT_ID` | var | `qpeer-f6dbe` |
-| `RAZORPAY_KEY_ID` | var | test key id (public) |
+| `RAZORPAY_KEY_ID` | **secret** | test key id; returned to the app in order responses, never bundled (Step 4 decision: all three Razorpay values are secrets) |
 | `RAZORPAY_KEY_SECRET` | **secret** | `wrangler secret put` per env; `.dev.vars` locally |
 | `RAZORPAY_WEBHOOK_SECRET` | **secret** | same |
 | `EXPO_ACCESS_TOKEN` | **secret** (optional) | only if Expo push security is enabled |
@@ -574,8 +574,12 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 | Tokens | `POST /v1/tokens/:id/rating` `{ experience, service }` | A (owner of a served token) | RAT-01 (Step 6) |
 | Live | `GET /v1/queues/:id/live` (WebSocket) | A | TOK-02 |
 | Map | `GET /v1/map?minLat&minLng&maxLat&maxLng[&category][&openNow=1][&limit]` | A | MAP-01–04, NFR-04 |
-| Payments | `POST /v1/queues/:id/orders` · `POST /v1/payments/verify` · `GET /v1/me/payments` | R | PAY-01–05, PAY-11 |
+| Payments | `POST /v1/queues/:id/orders` `{ kind: reservation\|priority, deviceHash? }` · `POST /v1/payments/verify` · `GET /v1/me/payments` | R | PAY-01–05, PAY-11, PRI-02 |
+| Payments | `GET /v1/businesses/:id/payments` (net shares from the ledger) | O | PAY-11 (business side) |
 | Payments | `POST /v1/webhooks/razorpay` | P (signature) | PAY-04, PAY-07 |
+| Priority | `GET /v1/queues/:id/priority-preview` | A | PRI-02 honest preview |
+| Console | `POST /v1/queues/:id/rejoin-for-customer` `{ label, checkCode } \| { signedTicket }` | S | QUE-29 (R2) |
+| Loadtest | `POST /v1/loadtest/queues/:id/priority-pass` (book + check in without Razorpay) | loadtest key only | §19.1 |
 | Insights | `GET /v1/businesses/:id/analytics?range=` · `GET /v1/businesses/:id/earnings?range=` | O | INS-01–08 |
 | Dev | `POST /v1/dev/seed` · `POST /v1/dev/simulate` · `GET /v1/dev/queue-ping/:id` | D | DEM-01–06 |
 | Dev | `POST /v1/dev/seed-map` · `POST /v1/dev/unseed-map` (registered) | D | map testing before Step 5 |
@@ -750,5 +754,26 @@ Replaces the older `reviews` idea (one per served token within 7 days, stars + t
 | Data | `ratings` table (§8), `POST /v1/tokens/:id/rating` (§12). The lane is stored per rating. Stars only, no text. |
 | RT1 Split by lane (decided 2026-10-18) | Show "Regular customers 2.1★ · Priority customers 4.8★" next to "Priority lane on · 1 in N", so a blended average can't hide unfairness. |
 | RT2 Integrity (decided 2026-10-18) | Only a served ticket can rate, once per ticket. Ratings shown only after at least 5 ratings (counted per lane, since RT1 shows lanes apart). The business cannot delete ratings but can reply publicly. |
+
+### Built in Step 4 (2026-10-29, branch `feat/step4-backend`) — engine details and readings to confirm
+
+| Question | Built as |
+|---|---|
+| Upgrade number | An upgraded ticket keeps its number (e.g. `14`) and its signed ticket stays valid; `lane: priority` marks it. Passes get P1, P2… at check-in. |
+| Lanes | The lane is the sort-key rank (0 triage, 1 priority, 2 regular). `next` and people-ahead use the shared `priority.ts` (`nextLane`, `callOrder`, `regularPeopleAhead`, `priorityPeopleAhead`); the console lists waiting tokens in predicted call order. A skipped triage token that lands in a lower lane is called from that lane. |
+| Credits | Change by the lane called from (+1 regular, −N priority, 0 triage); stored in DO meta, saved in the undo record, reset at open. |
+| BOOKED in D1 | `session_id = ''`, `number = 0`; the unique (queue, session, series, number) index is partial (`WHERE session_id <> ''`, migration 0006). |
+| Close money | Every paid token a close ends is refunded in full, except a MISSED one at a normal close, which is forfeited. A manual close inside the posted hours counts as "closing early" (MISSED fees refunded too); auto-close never does. Business deactivate / queue archive = "the business cancels": BOOKED passes refunded, nothing carries over. |
+| Money path | The DO never calls Razorpay: it writes `payment` outbox items (applied with the token rows) that set D1 `refund_due` (with `refund_paise`) or `forfeited` + a ledger `forfeit` marker. The Worker makes the refund right after a close/cancel; the 15-min cron catches the rest. Refunds are idempotent by receipt = our payment id. |
+| Ledger ids | Deterministic (`capture:<id>`, `capture_business:<id>`, `refund:<id>`, `forfeit:<id>`…) with `ON CONFLICT DO NOTHING`. |
+| Split | Platform constant `DEMO_BUSINESS_SHARE_PCT = 70`, stored per payment (`business_share_pct`); the queue setting `businessSharePct` is not used. |
+| Reservation cancel window | Refund when cancelled at least `cancelWindowMin` before the estimated call (HLD §9 text), not "within N min of joining". |
+| Sales cap / pass limit | Passes and upgrades both count for the daily cap and for "1 per account and phone per queue per day" (refunded ones too). An unpaid order of the same user is returned again. |
+| Upgrade offer | The server refuses an upgrade order below the saving threshold (`invalid_state`, `details.reason = saving_below_threshold`). |
+| Walk-in while holding a pass | `already_in_queue` (one active ticket per person); a remote reservation still doesn't block a walk-in (unchanged). |
+| WAITING validity end | A paid reservation whose C4 validity runs out is refunded; a MISSED one expires as a no-show; a BOOKED pass past its window is forfeited. |
+| K guard | `avgServiceMs` below 1 s counts as 1 s (no division by zero). |
+| Audit log | Every call, skip, rejoin, check-in, booking and upgrade logs `queue-do.audit` with its time (ids/labels only). |
+| C4 names | Signed ticket: `cc` (check code), `fn` (first name ≤ 20 chars, non-ASCII escaped), `p4`. `GET /console` adds `holderName` from D1; sockets never carry names. |
 
 Recorded note, not a rule: **RT3** for a monopoly provider (the only hospital nearby), ratings don't move customers but remain public evidence for oversight.
