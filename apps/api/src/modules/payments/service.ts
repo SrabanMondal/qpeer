@@ -27,6 +27,7 @@ import {
   type User,
 } from "../../db/schema";
 import type { Bindings } from "../../env";
+import { BudgetSpent, type CallBudget } from "../../lib/call-budget";
 import { AppError, notFound } from "../../lib/errors";
 import { newId } from "../../lib/ids";
 import { type TicketEnv, withTicket } from "../../lib/ticket-sign";
@@ -46,6 +47,7 @@ import {
   type RazorpayRefund,
   razorpayKeyId,
   razorpayTransport,
+  withBudget,
 } from "./razorpay";
 
 /**
@@ -72,6 +74,16 @@ export interface PayCtx {
   db: Db;
   env: PayEnv;
   now: number;
+  /**
+   * Outbound call budget of a scheduled run (§14), shared by its jobs: every
+   * Razorpay call and the `refund_issued` push count. Unset for HTTP requests.
+   */
+  budget?: CallBudget;
+}
+
+/** The Razorpay transport for this context, counted against its budget. */
+function rzp(ctx: Pick<PayCtx, "env" | "budget">) {
+  return withBudget(razorpayTransport(ctx.env), ctx.budget);
 }
 
 type DoFailure = { code: ErrorCode; message: string };
@@ -100,6 +112,8 @@ async function provider<T>(what: string, fn: () => Promise<T>): Promise<T> {
   try {
     return await fn();
   } catch (e) {
+    // Not a provider failure: the scheduled run stops here (§14).
+    if (e instanceof BudgetSpent) throw e;
     if (e instanceof PaymentsConfigError) {
       logPayment("error", "config", { message: e.message });
       throw new AppError(500, "internal");
@@ -303,7 +317,7 @@ function orderResponse(
 
 /** Creates the Razorpay order and our `created` payment row. */
 async function newOrder(
-  { db, env, now }: PayCtx,
+  { db, env, now, budget }: PayCtx,
   p: {
     userId: string;
     queueId: string;
@@ -323,7 +337,7 @@ async function newOrder(
   }
   const id = newId();
   const transport = await provider("transport", async () =>
-    razorpayTransport(env),
+    rzp({ env, budget }),
   );
   const order = await provider("create_order", () =>
     transport.createOrder({
@@ -437,9 +451,7 @@ async function reuseUnlessPaid(
   user: User,
   p: Payment,
 ): Promise<Payment> {
-  const transport = await provider("transport", async () =>
-    razorpayTransport(ctx.env),
-  );
+  const transport = await provider("transport", async () => rzp(ctx));
   const attempts = paidAttempts(
     await provider("order_payments", () =>
       transport.fetchOrderPayments(p.razorpayOrderId),
@@ -672,7 +684,7 @@ export async function confirmPayment(
   const rp =
     reported ??
     (await provider("fetch_payment", async () =>
-      razorpayTransport(env).fetchPayment(razorpayPaymentId),
+      rzp(ctx).fetchPayment(razorpayPaymentId),
     ));
   if (rp.id !== razorpayPaymentId || rp.order_id !== orderId) {
     logPayment("error", "payment_order_mismatch", {
@@ -744,9 +756,7 @@ async function ensureCaptured(
     });
     return null;
   }
-  const transport = await provider("transport", async () =>
-    razorpayTransport(ctx.env),
-  );
+  const transport = await provider("transport", async () => rzp(ctx));
   try {
     const c = await transport.capturePayment(rp.id, {
       amount: rp.amount,
@@ -758,6 +768,8 @@ async function ensureCaptured(
     });
     return c.status === "captured" ? c : null;
   } catch (e) {
+    // Nothing was asked of Razorpay; the next run captures it.
+    if (e instanceof BudgetSpent) throw e;
     // Already captured by a racing call (Razorpay answers 400 then)?
     const again = await provider("fetch_payment", () =>
       transport.fetchPayment(rp.id),
@@ -946,6 +958,8 @@ async function finished(
 
 /** A refund attempt holds the payment this long (racing callers skip it). */
 const REFUND_LEASE_MS = 2 * 60_000;
+/** Razorpay calls one refund needs at most (list refunds + create one). */
+const REFUND_CALLS = 2;
 /** After this many failed refund attempts each new failure logs `refund_stuck` (alert). */
 export const REFUND_ALERT_AFTER = 3;
 
@@ -1006,6 +1020,9 @@ export async function processRefund(
     logPayment("error", "refund_impossible", { paymentId: p.id });
     return false;
   }
+  // A refund takes up to 2 calls (list + create): with fewer left in this
+  // scheduled run, leave it `refund_due` for the next one (§14).
+  if (ctx.budget && !ctx.budget.canAfford(REFUND_CALLS)) return false;
   const lease =
     await db.run(sql`UPDATE payments SET refund_retry_at = ${now + REFUND_LEASE_MS}
       WHERE id = ${p.id} AND status = 'refund_due'
@@ -1013,7 +1030,7 @@ export async function processRefund(
   if (!lease.meta.changes) return false;
   let refund: RazorpayRefund;
   try {
-    const transport = razorpayTransport(env);
+    const transport = rzp(ctx);
     const live = (await transport.listRefunds(p.razorpayPaymentId)).filter(
       (r) => r.status !== "failed",
     );
@@ -1043,6 +1060,13 @@ export async function processRefund(
       if (refund.status === "failed") throw new RefundBlocked("refund_failed");
     }
   } catch (e) {
+    if (e instanceof BudgetSpent) {
+      // Not a failure: give the lease back so the next run takes it at once.
+      const before = p.refundRetryAt ? toMs(p.refundRetryAt) : null;
+      await db.run(sql`UPDATE payments SET refund_retry_at = ${before}
+          WHERE id = ${p.id} AND status = 'refund_due'`);
+      return false;
+    }
     await refundAttemptFailed(ctx, p, p.refundAttempts + 1, e);
     return false;
   }
@@ -1068,6 +1092,8 @@ export async function processRefund(
     reason: p.reason,
   });
   // `refund_issued` push (best effort; the ticket screen shows it anyway).
+  // In a scheduled run it is skipped once the call budget is used up.
+  if (ctx.budget && !ctx.budget.tryTake()) return true;
   try {
     const alert: AlertPush = {
       userId: p.userId,
@@ -1115,12 +1141,14 @@ export async function refundDueForToken(
 
 /**
  * Cron: `refund_due` payments whose backoff is over (oldest first), at most
- * `limit`. A failed attempt moves a payment to the back (`updated_at`).
+ * `limit`. A failed attempt moves a payment to the back (`updated_at`). When
+ * the run's call budget can't pay for another refund the rest is `deferred`
+ * to the next run.
  */
 export async function processDueRefunds(
   ctx: PayCtx,
   limit = 20,
-): Promise<{ due: number; refunded: number }> {
+): Promise<{ due: number; refunded: number; deferred: number }> {
   const rows = await ctx.db
     .select({ id: payments.id })
     .from(payments)
@@ -1134,8 +1162,15 @@ export async function processDueRefunds(
     .limit(limit)
     .all();
   let refunded = 0;
-  for (const r of rows) if (await processRefund(ctx, r.id)) refunded++;
-  return { due: rows.length, refunded };
+  let deferred = 0;
+  for (const [i, r] of rows.entries()) {
+    if (ctx.budget && !ctx.budget.canAfford(REFUND_CALLS)) {
+      deferred = rows.length - i;
+      break;
+    }
+    if (await processRefund(ctx, r.id)) refunded++;
+  }
+  return { due: rows.length, refunded, deferred };
 }
 
 // ---------- webhook-driven updates ----------
@@ -1205,6 +1240,8 @@ export interface RecoverResult {
   checked: number;
   confirmed: number;
   errors: number;
+  /** Payments left for the next run because the call budget was used up. */
+  deferred: number;
 }
 
 /** Unpaid orders this young are asked about (late captures included). */
@@ -1225,8 +1262,14 @@ export async function recoverRecentOrders(
   ctx: PayCtx,
   limit = 15,
 ): Promise<RecoverResult> {
-  const { db, env, now } = ctx;
-  const out: RecoverResult = { stuck: 0, checked: 0, confirmed: 0, errors: 0 };
+  const { db, now } = ctx;
+  const out: RecoverResult = {
+    stuck: 0,
+    checked: 0,
+    confirmed: 0,
+    errors: 0,
+    deferred: 0,
+  };
   const stuck = await db
     .select()
     .from(payments)
@@ -1239,12 +1282,18 @@ export async function recoverRecentOrders(
     .orderBy(payments.updatedAt)
     .limit(limit)
     .all();
+  // Known captured payments: the DO step needs no Razorpay call (a refund
+  // that can't be paid for now stays `refund_due` for the `refunds` job).
   for (const p of stuck) {
     if (!p.razorpayPaymentId) continue;
     try {
       await confirmPayment(ctx, p.razorpayOrderId, p.razorpayPaymentId);
       out.stuck++;
     } catch (e) {
+      if (e instanceof BudgetSpent) {
+        out.deferred++;
+        continue;
+      }
       out.errors++;
       logPayment("error", "recover_stuck_failed", {
         paymentId: p.id,
@@ -1268,12 +1317,18 @@ export async function recoverRecentOrders(
   if (open.length === 0) return out;
   let transport: ReturnType<typeof razorpayTransport>;
   try {
-    transport = razorpayTransport(env);
+    transport = rzp(ctx);
   } catch (e) {
     logPayment("error", "recover_config", providerFields(e));
     return { ...out, errors: out.errors + 1 };
   }
-  for (const p of open) {
+  for (const [i, p] of open.entries()) {
+    // Each order needs at least one call; the rest waits for the next run
+    // (not rotated, so it is asked first then).
+    if (ctx.budget && ctx.budget.left < 1) {
+      out.deferred += open.length - i;
+      break;
+    }
     out.checked++;
     try {
       for (const rp of paidAttempts(
@@ -1292,6 +1347,11 @@ export async function recoverRecentOrders(
       await db.run(sql`UPDATE payments SET updated_at = ${now}
           WHERE id = ${p.id} AND status IN ('created', 'failed', 'expired')`);
     } catch (e) {
+      if (e instanceof BudgetSpent) {
+        out.checked--;
+        out.deferred += open.length - i;
+        break;
+      }
       out.errors++;
       logPayment("error", "recover_failed", {
         paymentId: p.id,
@@ -1428,6 +1488,10 @@ export interface ReconcileResult {
   mismatches: number;
   tokensWithoutPayment: number;
   webhookEventsDeleted: number;
+  /** Work left undone because the run's call budget was used up (§14). */
+  deferred: number;
+  /** False when the provider scan stopped early (budget used up or an error). */
+  scanComplete: boolean;
 }
 
 const STUCK_CAPTURE_MS = 10 * 60_000;
@@ -1435,19 +1499,22 @@ const WEBHOOK_KEEP_MS = 30 * 24 * 3_600_000;
 
 /**
  * §10.4: unpaid orders → expired; captured > 10 min without a token →
- * confirm again (else refund); due refunds; Razorpay's captured (and
- * authorized) payments of the last day compared with D1: any one that is not
- * the order's recorded payment goes through `confirmPayment` (a missed
- * capture is allocated, PAY-05; a second payment or a wrong amount is
- * refunded as a stray, G2/G4); paid tokens without a payment flagged; old
- * webhook ids deleted. Mismatches are logged.
+ * confirm again (else refund); Razorpay's captured (and authorized) payments
+ * of the last day compared with D1: any one that is not the order's recorded
+ * payment goes through `confirmPayment` (a missed capture is allocated,
+ * PAY-05; a second payment or a wrong amount is refunded as a stray, G2/G4);
+ * due refunds; paid tokens without a payment flagged; old
+ * webhook ids deleted. Mismatches are logged. With a call `budget` (the
+ * scheduled run's) it stops calling Razorpay once that is used up; the D1-only
+ * steps still run.
  */
 export async function reconcile(
   env: PayEnv,
   db: Db,
   now: number,
+  budget?: CallBudget,
 ): Promise<ReconcileResult> {
-  const ctx: PayCtx = { db, env, now };
+  const ctx: PayCtx = { db, env, now, budget };
   const out: ReconcileResult = {
     expired: await expireStaleOrders(db, now),
     retried: 0,
@@ -1456,6 +1523,8 @@ export async function reconcile(
     mismatches: 0,
     tokensWithoutPayment: 0,
     webhookEventsDeleted: 0,
+    deferred: 0,
+    scanComplete: false,
   };
   const stuck = await db
     .select()
@@ -1470,13 +1539,18 @@ export async function reconcile(
     .all();
   for (const p of stuck) {
     if (!p.razorpayPaymentId) continue;
-    await confirmPayment(ctx, p.razorpayOrderId, p.razorpayPaymentId);
-    out.retried++;
+    try {
+      await confirmPayment(ctx, p.razorpayOrderId, p.razorpayPaymentId);
+      out.retried++;
+    } catch (e) {
+      if (!(e instanceof BudgetSpent)) throw e;
+      out.deferred++;
+    }
   }
-  out.refunds = (await processDueRefunds(ctx, 20)).refunded;
-
+  // The provider scan before the due refunds: in the 21:30 run the `refunds`
+  // job has just made them, and the calls kept for reconcile are for this.
   try {
-    const transport = razorpayTransport(env);
+    const transport = rzp(ctx);
     const fromSec = Math.floor((now - 24 * 3_600_000) / 1000);
     const toSec = Math.floor(now / 1000);
     for (let skip = 0; skip < 500; skip += 100) {
@@ -1509,20 +1583,36 @@ export async function reconcile(
         try {
           await confirmPayment(ctx, rp.order_id, rp.id, null, rp);
         } catch (e) {
+          if (e instanceof BudgetSpent) {
+            // Logged above; found again by tomorrow's scan if still young
+            // enough, or by the next order/verify of its user.
+            out.deferred++;
+            continue;
+          }
           logPayment("error", "reconcile_confirm_failed", {
             paymentId: p.id,
             ...providerFields(e),
           });
         }
       }
-      if (items.length < 100) break;
+      if (items.length < 100) {
+        out.scanComplete = true;
+        break;
+      }
     }
   } catch (e) {
-    logPayment("error", "reconcile_provider", {
-      status: e instanceof RazorpayError ? e.status : null,
-      config: e instanceof PaymentsConfigError,
-    });
+    if (e instanceof BudgetSpent) {
+      out.deferred++;
+    } else {
+      logPayment("error", "reconcile_provider", {
+        status: e instanceof RazorpayError ? e.status : null,
+        config: e instanceof PaymentsConfigError,
+      });
+    }
   }
+  const due = await processDueRefunds(ctx, 20);
+  out.refunds = due.refunded;
+  out.deferred += due.deferred;
 
   // Paid tickets whose payment row is missing (or points elsewhere).
   const orphans = await db.all<{ id: string }>(sql`SELECT t.id FROM tokens t
