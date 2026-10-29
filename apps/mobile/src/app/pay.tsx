@@ -1,7 +1,7 @@
 import { approxDuration, type OrderResponse, waitText } from "@qpeer/shared";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { type Href, Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { PriorityChip } from "@/components/priority-chip";
@@ -36,7 +36,11 @@ import { serverNow } from "@/lib/clock";
 import { formatRupees } from "@/lib/format";
 import { type JoinProblem, payErrorView } from "@/lib/join-errors";
 import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
-import { confirmCheckout, type PayOutcome } from "@/lib/pay-flow";
+import {
+  confirmCheckout,
+  existingTicketId,
+  type PayOutcome,
+} from "@/lib/pay-flow";
 import { payRules } from "@/lib/pay-rules";
 import { useNow } from "@/lib/queue-format";
 import { openCheckout } from "@/lib/razorpay";
@@ -108,6 +112,26 @@ export default function PayScreen() {
     if (kind === "upgrade" && router.canGoBack()) router.back();
     else router.replace({ pathname: "/token/[id]", params: { id } });
   };
+
+  // One active ticket per person per queue: an order answered 409
+  // `already_in_queue` (e.g. the webhook already made the ticket and the app
+  // lost the answer, or this ticket's upgrade is already paid) opens the
+  // ticket the user holds instead of showing an error.
+  const existing = order.isError ? existingTicketId(order.error) : null;
+  const opened = useRef<string | null>(null);
+  useEffect(() => {
+    if (!existing || opened.current === existing) return;
+    opened.current = existing;
+    showToast({
+      title: "You already have a ticket here",
+      message: "One ticket per person per queue.",
+    });
+    if (kind === "upgrade" && existing === tokenId && router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace({ pathname: "/token/[id]", params: { id: existing } });
+    }
+  }, [existing, kind, tokenId, router]);
 
   const pay = async (o: OrderResponse) => {
     if (phase.kind === "paying" || phase.kind === "confirming") return;
@@ -298,6 +322,8 @@ export default function PayScreen() {
           title="Sold out for today"
           detail="All of today's Priority Passes for this queue are sold. You can still join the regular queue."
         />
+      ) : existing ? (
+        <LoadingState label="Opening your ticket…" />
       ) : order.isError ? (
         <>
           <ProblemCard problem={payErrorView(order.error)} onFix={onFix} />
