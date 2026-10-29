@@ -303,6 +303,15 @@ export const TokenView = z.object({
     })
     .nullable()
     .optional(),
+  /**
+   * Share of the fee (0–100) a cancel now would refund, so the app can show
+   * it before the customer confirms (design guide §5a). BOOKED pass: the
+   * business's cancel refund %; a WAITING reservation: 100 while it is at
+   * least `cancelWindowMin` before the estimated call, else 0; any other paid
+   * ticket: 0. Null for free tickets and ended ones. Same rule as
+   * `POST /v1/tokens/:id/cancel`.
+   */
+  cancelRefundPct: z.number().int().nullable().optional(),
 });
 export type TokenView = z.infer<typeof TokenView>;
 

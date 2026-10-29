@@ -679,4 +679,28 @@ describe("Priority Pass + upgrade (PRI-02…10)", () => {
     const c2 = must(await near.stub.cancel(n.token.id, n.userId));
     expect(c2.refund).toBe(false);
   });
+
+  it("TokenView.cancelRefundPct tells the refund a cancel would give, before it is made", async () => {
+    const { stub } = await seedQueue({
+      settings: {
+        ...ON,
+        cancelWindowMin: 15,
+        serviceMinutesHint: 10,
+        priorityCancelRefundPct: 40,
+      },
+    });
+    const free = await join(stub);
+    expect(free.cancelRefundPct).toBeNull();
+    for (let i = 0; i < 3; i++) await join(stub);
+    const far = await reserve(stub); // ~40 min away: inside the refund window
+    expect(far.token.cancelRefundPct).toBe(100);
+    const booked = await pass(stub, { checkIn: false });
+    expect(booked.token.cancelRefundPct).toBe(40);
+    const inLine = await pass(stub);
+    expect(inLine.token.cancelRefundPct).toBe(0);
+    // The view says what the cancel then does.
+    const c = must(await stub.cancel(booked.token.id, booked.userId));
+    expect([c.refund, c.refundPct]).toEqual([true, 40]);
+    expect(c.token.cancelRefundPct).toBeNull();
+  });
 });
