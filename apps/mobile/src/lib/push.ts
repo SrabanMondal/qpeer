@@ -236,6 +236,9 @@ export function usePushSetup() {
       void queryClient.invalidateQueries({ queryKey: ["token"] });
       void queryClient.invalidateQueries({ queryKey: ["tokens"] });
       const kind = AlertKind.safeParse(content.data?.kind);
+      if (kind.success && kind.data === "refund_issued") {
+        void queryClient.invalidateQueries({ queryKey: ["payments"] });
+      }
       showToast({
         title: content.title ?? "Queue update",
         message: content.body ?? undefined,

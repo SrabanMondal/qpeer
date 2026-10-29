@@ -7,7 +7,7 @@ import { Button, Card, Icon, ListItem } from "@/components/ui";
 import { Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useAuth } from "@/lib/auth";
-import { formatAge } from "@/lib/queue-format";
+import { formatAge, ticketTitle } from "@/lib/queue-format";
 import { useSavedTickets } from "@/lib/storage";
 
 /**
@@ -47,7 +47,7 @@ export function OfflineTicketsCard({
         <ListItem
           key={t.view.id}
           icon="confirmation_number"
-          title={`#${t.view.label} · ${t.view.queueName}`}
+          title={`${ticketTitle(t.view)} · ${t.view.queueName}`}
           subtitle={`${t.view.businessName} · updated ${formatAge(t.savedAt)}`}
           onPress={() =>
             router.push({

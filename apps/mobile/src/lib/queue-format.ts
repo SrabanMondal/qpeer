@@ -116,7 +116,7 @@ export function tokenStatusBadge(
   t: Pick<TokenView, "state"> & { queueStatus?: LiveStatus },
 ): { label: string; tone: BadgeTone } {
   const map: Record<TokenState, { label: string; tone: BadgeTone }> = {
-    BOOKED: { label: "Booked", tone: "success" },
+    BOOKED: { label: "Booked · check in", tone: "success" },
     MISSED: { label: "Missed", tone: "warning" },
     WAITING: { label: "Waiting", tone: "success" },
     CALLED: { label: "Your turn", tone: "success" },
@@ -130,6 +130,29 @@ export function tokenStatusBadge(
     return { label: "Queue paused", tone: "warning" };
   }
   return map[t.state];
+}
+
+/**
+ * A ticket's name in lists and headings: "#14", "#P3", or "Priority Pass"
+ * for a BOOKED pass (it gets its P number only at check-in).
+ */
+export function ticketTitle(t: Pick<TokenView, "state" | "label">): string {
+  return t.state === "BOOKED" ? "Priority Pass" : `#${t.label}`;
+}
+
+/** "3" or, with the priority lane on, a range "3–5" (C3). */
+export function peopleAheadText(low: number, high?: number | null): string {
+  return high != null && high > low ? `${low}–${high}` : String(low);
+}
+
+/** "#14 · K7P2": the number with its check code (R2), for under the badge. */
+export function checkCodeLine(
+  t: Pick<TokenView, "state" | "label" | "checkCode">,
+): string | null {
+  if (!t.checkCode) return null;
+  return t.state === "BOOKED"
+    ? `Check code ${t.checkCode}`
+    : `#${t.label} · ${t.checkCode}`;
 }
 
 /**
