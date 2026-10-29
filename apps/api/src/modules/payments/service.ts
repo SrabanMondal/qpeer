@@ -448,19 +448,30 @@ const ALLOCATION_FAILURES = new Set<string>([
   "not_found",
 ]);
 
+/** One append-only ledger row; the deterministic id makes a retry a no-op. */
+function ledgerStmt(
+  d1: D1Database,
+  p: Payment,
+  row: [id: string, kind: string, amount: number],
+  at: number,
+): D1PreparedStatement {
+  return d1
+    .prepare(
+      `INSERT INTO ledger_entries (id, payment_id, business_id, kind, amount_paise, at, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+    )
+    .bind(row[0], p.id, p.businessId, row[1], row[2], at, at);
+}
+
 /** Capture ledger rows (deterministic ids): capture + the business/Qpeer split. */
-function captureLedger(db: Db, p: Payment, at: number) {
+function captureLedger(d1: D1Database, p: Payment, at: number) {
   const s = splitPaise(p.amountPaise, p.businessSharePct);
   const rows: [string, string, number][] = [
     [`capture:${p.id}`, "capture", p.amountPaise],
     [`capture_business:${p.id}`, "business_share", s.business],
     [`capture_platform:${p.id}`, "platform_share", s.platform],
   ];
-  return rows.map(([id, kind, amount]) =>
-    db.run(sql`INSERT INTO ledger_entries (id, payment_id, business_id, kind, amount_paise, at, created_at)
-      VALUES (${id}, ${p.id}, ${p.businessId}, ${kind}, ${amount}, ${at}, ${at})
-      ON CONFLICT(id) DO NOTHING`),
-  );
+  return rows.map((r) => ledgerStmt(d1, p, r, at));
 }
 
 /**
@@ -492,10 +503,13 @@ export async function confirmPayment(
   if (DONE.has(p.status)) return finished(ctx, p, holder);
 
   if (p.status !== "captured") {
-    const capture = db.run(sql`UPDATE payments SET status = 'captured',
-        razorpay_payment_id = COALESCE(razorpay_payment_id, ${razorpayPaymentId}), updated_at = ${now}
-      WHERE id = ${p.id} AND status IN ('created', 'failed', 'expired')`);
-    await db.batch([capture, ...captureLedger(db, p, now)]);
+    // One D1 batch (one transaction): the status change and the capture split.
+    const capture = env.DB.prepare(
+      `UPDATE payments SET status = 'captured',
+         razorpay_payment_id = COALESCE(razorpay_payment_id, ?), updated_at = ?
+       WHERE id = ? AND status IN ('created', 'failed', 'expired')`,
+    ).bind(razorpayPaymentId, now, p.id);
+    await env.DB.batch([capture, ...captureLedger(env.DB, p, now)]);
     logPayment("info", "captured", { paymentId: p.id, kind: p.kind });
   }
   p = (await paymentById(db, p.id)) ?? p;
@@ -624,15 +638,13 @@ export async function processRefund(
     [`refund_business:${p.id}`, "business_share", -back.business],
     [`refund_platform:${p.id}`, "platform_share", -back.platform],
   ];
-  await db.batch([
-    db.run(sql`UPDATE payments SET status = 'refunded', refund_id = ${refund.id},
-        refund_paise = ${amount}, refund_status = ${refundStatus}, updated_at = ${now}
-      WHERE id = ${p.id} AND status = 'refund_due'`),
-    ...rows.map(([id, kind, value]) =>
-      db.run(sql`INSERT INTO ledger_entries (id, payment_id, business_id, kind, amount_paise, at, created_at)
-        VALUES (${id}, ${p.id}, ${p.businessId}, ${kind}, ${value}, ${now}, ${now})
-        ON CONFLICT(id) DO NOTHING`),
-    ),
+  await env.DB.batch([
+    env.DB.prepare(
+      `UPDATE payments SET status = 'refunded', refund_id = ?, refund_paise = ?,
+         refund_status = ?, updated_at = ?
+       WHERE id = ? AND status = 'refund_due'`,
+    ).bind(refund.id, amount, refundStatus, now, p.id),
+    ...rows.map((r) => ledgerStmt(env.DB, p, r, now)),
   ]);
   logPayment("info", "refunded", {
     paymentId: p.id,
