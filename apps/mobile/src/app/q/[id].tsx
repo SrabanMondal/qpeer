@@ -3,6 +3,8 @@ import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
 import { Linking } from "react-native";
 
+import { PriorityChip } from "@/components/priority-chip";
+import { ProblemCard } from "@/components/problem-card";
 import { ThemedText } from "@/components/themed-text";
 import {
   Button,
@@ -28,6 +30,7 @@ import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 import { askForAlertsAfterJoin } from "@/lib/push";
 import { liveStatusLook, useNow } from "@/lib/queue-format";
 import { showToast } from "@/lib/toast";
+import { PriorityBuyCard } from "@/screens/priority-buy-card";
 
 type Phase = "idle" | "locating" | "joining";
 
@@ -140,6 +143,12 @@ export default function JoinScreen() {
   }
 
   const { queue, business, live, myRole, joinRadiusM } = info.data;
+  // PRI-07: the queue's public priority fields (with "Sold out").
+  const priority =
+    info.data.priority ??
+    (queue.priority
+      ? { ...queue.priority, soldOut: live.priority?.soldOut ?? false }
+      : null);
   const status = liveStatusLook(live.status);
   // B16: the queue state decides; the hours only add "(after usual hours)".
   const look = openLook(live.status, business.isOpenNow);
@@ -183,6 +192,7 @@ export default function JoinScreen() {
       />
 
       <Card>
+        <PriorityChip priority={priority} />
         <InfoRow
           label="Now serving"
           value={live.nowServing ? `#${live.nowServing}` : "Nobody yet"}
@@ -195,39 +205,7 @@ export default function JoinScreen() {
       </Card>
 
       {problem ? (
-        <Card>
-          <ThemedText type="heading" themeColor="danger">
-            {problem.title}
-          </ThemedText>
-          <ThemedText type="body">{problem.message}</ThemedText>
-          {problem.support ? (
-            <ThemedText type="small" themeColor="inkMuted" selectable>
-              {problem.support}
-            </ThemedText>
-          ) : null}
-          {problem.fix === "open_settings" ? (
-            <Button
-              title="Open settings"
-              variant="secondary"
-              icon="settings"
-              onPress={() => void runFix(problem)}
-            />
-          ) : problem.fix === "turn_on_location" ? (
-            <Button
-              title="Turn on location"
-              variant="secondary"
-              icon="my_location"
-              onPress={() => void runFix(problem)}
-            />
-          ) : problem.fix === "open_ticket" ? (
-            <Button
-              title="Open my ticket"
-              variant="secondary"
-              icon="confirmation_number"
-              onPress={() => void runFix(problem)}
-            />
-          ) : null}
-        </Card>
+        <ProblemCard problem={problem} onFix={(p) => void runFix(p)} />
       ) : null}
 
       <Button
@@ -259,6 +237,16 @@ export default function JoinScreen() {
           You manage this queue. You can still join it as a customer, for
           example to test it.
         </ThemedText>
+      ) : null}
+
+      {priority?.enabled ? (
+        <PriorityBuyCard
+          queueId={queue.id}
+          feePaise={priority.feePaise}
+          soldOut={priority.soldOut}
+          live={live}
+          now={now}
+        />
       ) : null}
     </Screen>
   );

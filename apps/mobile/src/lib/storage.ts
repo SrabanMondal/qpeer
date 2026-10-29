@@ -1,4 +1,9 @@
-import { BusinessCategory, TicketPublicJwk, TokenView } from "@qpeer/shared";
+import {
+  BusinessCategory,
+  isActiveState,
+  TicketPublicJwk,
+  TokenView,
+} from "@qpeer/shared";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { z } from "zod";
@@ -212,11 +217,11 @@ export async function saveTicketView(
     },
     savedAt: now,
   };
+  // Step 4: BOOKED passes and MISSED tickets are active too (they keep their
+  // check code, validity and rejoin time for the offline view).
   const kept = Object.values(mine)
     .filter(
-      (t) =>
-        ["WAITING", "CALLED", "GRACE"].includes(t.view.state) ||
-        now - t.savedAt < ENDED_KEEP_MS,
+      (t) => isActiveState(t.view.state) || now - t.savedAt < ENDED_KEEP_MS,
     )
     .sort((a, b) => b.savedAt - a.savedAt)
     .slice(0, MAX_TICKETS);
@@ -233,8 +238,7 @@ export function useSavedTickets(uid: string | null): {
 } {
   const { value, ready } = useStored("tickets");
   const mine = uid ? Object.values(value?.[uid] ?? {}) : [];
-  const active = (t: SavedTicket) =>
-    ["WAITING", "CALLED", "GRACE"].includes(t.view.state) ? 0 : 1;
+  const active = (t: SavedTicket) => (isActiveState(t.view.state) ? 0 : 1);
   mine.sort((a, b) => active(a) - active(b) || b.savedAt - a.savedAt);
   return { tickets: mine, ready };
 }

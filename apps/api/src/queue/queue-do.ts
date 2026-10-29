@@ -1776,29 +1776,49 @@ export class QueueDO extends DurableObject<Env> {
     );
   }
 
-  private cancelCore(
+  /**
+   * Refund share (0–100) of cancelling a paid active ticket now: BOOKED pass
+   * → the business's %; WAITING reservation → 100 at least the cancel
+   * window before the estimated call, else 0; anything else → 0. Null for
+   * free or ended tickets. The one rule behind `cancel` and
+   * `TokenView.cancelRefundPct`.
+   */
+  private cancelRefundPct(
     t: TokenRow,
     now: number,
-    fx: Fx,
-  ): { refund: boolean; pct: number } {
+    vc?: ViewCtx,
+  ): number | null {
+    if (!isPaid(t) || !isActive(t)) return null;
     if (t.state === "BOOKED") {
-      const pct =
+      return (
         t.cancel_refund_pct ??
-        this.store.get("settings").priorityCancelRefundPct;
-      this.change(t.id, endPatch("CANCELLED", "cancelled", now), now, fx);
-      if (pct > 0) this.paymentAction(t, "refund", pct, "cancelled", now);
-      return { refund: pct > 0, pct };
+        this.store.get("settings").priorityCancelRefundPct
+      );
     }
-    let refund = false;
     if (
       t.payment_order_id !== null &&
       t.series !== "P" &&
       t.state === "WAITING"
     ) {
-      const vc = this.viewCtx(now);
-      const est = this.estimateRange(vc, now, this.aheadOf(t, vc));
-      refund = est.expectedMs - now >= t.cancel_window_ms;
+      const ctx = vc ?? this.viewCtx(now);
+      const est = this.estimateRange(ctx, now, this.aheadOf(t, ctx));
+      return est.expectedMs - now >= t.cancel_window_ms ? 100 : 0;
     }
+    return 0;
+  }
+
+  private cancelCore(
+    t: TokenRow,
+    now: number,
+    fx: Fx,
+  ): { refund: boolean; pct: number } {
+    const pct = this.cancelRefundPct(t, now) ?? 0;
+    if (t.state === "BOOKED") {
+      this.change(t.id, endPatch("CANCELLED", "cancelled", now), now, fx);
+      if (pct > 0) this.paymentAction(t, "refund", pct, "cancelled", now);
+      return { refund: pct > 0, pct };
+    }
+    const refund = pct === 100;
     this.change(t.id, endPatch("CANCELLED", "cancelled", now), now, fx);
     this.bump(now, { cancels: 1 });
     if (refund) {
@@ -2778,6 +2798,7 @@ export class QueueDO extends DurableObject<Env> {
       validUntil: row.state === "BOOKED" ? row.expires_at : null,
       priority: priorityInfo(vc.settings),
       upgrade: waiting ? this.upgradeOffer(row, vc, now, range) : null,
+      cancelRefundPct: this.cancelRefundPct(row, now, vc),
     };
   }
 

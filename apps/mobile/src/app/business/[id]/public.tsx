@@ -8,6 +8,7 @@ import {
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
 
+import { PriorityChip } from "@/components/priority-chip";
 import { ThemedText } from "@/components/themed-text";
 import {
   Badge,
@@ -25,8 +26,10 @@ import {
 import { Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useBusiness } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { openDirections } from "@/lib/directions";
-import { categoryIcon, categoryLabel } from "@/lib/format";
+import { categoryIcon, categoryLabel, formatRupees } from "@/lib/format";
+import { payHref } from "@/lib/pay-flow";
 import { useNow } from "@/lib/queue-format";
 
 /**
@@ -40,6 +43,8 @@ export default function PublicBusinessScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const business = useBusiness(id ?? "");
   const now = useNow(true, 30_000);
+  const { user } = useAuth();
+  const guest = !user || user.isAnonymous;
 
   if (!business.data) {
     return (
@@ -134,8 +139,19 @@ export default function PublicBusinessScreen() {
             queue={q}
             withinHours={b.isOpenNow}
             now={now}
+            guest={guest}
             onJoin={() =>
               router.push({ pathname: "/q/[id]", params: { id: q.id } })
+            }
+            onReserve={() =>
+              router.push(payHref({ kind: "reservation", queueId: q.id }))
+            }
+            onPriority={() =>
+              router.push(
+                guest
+                  ? "/sign-in"
+                  : payHref({ kind: "priority", queueId: q.id }),
+              )
             }
           />
         ))
@@ -162,23 +178,22 @@ export default function PublicBusinessScreen() {
         )}
       </Card>
 
-      <SectionHeader title="Walk in" />
+      <SectionHeader title="How to get a place" />
       <Card>
         <ThemedText type="body">
-          Go to the business and tap Join on a queue above, or scan the QR code
-          at the counter. Qpeer checks once that you are there.
+          Walk in: go to the business and tap Join on a queue above, or scan the
+          QR code at the counter. Qpeer checks once that you are there. Free.
         </ThemedText>
-        <Button
-          title="Reserve from home"
-          variant="secondary"
-          icon="event_available"
-          onPress={() => {}}
-          disabled
-          accessibilityLabel="Reserve from home, coming soon"
-        />
-        <ThemedText type="small" themeColor="inkMuted">
-          Coming soon: reserve a place before you leave home.
+        <ThemedText type="body">
+          Reserve from home: hold a place for a small fee while the queue is
+          open, and come when we alert you. You see the fee and the refund rules
+          before you pay.
         </ThemedText>
+        {guest ? (
+          <ThemedText type="small" themeColor="inkMuted">
+            Reserving and Priority Passes need a phone or Google sign-in.
+          </ThemedText>
+        ) : null}
       </Card>
     </Screen>
   );
@@ -194,16 +209,24 @@ function QueueCard({
   queue: q,
   withinHours,
   now,
+  guest,
   onJoin,
+  onReserve,
+  onPriority,
 }: {
   queue: QueueView;
   withinHours: boolean;
   now: number;
+  guest: boolean;
   onJoin: () => void;
+  onReserve: () => void;
+  onPriority: () => void;
 }) {
   const live = q.live ?? null;
   const look = openLook(live?.status ?? "closed", withinHours);
   const open = live?.status === "open";
+  const priority = q.priority?.enabled ? q.priority : null;
+  const soldOut = live?.priority?.soldOut === true;
   return (
     <Card>
       <View style={styles.queueTop}>
@@ -212,6 +235,7 @@ function QueueCard({
         </ThemedText>
         <Badge label={look.label} tone={look.tone} />
       </View>
+      <PriorityChip priority={q.priority} />
       <ThemedText type="body">
         {live && live.status !== "closed"
           ? waitSummary(live, now)
@@ -224,6 +248,39 @@ function QueueCard({
         onPress={onJoin}
         accessibilityLabel={`${open ? "Join" : "View"} ${q.name}`}
       />
+      {open ? (
+        <Button
+          title="Reserve from home"
+          variant="secondary"
+          icon="event_available"
+          onPress={onReserve}
+          accessibilityLabel={`Reserve a place in ${q.name} from home`}
+          needsNetwork
+        />
+      ) : null}
+      {priority ? (
+        soldOut ? (
+          <Button
+            title="Priority Pass · sold out today"
+            variant="outline"
+            icon="block"
+            disabled
+            onPress={() => undefined}
+          />
+        ) : (
+          <Button
+            title={
+              guest
+                ? "Sign in to buy a Priority Pass"
+                : `Buy Priority Pass · ${formatRupees(priority.feePaise)}`
+            }
+            variant="outline"
+            icon="bolt"
+            onPress={onPriority}
+            needsNetwork
+          />
+        )
+      ) : null}
     </Card>
   );
 }

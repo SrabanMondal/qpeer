@@ -126,6 +126,15 @@ export default function RootLayout() {
                 name="token/[id]"
                 options={{ title: "Your Ticket" }}
               />
+              <Stack.Screen name="pay" options={{ title: "Payment" }} />
+              <Stack.Screen
+                name="payments"
+                options={{ title: "My payments" }}
+              />
+              <Stack.Screen
+                name="business/[id]/payments"
+                options={{ title: "Payments" }}
+              />
             </Stack>
             <PushSetup />
             <ToastHost />

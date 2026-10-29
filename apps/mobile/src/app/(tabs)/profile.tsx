@@ -1,5 +1,5 @@
 import { DisplayName } from "@qpeer/shared";
-import { useRouter } from "expo-router";
+import { type Href, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import { Alert, StyleSheet, View } from "react-native";
 
@@ -184,6 +184,18 @@ export default function ProfileTab() {
           <InfoRow label="User ID" value={profile.id} selectable />
         </Card>
       )}
+
+      <SectionHeader title="Payments" />
+      <ListItem
+        icon="receipt_long"
+        title="My payments"
+        subtitle={
+          user?.isAnonymous
+            ? "Sign in to reserve or buy a Priority Pass"
+            : "Reservations, passes, refunds"
+        }
+        onPress={() => router.push("/payments" as Href)}
+      />
 
       <SectionHeader title="Account" />
       {user?.isAnonymous ? (

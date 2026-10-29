@@ -19,6 +19,7 @@ import {
   formatAge,
   formatClock,
   formatDateTime,
+  ticketTitle,
   tokenStatusBadge,
 } from "@/lib/queue-format";
 import { useSavedTickets } from "@/lib/storage";
@@ -64,7 +65,7 @@ export function MyTokens() {
             <ListItem
               key={t.id}
               icon="confirmation_number"
-              title={`#${t.label} · ${t.queueName}`}
+              title={`${ticketTitle(t)} · ${t.queueName}`}
               subtitle={`${t.businessName} · updated ${formatAge(savedAt)}`}
               footer={<Badge label={badge.label} tone={badge.tone} />}
               onPress={() =>
@@ -127,7 +128,7 @@ export function MyTokens() {
               <ListItem
                 key={t.id}
                 icon="confirmation_number"
-                title={`#${t.label} · ${t.queueName}`}
+                title={`${ticketTitle(t)} · ${t.queueName}`}
                 subtitle={`${t.businessName} · joined ${formatClock(t.joinedAt)}`}
                 footer={<Badge label={badge.label} tone={badge.tone} />}
                 accessibilityLabel={`Ticket ${t.label}, ${t.queueName}, ${t.businessName}, ${badge.label}`}
@@ -145,7 +146,7 @@ export function MyTokens() {
                 <ListItem
                   key={t.id}
                   icon="history"
-                  title={`#${t.label} · ${t.queueName}`}
+                  title={`${ticketTitle(t)} · ${t.queueName}`}
                   subtitle={`${t.businessName} · ${formatDateTime(t.endedAt ?? t.joinedAt)}`}
                   footer={<Badge label={badge.label} tone={badge.tone} />}
                   onPress={() => open(t)}

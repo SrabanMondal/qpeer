@@ -1,6 +1,7 @@
 import {
   CancelResponse,
   type JoinBody,
+  type LocationCheckBody,
   MyTokensResponse,
   newerTokenView,
   TokenView,
@@ -48,6 +49,22 @@ export function leaveToken(id: string) {
 export function cancelToken(id: string) {
   return apiFetch(`/v1/tokens/${enc(id)}/cancel`, CancelResponse, {
     method: "POST",
+  });
+}
+
+/**
+ * POST /v1/tokens/:id/checkin (PRI-03, Priority Pass on arrival) and
+ * /rejoin ("I'm here" after MISSED, QUE-23): the walk-in GPS check. The
+ * location is sent once and never kept.
+ */
+export function locationCheck(
+  id: string,
+  action: "checkin" | "rejoin",
+  body: LocationCheckBody,
+) {
+  return apiFetch(`/v1/tokens/${enc(id)}/${action}`, TokenView, {
+    method: "POST",
+    body,
   });
 }
 
@@ -137,6 +154,33 @@ export function useLeaveToken(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => leaveToken(id),
+    onSuccess: (token) => storeToken(queryClient, uid, token),
+  });
+}
+
+/** Cancel a paid ticket (PAY-07, PRI-09); the answer says what is refunded. */
+export function useCancelToken(id: string) {
+  const uid = useUid();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => cancelToken(id),
+    onSuccess: (r) => {
+      storeToken(queryClient, uid, r.token);
+      if (r.refund) {
+        void queryClient.invalidateQueries({
+          queryKey: queryKeys.myPayments(uid),
+        });
+      }
+    },
+  });
+}
+
+/** Check-in of a BOOKED pass or "I'm here" after MISSED (GPS check). */
+export function useLocationCheck(id: string, action: "checkin" | "rejoin") {
+  const uid = useUid();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: LocationCheckBody) => locationCheck(id, action, body),
     onSuccess: (token) => storeToken(queryClient, uid, token),
   });
 }

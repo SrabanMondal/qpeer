@@ -56,6 +56,7 @@ import {
 } from "@/lib/queue-format";
 import { useStored } from "@/lib/storage";
 import { showErrorToast, showToast } from "@/lib/toast";
+import { StaffRejoinCard } from "@/screens/staff-rejoin";
 
 /** Waiting rows drawn at most; the rest is summarised. */
 const MAX_WAITING_ROWS = 50;
@@ -208,6 +209,8 @@ function ConsoleBody({
   const consoleQ = useConsole(queue.id);
   const command = useConsoleCommand(queue.id);
   const [counter, setCounter] = useState(1);
+  // R2: the "Rejoin for customer" form: closed, open blank, or for one row.
+  const [rejoinFor, setRejoinFor] = useState<RejoinTarget>(null);
   const ownNoShows = useRef(new Set<string>());
   const seenGrace = useRef<Set<string> | null>(null);
   const state = consoleQ.data;
@@ -340,6 +343,8 @@ function ConsoleBody({
                 `/queue/${encodeURIComponent(queue.id)}/verify` as Href,
               )
             }
+            rejoinFor={rejoinFor}
+            setRejoinFor={setRejoinFor}
           />
         </View>
       </Screen>
@@ -415,6 +420,34 @@ function UndoBar({
   );
 }
 
+/** Which "Rejoin for customer" form is open (a blank one, or for a row). */
+type RejoinTarget = { token: ConsoleToken | null } | null;
+
+/**
+ * "Priority due in 2 calls" (C1 credit counter): a priority holder is
+ * called once `credits ≥ N`; each regular call adds one credit.
+ */
+function priorityDueText(state: ConsoleState): string | null {
+  const p = state.priority;
+  if (!p?.enabled) return null;
+  const n = Math.max(1, p.perRegular);
+  const lane = `Priority lane on · 1 in ${n}`;
+  const waiting = state.waiting.filter(
+    (t) => (t.lane ?? t.cls) === "priority",
+  ).length;
+  const sold =
+    p.dailyCap !== null
+      ? ` · ${p.soldToday}/${p.dailyCap} sold today`
+      : p.soldToday > 0
+        ? ` · ${p.soldToday} sold today`
+        : "";
+  if (waiting === 0) return `${lane} · nobody in it${sold}`;
+  const left = Math.max(0, n - Math.min(p.credits, n));
+  return left === 0
+    ? `${lane} · priority due now${sold}`
+    : `${lane} · priority due in ${left} ${left === 1 ? "call" : "calls"}${sold}`;
+}
+
 function ConsoleView({
   state,
   queue,
@@ -425,6 +458,8 @@ function ConsoleView({
   setCounter,
   run,
   onVerify,
+  rejoinFor,
+  setRejoinFor,
 }: {
   state: ConsoleState;
   queue: ConsoleQueue;
@@ -436,7 +471,11 @@ function ConsoleView({
   run: (cmd: ConsoleCommand, errorTitle: string) => Promise<boolean>;
   /** C3: open the ticket scanner. */
   onVerify: () => void;
+  rejoinFor: RejoinTarget;
+  setRejoinFor: (t: RejoinTarget) => void;
 }) {
+  const missed = state.missed ?? [];
+  const dueText = priorityDueText(state);
   const status = liveStatusLook(state.status);
   const closed = state.status === "closed";
   // B20: warn 15 min before the auto-close; "Keep open" adds an hour.
@@ -491,7 +530,7 @@ function ConsoleView({
   const waitingMenu = (t: ConsoleToken) => {
     Alert.alert(`#${t.label}`, "Waiting", [
       {
-        text: "Skip (move back 3 places)",
+        text: "Skip (move back a few places)",
         onPress: () =>
           void run(
             { kind: "token", action: "skip", tokenId: t.id },
@@ -698,6 +737,19 @@ function ConsoleView({
             }
             style={styles.next}
           />
+          {dueText ? (
+            <View style={styles.dueRow}>
+              <Icon name="bolt" size={18} color="brand" />
+              <ThemedText
+                type="small"
+                themeColor="inkMuted"
+                style={styles.flex}
+                accessibilityLiveRegion="polite"
+              >
+                {dueText}
+              </ThemedText>
+            </View>
+          ) : null}
 
           <View style={styles.grid}>
             <Button
@@ -791,6 +843,50 @@ function ConsoleView({
         </>
       ) : null}
 
+      {/* QUE-22/29: missed tickets are out of the order until they rejoin. */}
+      {missed.length > 0 ? (
+        <>
+          <SectionHeader title={`Missed (${missed.length})`} />
+          {missed.map((t) => (
+            <TokenRow
+              key={t.id}
+              token={t}
+              detail={`missed ${t.missedAt ? formatClock(t.missedAt) : ""}${t.rejoined ? " · already rejoined once" : " · can rejoin once"}`}
+              actions={
+                t.rejoined ? undefined : (
+                  <Button
+                    title="Rejoin for customer"
+                    icon="restart_alt"
+                    variant="secondary"
+                    disabled={busy}
+                    onPress={() => setRejoinFor({ token: t })}
+                    style={styles.rowButton}
+                  />
+                )
+              }
+            />
+          ))}
+        </>
+      ) : null}
+      {rejoinFor ? (
+        <StaffRejoinCard
+          key={rejoinFor.token?.id ?? "blank"}
+          queueId={queue.id}
+          prefill={rejoinFor.token}
+          onDone={() => setRejoinFor(null)}
+          onScan={onVerify}
+        />
+      ) : !closed ? (
+        <Button
+          title="Rejoin for customer"
+          icon="restart_alt"
+          variant="secondary"
+          disabled={busy}
+          onPress={() => setRejoinFor({ token: null })}
+          accessibilityLabel="Rejoin a missed customer by number and check code"
+        />
+      ) : null}
+
       <StatRow
         stats={[
           { label: "Waiting", value: state.counts.waiting, icon: "groups" },
@@ -802,6 +898,11 @@ function ConsoleView({
           { label: "Total", value: state.counts.total, icon: "groups" },
         ]}
       />
+      {(state.counts.booked ?? 0) > 0 ? (
+        <ThemedText type="small" themeColor="inkMuted">
+          {`${state.counts.booked} Priority ${state.counts.booked === 1 ? "Pass is" : "Passes are"} paid but not checked in yet (not in the line).`}
+        </ThemedText>
+      ) : null}
       {!closed ? (
         <ThemedText type="small" themeColor="inkMuted">
           Someone joining now:{" "}
@@ -900,19 +1001,26 @@ function TokenRow({
   onLongPress?: () => void;
 }) {
   const theme = useTheme();
+  // The lane it is called from: passes (P numbers) and upgraded tickets
+  // (same number) are in the priority lane.
+  const lane = token.lane ?? token.cls;
   const base =
-    token.cls === "triage"
+    lane === "triage"
       ? "Triage"
-      : token.cls === "priority"
-        ? "Priority"
+      : lane === "priority"
+        ? token.series === "P"
+          ? "Priority Pass"
+          : "Priority · upgraded"
         : METHOD_LABELS[token.method];
   // C4: carried over from an earlier session (same number, served first).
   const tag = token.carriedOver ? `${base} · Kept` : base;
+  // C4 (2026-10-18): the holder's full name, online console only.
+  const line = token.holderName ? `${token.holderName} · ${detail}` : detail;
   return (
     <Pressable
       onLongPress={onLongPress}
       disabled={!onLongPress}
-      accessibilityLabel={`#${token.label}, ${tag}, ${detail}`}
+      accessibilityLabel={`#${token.label}, ${tag}, ${line}`}
       style={[
         styles.row,
         { backgroundColor: theme.card, borderColor: theme.border },
@@ -929,10 +1037,16 @@ function TokenRow({
         <View style={styles.flex}>
           <Badge
             label={token.paid ? `${tag} · Paid` : tag}
-            tone={token.cls === "triage" ? "danger" : "neutral"}
+            tone={
+              lane === "triage"
+                ? "danger"
+                : lane === "priority"
+                  ? "success"
+                  : "neutral"
+            }
           />
           <ThemedText type="small" themeColor="inkMuted">
-            {detail}
+            {line}
           </ThemedText>
         </View>
         {trailing}
@@ -997,6 +1111,7 @@ const styles = StyleSheet.create({
     gap: Spacing.twoHalf,
   },
   rowActions: { flexDirection: "row", gap: Spacing.two },
+  dueRow: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
   labelPill: {
     minWidth: 64,
     paddingHorizontal: Spacing.two,
