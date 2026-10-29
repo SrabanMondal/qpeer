@@ -1,4 +1,4 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { type Href, Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { Alert } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
@@ -185,6 +185,17 @@ export default function BusinessScreen() {
 
       {b.myRole === "owner" ? (
         <>
+          <SectionHeader title="Money" />
+          <ListItem
+            icon="receipt_long"
+            title="Payments"
+            subtitle="Reservations, Priority Passes, refunds and your share"
+            onPress={() =>
+              router.push(
+                `/business/${encodeURIComponent(id)}/payments` as Href,
+              )
+            }
+          />
           <SectionHeader title="Public stats" />
           <Card>
             <AppSwitch
