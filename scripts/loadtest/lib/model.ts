@@ -81,7 +81,11 @@ export type QueueEventKind =
   | "resume"
   | "join"
   | "leave"
-  | "close";
+  | "close"
+  /** Step 4: "I'm here" after MISSED (moves the token back in the order). */
+  | "rejoin"
+  /** Step 4: a Priority Pass checked in (raises regulars' people ahead). */
+  | "checkin";
 
 export interface QueueEvent {
   at: number;
@@ -110,10 +114,13 @@ export interface ConsoleSnapshot {
   queueId: string;
   at: number;
   status: string;
+  /** In predicted call order (lanes merged by the credit rule, Step 4). */
   waiting: {
     id: string;
     position: number | null;
     cls: string;
+    /** Lane the token is called from (Step 4). */
+    lane: string;
     number: number;
   }[];
 }
@@ -140,6 +147,8 @@ export interface SimState {
   joinRetries: { recovered: number; viaAlreadyInQueue: number };
   joinsOk: Map<string, number>;
   triageOk: Map<string, number>;
+  /** Step 4: Priority Passes checked in per queue (each counts as a join). */
+  checkinsOk: Map<string, number>;
   pausedRejections: number;
   fullRejections: number;
   mapPolls: number;
@@ -160,6 +169,7 @@ export function newState(runId: string): SimState {
     joinRetries: { recovered: 0, viaAlreadyInQueue: 0 },
     joinsOk: new Map(),
     triageOk: new Map(),
+    checkinsOk: new Map(),
     pausedRejections: 0,
     fullRejections: 0,
     mapPolls: 0,
@@ -181,4 +191,10 @@ export const TERMINAL_STATES = new Set([
   "LEFT",
   "CANCELLED",
 ]);
-export const ACTIVE_STATES = new Set(["WAITING", "CALLED", "GRACE"]);
+export const ACTIVE_STATES = new Set([
+  "BOOKED",
+  "WAITING",
+  "CALLED",
+  "GRACE",
+  "MISSED",
+]);

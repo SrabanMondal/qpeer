@@ -1,4 +1,7 @@
 /**
+ * No imports on purpose: the load-test checker (Node type stripping, no
+ * dependencies) imports this file directly.
+ *
  * Priority lane, credit counter and missed-turn placement (decided
  * 2026-10-18; HLD §5.2, architecture doc §9.4). Pure functions shared by the
  * QueueDO (the source of the numbers), the purchase preview, the upgrade
@@ -66,8 +69,9 @@ export function callOrder<T>(
       c,
       perRegular,
     );
-    if (lane === null) return out;
-    out.push(lane === "priority" ? lanes.priority[p++] : lanes.regular[r++]);
+    const item = lane === "priority" ? lanes.priority[p++] : lanes.regular[r++];
+    if (lane === null || item === undefined) return out;
+    out.push(item);
     c = creditsAfterCall(c, lane, perRegular);
   }
 }

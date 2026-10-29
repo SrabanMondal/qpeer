@@ -24,19 +24,33 @@ export const MAP_BOX = {
   maxLng: JAMMU.lng + 0.25,
 };
 const M_PER_DEG = 111_320;
-/** Loadtest queue settings: 1-minute grace so expiries happen inside a run. */
+/**
+ * Loadtest queue settings: 1-minute grace so expiries (→ MISSED) happen
+ * inside a run; Step 4: the priority lane on (1 in 2) and a short rejoin
+ * delay / late window so "I'm here" lands both behind K and at the end.
+ */
 const QUEUE_SETTINGS = {
   graceMinutes: 1,
   joinRadiusM: 150,
   maxSize: 500,
   triageDailyCap: 5,
   counters: 1,
+  priorityEnabled: true,
+  priorityPerRegular: 2,
+  rejoinDelayMin: 2,
+  lateWindowMin: 2,
 };
+/** Step 4: Priority Passes checked in per queue during a run (no Razorpay). */
+const PASSES_PER_QUEUE = 2;
+/** Share of polling customers who tap "I'm here" after MISSED. */
+const REJOIN_SHARE = 0.6;
 
 interface ConsoleToken {
   id: string;
   number: number;
   cls: string;
+  /** Step 4: lane the token is called from. */
+  lane?: string;
   state: string;
   position: number | null;
   calledAt: number | null;
@@ -214,6 +228,18 @@ export async function loadPhase(d: SimDeps): Promise<{ stoppedBy: string }> {
 
   const queues = [...state.queues.values()];
   for (const q of queues) guard(staffLoop(d, q, stop, scale));
+  // Step 4: Priority Pass holders arrive mid-run, while regulars wait.
+  queues.forEach((q, qi) => {
+    for (let k = 0; k < PASSES_PER_QUEUE; k++) {
+      const at = cfg.durationMs * rng.between(0.25, 0.6);
+      guard(
+        (async () => {
+          await sleep(at, stop);
+          if (!stop.aborted) await passHolder(d, q, qi, k, stop);
+        })(),
+      );
+    }
+  });
   for (let m = 0; m < cfg.mapClients; m++) {
     guard(mapPoller(d, m, stop, scale));
   }
@@ -247,6 +273,7 @@ export async function loadPhase(d: SimDeps): Promise<{ stoppedBy: string }> {
         ? rng.between(0.1, 0.5) * cfg.durationMs
         : null,
       pollEvery: Math.max(10_000, 40_000 * scale) * rng.between(0.8, 1.2),
+      rejoin: rng.chance(REJOIN_SHARE),
       distance: rng.between(0, 60),
       angle: rng.between(0, Math.PI * 2),
       accuracy: rng.between(5, 30),
@@ -277,9 +304,88 @@ interface CustomerPlan {
   doubleJoin: boolean;
   leaveAfter: number | null;
   pollEvery: number;
+  /** Step 4: taps "I'm here" once when it sees its ticket MISSED (polling customers). */
+  rejoin: boolean;
   distance: number;
   angle: number;
   accuracy: number;
+}
+
+/**
+ * Step 4: a registered customer with a checked-in Priority Pass (made by the
+ * loadtest-only route: the load test has no Razorpay). Polls its ticket
+ * until it ends, like a polling customer.
+ */
+async function passHolder(
+  d: SimDeps,
+  q: SimQueue,
+  qi: number,
+  k: number,
+  stop: AbortSignal,
+) {
+  const { api, signer, state } = d;
+  const sub = `lt-${state.runId}-pass${qi}-${k}`;
+  const user: SimUser = {
+    sub,
+    token: signer.token(sub, {
+      registered: true,
+      phone: `+9177${String(qi * 10 + k).padStart(8, "0")}`,
+    }),
+    registered: true,
+    hasDevice: false,
+  };
+  const at = Date.now();
+  const r = await api.req<TokenView>(
+    "POST",
+    `/v1/loadtest/queues/${q.id}/priority-pass`,
+    "/loadtest/queues/:id/priority-pass",
+    user.token,
+  );
+  logEvent(state, q.id, {
+    at,
+    doneAt: Date.now(),
+    kind: "checkin",
+    tokenId: r.status === 201 ? r.body.id : null,
+    ok: r.status === 201,
+    status: r.status,
+    code: r.code,
+    error: r.error,
+  });
+  if (r.status !== 201) {
+    if (r.code === "queue_paused" || r.code === "queue_closed") return;
+    unexpected(state, "POST /loadtest/queues/:id/priority-pass", r);
+    return;
+  }
+  state.checkinsOk.set(q.id, (state.checkinsOk.get(q.id) ?? 0) + 1);
+  const tok: SimToken = {
+    id: r.body.id,
+    queueId: q.id,
+    user,
+    number: r.body.number,
+    series: r.body.series,
+    joinedAt: Date.now(),
+    observations: [observe(r.body, "join")],
+    live: null,
+    leftOk: false,
+  };
+  state.tokens.set(tok.id, tok);
+  const every = 15_000;
+  while (!stop.aborted) {
+    await sleep(every, stop);
+    if (stop.aborted) return;
+    const g = await api.req<TokenView>(
+      "GET",
+      `/v1/tokens/${tok.id}`,
+      "/tokens/:id",
+      user.token,
+    );
+    if (g.status !== 200) {
+      unexpected(state, "GET /tokens/:id", g);
+      continue;
+    }
+    tok.observations.push(observe(g.body, "http"));
+    if (TERMINAL_STATES.has(g.body.state)) return;
+  }
 }
 
 async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
@@ -464,6 +570,7 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
 
   let leaveAt = p.leaveAfter === null ? null : tok.joinedAt + p.leaveAfter;
   let nextPoll = tok.live ? null : Date.now() + p.pollEvery;
+  let rejoined = false;
   while (!stop.aborted) {
     const last = shownLast(tok.observations);
     if (last && TERMINAL_STATES.has(last.state)) return;
@@ -516,6 +623,38 @@ async function customer(d: SimDeps, p: CustomerPlan, stop: AbortSignal) {
       if (r.status === 200) tok.observations.push(observe(r.body, "http"));
       else unexpected(state, "GET /tokens/:id", r);
       nextPoll = Date.now() + p.pollEvery;
+      // Step 4 (QUE-23): "I'm here" once after MISSED, with the GPS check.
+      if (
+        p.rejoin &&
+        !rejoined &&
+        r.status === 200 &&
+        r.body.state === "MISSED"
+      ) {
+        rejoined = true;
+        state.coordinates.push(point);
+        const at = Date.now();
+        const j = await api.req<TokenView>(
+          "POST",
+          `/v1/tokens/${tok.id}/rejoin`,
+          "/tokens/:id/rejoin",
+          user.token,
+          body,
+        );
+        logEvent(state, p.queue.id, {
+          at,
+          doneAt: Date.now(),
+          kind: "rejoin",
+          tokenId: tok.id,
+          ok: j.status === 200,
+          status: j.status,
+          code: j.code,
+          error: j.error,
+        });
+        if (j.status === 200) tok.observations.push(observe(j.body, "http"));
+        else if (j.code !== "queue_closed" && j.code !== "invalid_state") {
+          unexpected(state, "POST /tokens/:id/rejoin", j);
+        }
+      }
     }
   }
 }
@@ -725,6 +864,7 @@ function recordConsole(state: SimState, queueId: string, cs: ConsoleState) {
       id: t.id,
       position: t.position,
       cls: t.cls,
+      lane: t.lane ?? t.cls,
       number: t.number,
     })),
   };
