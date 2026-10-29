@@ -63,14 +63,30 @@ export const JOBS: Record<string, { name: string; run: Job }[]> = {
   ],
 };
 
-/** Runs every job for `cron`; one failing job doesn't stop the others. */
+/**
+ * The cron schedules whose jobs run for one trigger. The free plan allows 5
+ * cron triggers per account, so each env registers only the quarter-hour one
+ * and it also runs the hourly jobs at minute 0 and the daily jobs at 21:30
+ * UTC (INC-056). A direct hourly/daily trigger still runs just its own jobs.
+ */
+export function dueSchedules(cron: string, now: number): string[] {
+  if (cron !== CRON_QUARTER_HOUR) return [cron];
+  const d = new Date(now);
+  const due = [CRON_QUARTER_HOUR];
+  if (d.getUTCMinutes() === 0) due.push(CRON_HOURLY);
+  if (d.getUTCHours() === 21 && d.getUTCMinutes() === 30) due.push(CRON_DAILY);
+  return due;
+}
+
+/** Runs every job due for `cron`; one failing job doesn't stop the others. */
 export async function runScheduled(
   cron: string,
   env: JobEnv,
   now: number,
 ): Promise<Record<string, unknown>> {
   const results: Record<string, unknown> = {};
-  for (const job of JOBS[cron] ?? []) {
+  const jobs = dueSchedules(cron, now).flatMap((c) => JOBS[c] ?? []);
+  for (const job of jobs) {
     try {
       results[job.name] = await job.run(env, now);
       console.log(

@@ -12,7 +12,13 @@ import {
   TriageResponse,
 } from "@qpeer/shared";
 import { beforeAll, describe, expect, it, vi } from "vitest";
-import { CRON_HOURLY, runScheduled } from "../src/cron/jobs";
+import {
+  CRON_DAILY,
+  CRON_HOURLY,
+  CRON_QUARTER_HOUR,
+  dueSchedules,
+  runScheduled,
+} from "../src/cron/jobs";
 import { pushOverride } from "../src/modules/notifications/expo-push";
 import type { QueueDO } from "../src/queue/queue-do";
 import { expectError, expectOk, makeTestApi } from "./helpers";
@@ -879,5 +885,23 @@ describe("Devices and push receipts (ALR-02)", () => {
       .bind(dead, alive)
       .all<{ expo_push_token: string }>();
     expect(left.results.map((r) => r.expo_push_token)).toEqual([alive]);
+  });
+});
+
+describe("cron dispatch on one trigger (INC-056)", () => {
+  it("runs hourly jobs at minute 0 and daily jobs at 21:30 UTC", () => {
+    const at = (iso: string) => Date.parse(iso);
+    expect(dueSchedules(CRON_QUARTER_HOUR, at("2026-10-29T10:15:00Z"))).toEqual(
+      [CRON_QUARTER_HOUR],
+    );
+    expect(dueSchedules(CRON_QUARTER_HOUR, at("2026-10-29T10:00:00Z"))).toEqual(
+      [CRON_QUARTER_HOUR, CRON_HOURLY],
+    );
+    expect(dueSchedules(CRON_QUARTER_HOUR, at("2026-10-29T21:30:00Z"))).toEqual(
+      [CRON_QUARTER_HOUR, CRON_DAILY],
+    );
+    expect(dueSchedules(CRON_HOURLY, at("2026-10-29T10:15:00Z"))).toEqual([
+      CRON_HOURLY,
+    ]);
   });
 });

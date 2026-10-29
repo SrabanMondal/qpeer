@@ -31,7 +31,7 @@
   },
   // Must match the expressions in src/cron/jobs.ts.
   "triggers": {
-    "crons": ["*/15 * * * *", "0 * * * *", "30 21 * * *"]
+    "crons": ["*/15 * * * *"]
   },
   "env": {
     "dev": {
@@ -62,7 +62,7 @@
         "ENVIRONMENT": "dev"
       },
       "triggers": {
-        "crons": ["*/15 * * * *", "0 * * * *", "30 21 * * *"]
+        "crons": ["*/15 * * * *"]
       }
     },
     "demo": {
@@ -93,7 +93,7 @@
         "ENVIRONMENT": "demo"
       },
       "triggers": {
-        "crons": ["*/15 * * * *", "0 * * * *", "30 21 * * *"]
+        "crons": ["*/15 * * * *"]
       }
     },
     // Step 3.5 load test: Worker qpeer-api-loadtest. Test-only auth needs the
@@ -126,7 +126,7 @@
         "ENVIRONMENT": "loadtest"
       },
       "triggers": {
-        "crons": ["*/15 * * * *", "0 * * * *", "30 21 * * *"]
+        "crons": ["*/15 * * * *"]
       }
     }
   }
