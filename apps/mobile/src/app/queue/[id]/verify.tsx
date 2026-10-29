@@ -26,10 +26,16 @@ import {
 } from "@/components/ui";
 import { Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
-import { getToken, isNetworkError } from "@/lib/api";
+import { getToken, isNetworkError, useStaffRejoin } from "@/lib/api";
 import { serverNow } from "@/lib/clock";
-import { formatDateTime, tokenStatusBadge } from "@/lib/queue-format";
+import {
+  formatDateTime,
+  peopleAheadText,
+  tokenStatusBadge,
+} from "@/lib/queue-format";
 import { useTicketKeys } from "@/lib/ticket-keys";
+import { showToast } from "@/lib/toast";
+import { staffRejoinError } from "@/screens/staff-rejoin";
 
 type Live =
   | { kind: "idle" }
@@ -89,6 +95,10 @@ export default function VerifyTicketScreen() {
   const [permission, requestPermission, getPermission] = useCameraPermissions();
   const [check, setCheck] = useState<TicketCheck | null>(null);
   const [live, setLive] = useState<Live>({ kind: "idle" });
+  // R2: the scanned code itself, for "Rejoin for customer" after a miss.
+  const [scanned, setScanned] = useState<string | null>(null);
+  const [rejoinError, setRejoinError] = useState<string | null>(null);
+  const rejoin = useStaffRejoin(queueId);
   const handled = useRef(false);
 
   useEffect(() => {
@@ -103,6 +113,8 @@ export default function VerifyTicketScreen() {
     handled.current = true;
     const r = verifyTicket(result.data, keys, { now: serverNow(), queueId });
     setCheck(r);
+    setScanned(result.data);
+    setRejoinError(null);
     if (r.status === "malformed" || r.status === "bad_signature") return;
     setLive({ kind: "loading" });
     getToken(r.payload.t).then(
@@ -114,7 +126,28 @@ export default function VerifyTicketScreen() {
   const again = () => {
     setCheck(null);
     setLive({ kind: "idle" });
+    setScanned(null);
+    setRejoinError(null);
     handled.current = false;
+  };
+
+  const onRejoin = async () => {
+    if (!scanned) return;
+    setRejoinError(null);
+    try {
+      const r = await rejoin.mutateAsync({ signedTicket: scanned });
+      setLive({ kind: "ok", token: r.token });
+      showToast({
+        title: `#${r.token.label} is back in the line`,
+        message:
+          r.token.state === "WAITING"
+            ? `${peopleAheadText(r.token.peopleAhead, r.token.peopleAheadHigh)} ahead of them.`
+            : undefined,
+        tone: "success",
+      });
+    } catch (e) {
+      setRejoinError(staffRejoinError(e));
+    }
   };
 
   if (!permission) {
@@ -179,6 +212,31 @@ export default function VerifyTicketScreen() {
                   <ThemedText type="small" themeColor="inkMuted">
                     Kept from an earlier session.
                   </ThemedText>
+                ) : null}
+                {live.token.state === "MISSED" ? (
+                  <>
+                    <ThemedText type="small" themeColor="inkMuted">
+                      {live.token.rejoinAvailable === false
+                        ? "This ticket missed its turn and can't rejoin again."
+                        : "This ticket missed its turn. It can rejoin once, by the same rule as I'm here."}
+                    </ThemedText>
+                    {live.token.rejoinAvailable !== false &&
+                    check.status === "valid" ? (
+                      <Button
+                        title="Rejoin for customer"
+                        icon="restart_alt"
+                        variant="brand"
+                        loading={rejoin.isPending}
+                        onPress={() => void onRejoin()}
+                        needsNetwork
+                      />
+                    ) : null}
+                    {rejoinError ? (
+                      <ThemedText type="small" themeColor="danger">
+                        {rejoinError}
+                      </ThemedText>
+                    ) : null}
+                  </>
                 ) : null}
               </>
             ) : (

@@ -1,4 +1,9 @@
-import { ConsoleState, TriageResponse } from "@qpeer/shared";
+import {
+  ConsoleState,
+  type ConsoleToken,
+  type StaffRejoinBody,
+  TriageResponse,
+} from "@qpeer/shared";
 import {
   type QueryClient,
   useMutation,
@@ -75,8 +80,44 @@ export function storeConsole(
 ) {
   queryClient.setQueryData<ConsoleState>(
     queryKeys.console(uid, state.queueId),
-    (old) => (old && old.updatedAt > state.updatedAt ? old : state),
+    (old) =>
+      old && old.updatedAt > state.updatedAt ? old : keepNames(old, state),
   );
+}
+
+/**
+ * C4: holder names come only with `GET /console`, never on socket messages;
+ * keep the names already known for the same tokens so they don't flicker
+ * away on the next live update.
+ */
+function keepNames(
+  old: ConsoleState | undefined,
+  next: ConsoleState,
+): ConsoleState {
+  if (!old) return next;
+  const names = new Map<string, string>();
+  for (const t of [
+    ...old.serving,
+    ...old.waiting,
+    ...old.grace,
+    ...(old.missed ?? []),
+  ]) {
+    if (t.holderName) names.set(t.id, t.holderName);
+  }
+  if (names.size === 0) return next;
+  const fill = (list: ConsoleToken[]) =>
+    list.map((t) =>
+      t.holderName == null && names.has(t.id)
+        ? { ...t, holderName: names.get(t.id) }
+        : t,
+    );
+  return {
+    ...next,
+    serving: fill(next.serving),
+    waiting: fill(next.waiting),
+    grace: fill(next.grace),
+    missed: next.missed ? fill(next.missed) : next.missed,
+  };
 }
 
 export function useConsole(queueId: string | null) {
@@ -94,6 +135,28 @@ export function useConsole(queueId: string | null) {
     },
     enabled: uid !== null && id.length > 0,
     staleTime: 5_000,
+  });
+}
+
+/**
+ * POST /v1/queues/:id/rejoin-for-customer (R2, QUE-29): number + check code
+ * or a scanned signed ticket. The answer has the same shape as triage's
+ * (`{ token, console }`).
+ */
+export function staffRejoin(queueId: string, body: StaffRejoinBody) {
+  return apiFetch(
+    `/v1/queues/${enc(queueId)}/rejoin-for-customer`,
+    TriageResponse,
+    { method: "POST", body },
+  );
+}
+
+export function useStaffRejoin(queueId: string) {
+  const uid = useAuth().user?.uid ?? null;
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (body: StaffRejoinBody) => staffRejoin(queueId, body),
+    onSuccess: (r) => storeConsole(queryClient, uid, r.console),
   });
 }
 
