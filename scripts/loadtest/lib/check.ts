@@ -37,6 +37,8 @@ interface DoToken {
   rev: number;
   peopleAhead: number | null;
   calledAt?: number | null;
+  joinedAt: number;
+  endedAt?: number | null;
   // Step 4 (absent from older Workers):
   peopleAheadHigh?: number | null;
   lane?: string;
@@ -781,21 +783,38 @@ function disturbedTokens(state: SimState): Set<string> {
   return s;
 }
 
-/** PRI-06: over a session, priority calls ≤ regular calls ÷ N + 1. */
+/**
+ * PRI-06: over a session, priority calls made while a regular was waiting ≤
+ * regular calls ÷ N + 1. A priority call with no regular waiting is allowed
+ * by design (`nextLane` in shared priority.ts: an idle counter calls the
+ * priority head), so it is not counted (INC-066).
+ */
 function fairnessFailures(audits: Map<string, Audit>): string[] {
   const f: string[] = [];
   for (const [id, a] of audits) {
     const n = Math.max(1, a.do.priority?.perRegular ?? 1);
-    const called = a.do.tokens.filter(
+    const session = a.do.tokens.filter((t) => t.sessionId === a.do.sessionId);
+    const called = session.filter(
       (t) =>
-        t.sessionId === a.do.sessionId &&
-        (t.state === "SERVED" || (t.calledAt ?? null) !== null || t.missedAt),
+        t.state === "SERVED" || (t.calledAt ?? null) !== null || t.missedAt,
     );
-    const priority = called.filter((t) => t.cls === "priority").length;
+    const regulars = session.filter((t) => t.cls === "regular");
+    const regularWaitingAt = (at: number) =>
+      regulars.some(
+        (r) =>
+          r.joinedAt < at &&
+          (r.calledAt ?? r.endedAt ?? Number.POSITIVE_INFINITY) > at,
+      );
+    const contested = called.filter(
+      (t) =>
+        t.cls === "priority" &&
+        t.calledAt != null &&
+        regularWaitingAt(t.calledAt),
+    ).length;
     const regular = called.filter((t) => t.cls === "regular").length;
-    if (priority > Math.floor(regular / n) + 1) {
+    if (contested > Math.floor(regular / n) + 1) {
       f.push(
-        `${id}: ${priority} priority calls vs ${regular} regular (N = ${n})`,
+        `${id}: ${contested} priority calls while regulars waited vs ${regular} regular (N = ${n})`,
       );
     }
   }

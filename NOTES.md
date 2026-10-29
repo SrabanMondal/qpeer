@@ -86,3 +86,4 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 - Earlier red runs and their fixes: runbook INC-020 to INC-034.
 - 2026-10-16T14:47Z `baseline` 50 customers / 120 s: **green**, 395 requests, join p95 2483 ms, next p95 1899 ms — [report](scripts/loadtest/reports/2026-10-16T14-47-56-863Z-baseline.md)
 - 2026-10-29T17:54Z `baseline` 50 customers / 120 s: **green**, 497 requests, join p95 1099 ms, next p95 695 ms — [report](scripts/loadtest/reports/2026-10-29T17-54-23-486Z-baseline.md)
+- 2026-10-29T18:48Z `baseline` 50 customers / 120 s: **RED**, 484 requests, join p95 1009 ms, next p95 724 ms; failing: Credit counter fairness (PRI-06) — [report](scripts/loadtest/reports/2026-10-29T18-48-47-250Z-baseline.md)

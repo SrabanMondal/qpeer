@@ -113,6 +113,7 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-063 | 2026-10-29 | A failed refund was never retried, and refunds could race | S1 | api | fixed | none | [file](incidents/INC-063-failed-refund-never-retried.md) |
 | INC-064 | 2026-10-30 | A busy scheduled run could pass the free-plan subrequest limit | S2 | api | fixed | none (review 2026-10-30) | [file](incidents/INC-064-cron-subrequest-limit.md) |
 | INC-065 | 2026-10-30 | A user could buy a second paid reservation in the same queue | S2 | api, queue engine, mobile | fixed-unverified-on-device | none (review 2026-10-30) | [file](incidents/INC-065-second-paid-reservation.md) |
+| INC-066 | 2026-10-30 | The load-test fairness check counted priority calls with no regular waiting | S4 | loadtest harness | fixed | none | [file](incidents/INC-066-fairness-check-too-strict.md) |
 
 ## Load-test runs
 
