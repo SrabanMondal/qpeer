@@ -1,4 +1,6 @@
 import { readFileSync } from "node:fs";
+// The same lane/credit rule the QueueDO uses (dependency-free file).
+import { callOrder } from "../../../packages/shared/src/priority.ts";
 import type { RunConfig } from "./config.ts";
 import type { Api } from "./http.ts";
 import type { Signer } from "./jwt.ts";
@@ -34,6 +36,13 @@ interface DoToken {
   endReason: string | null;
   rev: number;
   peopleAhead: number | null;
+  calledAt?: number | null;
+  // Step 4 (absent from older Workers):
+  peopleAheadHigh?: number | null;
+  lane?: string;
+  missedAt?: number | null;
+  rejoined?: boolean;
+  checkedInAt?: number | null;
 }
 interface Audit {
   do: {
@@ -43,6 +52,8 @@ interface Audit {
     waiting: number;
     pendingOutbox: number;
     tokens: DoToken[];
+    /** Step 4: N and the credit counter now. */
+    priority?: { enabled: boolean; perRegular: number; credits: number };
   };
   d1Tokens: {
     id: string;
@@ -280,9 +291,9 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
 
   invariants.push(
     inv(
-      "DO people-ahead == rank by sortKey",
+      "DO people-ahead == rank in the call order",
       rankFailures(auditA),
-      "peopleAhead of each WAITING token == WAITING tokens with a smaller sortKey",
+      "peopleAhead of each WAITING token == its index in the lanes merged by the credit rule (shared priority.ts); high end ≥ low end (C3)",
     ),
   );
 
@@ -452,10 +463,17 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
       inv(
         "Every token terminal after close",
         f,
-        "no WAITING/CALLED/GRACE left",
+        "no BOOKED/WAITING/CALLED/GRACE/MISSED left (MISSED never carries over, R4)",
       ),
     );
   }
+  invariants.push(
+    inv(
+      "Credit counter fairness (PRI-06)",
+      fairnessFailures(auditB),
+      "per session: priority calls ≤ regular calls ÷ N + 1",
+    ),
+  );
   invariants.push(
     inv(
       "Terminal states never move backwards",
@@ -493,8 +511,20 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
       }
       const toks = a.do.tokens.filter((t) => t.sessionId === a.do.sessionId);
       const count = (pred: (t: DoToken) => boolean) => toks.filter(pred).length;
+      // A Priority Pass joins the line when it checks in (Step 4).
       const simJoins =
-        (state.joinsOk.get(id) ?? 0) + (state.triageOk.get(id) ?? 0);
+        (state.joinsOk.get(id) ?? 0) +
+        (state.triageOk.get(id) ?? 0) +
+        (state.checkinsOk.get(id) ?? 0);
+      // R4: every miss is a no-show — the first one (MISSED) and, after the
+      // one rejoin, a second one that ends the ticket.
+      const misses = toks.reduce(
+        (n, t) =>
+          n +
+          (t.missedAt ? 1 : 0) +
+          (t.rejoined && t.endReason === "no_show" ? 1 : 0),
+        0,
+      );
       const simLeaves = (state.events.get(id) ?? []).filter(
         (e) => e.kind === "leave" && e.ok,
       ).length;
@@ -508,11 +538,7 @@ export async function checkPhase(d: CheckDeps): Promise<CheckResult> {
           sum.served,
           count((t) => t.state === "SERVED"),
         ],
-        [
-          "no-shows vs expired no-show tokens",
-          sum.noShows,
-          count((t) => t.endReason === "no_show"),
-        ],
+        ["no-shows vs misses (R4)", sum.noShows, misses],
         ["cancels", sum.cancels, 0],
       ];
       for (const [what, got, want] of expect) {
@@ -678,6 +704,8 @@ function numberFailures(audits: Map<string, Audit>): string[] {
       groups.set(k, list);
     }
     for (const [k, nums] of groups) {
+      // A BOOKED pass has no session or number yet (Step 4).
+      if (k.startsWith("/")) continue;
       const sorted = [...nums].sort((a, b) => a - b);
       sorted.forEach((n, i) => {
         if (n !== i + 1) {
@@ -693,28 +721,56 @@ function numberFailures(audits: Map<string, Audit>): string[] {
   return f.slice(0, MAX_FAILURES);
 }
 
+const RANK_SPAN = 1e15;
+
+/**
+ * PRI-06/PRI-08: people ahead = index in the predicted call order — the
+ * lanes (sort-key rank: triage, priority, regular) merged by the credit
+ * rule, with the DO's own credits and N, through the shared `callOrder`.
+ * Without priority tokens this is the old "rank by sortKey". The C3 high end
+ * may only be ≥ the low end.
+ */
 function rankFailures(audits: Map<string, Audit>): string[] {
   const f: string[] = [];
   for (const a of audits.values()) {
     const waiting = a.do.tokens
       .filter((t) => t.state === "WAITING")
       .sort((x, y) => x.sortKey - y.sortKey);
-    waiting.forEach((t, i) => {
+    const lane = (r: number) =>
+      waiting.filter(
+        (t) => Math.min(2, Math.floor(t.sortKey / RANK_SPAN)) === r,
+      );
+    const order = callOrder(
+      { triage: lane(0), priority: lane(1), regular: lane(2) },
+      a.do.priority?.credits ?? 0,
+      a.do.priority?.perRegular ?? 1,
+    );
+    order.forEach((t, i) => {
       if (t.peopleAhead !== i) {
-        f.push(`${t.id}: peopleAhead ${t.peopleAhead}, rank ${i}`);
+        f.push(`${t.id}: peopleAhead ${t.peopleAhead}, call-order rank ${i}`);
+      }
+      if (
+        t.peopleAheadHigh !== undefined &&
+        t.peopleAheadHigh !== null &&
+        t.peopleAheadHigh < (t.peopleAhead ?? 0)
+      ) {
+        f.push(`${t.id}: high ${t.peopleAheadHigh} < low ${t.peopleAhead}`);
       }
     });
   }
   return f;
 }
 
-/** Tokens whose place was changed on purpose (skip, undo) — excluded from FIFO checks. */
+/**
+ * Tokens whose place was changed on purpose (skip, undo, "I'm here" rejoin)
+ * — excluded from FIFO checks.
+ */
 function disturbedTokens(state: SimState): Set<string> {
   const s = new Set<string>();
   for (const list of state.events.values()) {
     for (const e of list) {
       if (
-        (e.kind === "skip" || e.kind === "undo") &&
+        (e.kind === "skip" || e.kind === "undo" || e.kind === "rejoin") &&
         e.tokenId &&
         mayHaveHappened(e)
       ) {
@@ -723,6 +779,27 @@ function disturbedTokens(state: SimState): Set<string> {
     }
   }
   return s;
+}
+
+/** PRI-06: over a session, priority calls ≤ regular calls ÷ N + 1. */
+function fairnessFailures(audits: Map<string, Audit>): string[] {
+  const f: string[] = [];
+  for (const [id, a] of audits) {
+    const n = Math.max(1, a.do.priority?.perRegular ?? 1);
+    const called = a.do.tokens.filter(
+      (t) =>
+        t.sessionId === a.do.sessionId &&
+        (t.state === "SERVED" || (t.calledAt ?? null) !== null || t.missedAt),
+    );
+    const priority = called.filter((t) => t.cls === "priority").length;
+    const regular = called.filter((t) => t.cls === "regular").length;
+    if (priority > Math.floor(regular / n) + 1) {
+      f.push(
+        `${id}: ${priority} priority calls vs ${regular} regular (N = ${n})`,
+      );
+    }
+  }
+  return f;
 }
 
 function orderFailures(
@@ -734,11 +811,23 @@ function orderFailures(
   const checkList = (
     label: string,
     list: { id: string; cls: string; number: number }[],
+    /** Console lists are in call order: priority and regular interleave (PRI-06). */
+    callOrder = false,
   ) => {
     let rank = -1;
     let lastRegular = -1;
+    let lastPriority = -1;
     for (const t of list) {
-      const r = CLASS_RANK[t.cls] ?? 9;
+      const r = callOrder
+        ? Math.min(1, CLASS_RANK[t.cls] ?? 9)
+        : (CLASS_RANK[t.cls] ?? 9);
+      // Passes are ordered by check-in time = their P number.
+      if (t.cls === "priority" && !disturbed.has(t.id)) {
+        if (t.number < lastPriority) {
+          f.push(`${label}: priority P${t.number} after P${lastPriority}`);
+        }
+        lastPriority = Math.max(lastPriority, t.number);
+      }
       // A skipped (or undo-restored) token may sit behind lower classes: skip
       // puts it behind the next 3 people, whoever they are (§23, G1). It still
       // counts for the tokens after it, so a skip that lifted a token into a
@@ -766,12 +855,17 @@ function orderFailures(
         f.push(`${snap.queueId} console: position ${t.position} at index ${i}`);
       }
     });
-    checkList(`${snap.queueId} console`, snap.waiting);
+    checkList(`${snap.queueId} console`, snap.waiting, true);
   }
   return [...new Set(f)].slice(0, MAX_FAILURES);
 }
 
-const CAUSES = new Set(["skip", "triage", "undo"]);
+/**
+ * What may raise someone's people ahead: a skip, a triage insert, an undo,
+ * and (Step 4) a rejoin inserted ahead or a Priority Pass check-in (the C3
+ * low end counts holders already checked in).
+ */
+const CAUSES = new Set(["skip", "triage", "undo", "rejoin", "checkin"]);
 const SLACK_MS = 2_000;
 /** Share of requests that may fail to connect (client network) before RED. */
 const CLIENT_NETWORK_MAX_SHARE = 0.01;
@@ -887,13 +981,17 @@ function pushFailures(
   for (const a of audits.values()) {
     for (const t of a.do.tokens) doTokens.set(t.id, t);
   }
-  const requeues = new Map<string, { skips: number; undos: number }>();
+  type Requeues = { skips: number; undos: number; rejoins: number };
+  const requeues = new Map<string, Requeues>();
+  const none = (): Requeues => ({ skips: 0, undos: 0, rejoins: 0 });
   for (const list of state.events.values()) {
     for (const e of list) {
       if (!mayHaveHappened(e) || !e.tokenId) continue;
-      const r = requeues.get(e.tokenId) ?? { skips: 0, undos: 0 };
+      const r = requeues.get(e.tokenId) ?? none();
       if (e.kind === "skip") r.skips++;
       if (e.kind === "undo") r.undos++;
+      // Step 4: a rejoin sends the ticket back; its next call alerts again.
+      if (e.kind === "rejoin") r.rejoins++;
       requeues.set(e.tokenId, r);
     }
   }
@@ -911,14 +1009,16 @@ function pushFailures(
       f.push(`${tokenId}: pushes without a registered device`);
       continue;
     }
-    const rq = requeues.get(tokenId) ?? { skips: 0, undos: 0 };
+    const rq = requeues.get(tokenId) ?? none();
     for (const [kind, n] of kinds) {
       const max =
         kind === "called"
-          ? 1 + rq.skips + rq.undos
-          : kind === "next"
-            ? 1 + rq.skips
-            : 1;
+          ? 1 + rq.skips + rq.undos + rq.rejoins
+          : kind === "next" || kind === "head_back"
+            ? 1 + rq.skips + rq.rejoins
+            : kind === "grace_started"
+              ? 1 + rq.rejoins
+              : 1;
       if (n > max) f.push(`${tokenId}: ${kind} × ${n} (max ${max})`);
     }
   }
@@ -929,21 +1029,30 @@ function pushFailures(
     if (!t) continue;
     const kinds = counts.get(sim.id) ?? new Map<string, number>();
     const called = kinds.get("called") ?? 0;
-    const rq = requeues.get(sim.id) ?? { skips: 0, undos: 0 };
-    const wasCalled = t.state === "SERVED" || t.endReason === "no_show";
+    const rq = requeues.get(sim.id) ?? none();
+    const wasCalled =
+      t.state === "SERVED" || t.endReason === "no_show" || Boolean(t.missedAt);
     if (wasCalled && called < 1)
       f.push(`${sim.id}: called but no 'called' push`);
-    if (wasCalled && rq.skips + rq.undos === 0 && called !== 1) {
+    if (wasCalled && rq.skips + rq.undos + rq.rejoins === 0 && called !== 1) {
       f.push(`${sim.id}: 'called' × ${called} (want exactly 1)`);
+    }
+    // ALR-08: one `missed` push per ticket that became MISSED.
+    if (t.missedAt && (kinds.get("missed") ?? 0) !== 1) {
+      f.push(`${sim.id}: missed × ${kinds.get("missed") ?? 0} (want 1)`);
     }
     if (t.endReason === "closed" && (kinds.get("queue_closed") ?? 0) !== 1) {
       f.push(
         `${sim.id}: queue_closed × ${kinds.get("queue_closed") ?? 0} (want 1)`,
       );
     }
-    if (t.endReason === "no_show" && (kinds.get("grace_started") ?? 0) !== 1) {
+    const graces = kinds.get("grace_started") ?? 0;
+    if (
+      t.endReason === "no_show" &&
+      (graces < 1 || graces > 1 + (t.rejoined ? 1 : 0))
+    ) {
       f.push(
-        `${sim.id}: grace_started × ${kinds.get("grace_started") ?? 0} (want 1)`,
+        `${sim.id}: grace_started × ${graces} (want 1${t.rejoined ? "–2" : ""})`,
       );
     }
   }

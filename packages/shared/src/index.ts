@@ -6,6 +6,8 @@ export * from "./hours";
 export * from "./live-text";
 export * from "./map";
 export * from "./map-view";
+export * from "./payments";
+export * from "./priority";
 export * from "./queue";
 export * from "./queue-settings";
 export * from "./schemas";

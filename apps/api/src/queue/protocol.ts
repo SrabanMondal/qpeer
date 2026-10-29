@@ -31,6 +31,7 @@ export const ALERT_BITS: Record<AlertKind, number> = {
   queue_paused: 16,
   queue_closed: 32,
   refund_issued: 64,
+  missed: 128,
 };
 
 /** Head-back alert lead: fire when the expected call is this close. */
@@ -60,9 +61,16 @@ export function alertText(
             : "Please go to the counter now.",
       };
     case "grace_started":
+      // HLD §5.2 step 1: "you were called, come now".
+      return {
+        title: "You were called — come now",
+        body: `Reach the counter within ${ctx.graceMinutes} min to keep your place.`,
+      };
+    case "missed":
+      // ALR-08 (R3, decided 2026-10-18).
       return {
         title: "You missed your turn",
-        body: `Reach the counter within ${ctx.graceMinutes} min to keep your place.`,
+        body: "You missed your turn. Tap I'm here when you arrive.",
       };
     case "queue_paused":
       return {

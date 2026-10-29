@@ -16,6 +16,7 @@ import { identityRoutes } from "./modules/identity/routes";
 import { loadtestRoutes } from "./modules/loadtest/routes";
 import { mapRoutes } from "./modules/map/routes";
 import { notificationRoutes } from "./modules/notifications/routes";
+import { paymentRoutes, webhookRoutes } from "./modules/payments/routes";
 import { queueRoutes } from "./modules/queue/routes";
 
 export type { AppEnv } from "./env";
@@ -61,6 +62,9 @@ export function createApp(deps?: AppDeps) {
     } satisfies TicketKeysResponse);
   });
 
+  // Step 4: Razorpay webhook — public, checked by its signature on the raw body.
+  app.route("/v1", webhookRoutes);
+
   // Everything else under /v1 needs a valid Firebase ID token.
   app.use(
     "/v1/*",
@@ -73,6 +77,7 @@ export function createApp(deps?: AppDeps) {
   app.route("/v1", businessRoutes);
   app.route("/v1", mapRoutes);
   app.route("/v1", queueRoutes);
+  app.route("/v1", paymentRoutes);
   app.route("/v1", notificationRoutes);
   app.route("/v1", devRoutes);
   app.route("/v1", loadtestRoutes);

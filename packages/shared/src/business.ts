@@ -7,7 +7,11 @@ import {
   WeeklyHours,
 } from "./hours";
 import { QueueLiveSummary } from "./queue";
-import { QueueSettings, QueueSettingsPatch } from "./queue-settings";
+import {
+  QueuePriorityInfo,
+  QueueSettings,
+  QueueSettingsPatch,
+} from "./queue-settings";
 
 export const BusinessCategory = z.enum([
   "clinic",
@@ -114,6 +118,8 @@ export const QueueView = z.object({
    * snapshot is written. Absent in queue create/update responses.
    */
   live: QueueLiveSummary.nullable().optional(),
+  /** Public Priority Pass fields ("Priority lane on · 1 in N", PRI-07). */
+  priority: QueuePriorityInfo.optional(),
   createdAt: z.number().int(),
   updatedAt: z.number().int(),
 });
@@ -208,8 +214,13 @@ export const QueueInfoResponse = z.object({
   }),
   myRole: BusinessRole.nullable(),
   live: QueueLiveSummary,
-  /** Walk-in GPS radius; the only queue setting shown to non-members. */
+  /** Walk-in GPS radius; shown to everyone. */
   joinRadiusM: z.number().int(),
+  /**
+   * Step 4: public Priority Pass fields for the join screen ("Priority lane
+   * on · 1 in N", price, "Sold out"); the wait ranges are in `live.priority`.
+   */
+  priority: QueuePriorityInfo.extend({ soldOut: z.boolean() }).optional(),
 });
 
 export type QueueInfoResponse = z.infer<typeof QueueInfoResponse>;

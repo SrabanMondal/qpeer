@@ -779,7 +779,7 @@ describe("Public business detail (MAP-05, MAP-06)", () => {
 });
 
 describe("Public queue view: joinRadiusM (deferred from Step 2)", () => {
-  it("non-members see joinRadiusM but no fees or other settings", async () => {
+  it("non-members see joinRadiusM and the public priority fields, but no other settings", async () => {
     const { queue } = await createListed(owner, area(15).at(), {
       joinRadiusM: 250,
       reservationFeePaise: 3500,
@@ -790,7 +790,16 @@ describe("Public queue view: joinRadiusM (deferred from Step 2)", () => {
     expect(info.joinRadiusM).toBe(250);
     expect(info.myRole).toBeNull();
     expect(info.queue.settings).toBeUndefined();
-    expect(raw).not.toMatch(/FeePaise|walkinQuotaPct|maxSize|settings/);
+    expect(raw).not.toMatch(
+      /reservationFeePaise|priorityFeePaise|walkinQuotaPct|maxSize|settings/,
+    );
+    // PRI-07 (§12): "Priority lane on · 1 in N", price and sold-out are public.
+    expect(info.priority).toEqual({
+      enabled: false,
+      perRegular: 2,
+      feePaise: 10000,
+      soldOut: false,
+    });
 
     const mine = await expectOk(
       await api.call("GET", `/v1/queues/${queue.id}`, owner),

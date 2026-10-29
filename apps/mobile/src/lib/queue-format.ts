@@ -116,6 +116,8 @@ export function tokenStatusBadge(
   t: Pick<TokenView, "state"> & { queueStatus?: LiveStatus },
 ): { label: string; tone: BadgeTone } {
   const map: Record<TokenState, { label: string; tone: BadgeTone }> = {
+    BOOKED: { label: "Booked", tone: "success" },
+    MISSED: { label: "Missed", tone: "warning" },
     WAITING: { label: "Waiting", tone: "success" },
     CALLED: { label: "Your turn", tone: "success" },
     GRACE: { label: "Late — come now", tone: "warning" },

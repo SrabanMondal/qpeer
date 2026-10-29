@@ -6,6 +6,7 @@ import {
   type CreateQueueBody,
   isOpenAt,
   type ListingRequirement,
+  priorityInfo,
   type QueueInfoResponse,
   type QueueLiveSummary,
   QueueSettings,
@@ -36,6 +37,8 @@ import { geohash } from "../../lib/geo";
 import { newId } from "../../lib/ids";
 import { DAY_MS, toMs } from "../../lib/time";
 import { findRole } from "../../middleware/guards";
+import type { PaidOutcome } from "../../queue/queue-do";
+import { type PayEnv, refundOutcomes } from "../payments/service";
 import { queueStub, unwrap } from "../queue/do-client";
 
 export const MAX_ACTIVE_QUEUES = 10;
@@ -43,8 +46,17 @@ export const MAX_ACTIVE_QUEUES = 10;
 export interface ServiceCtx {
   db: Db;
   now: number;
-  /** For QueueDO calls (init, settings, close, live summary). */
-  env: Pick<Bindings, "QUEUE">;
+  /** For QueueDO calls (init, settings, close, live summary) and refunds on close. */
+  env: Pick<Bindings, "QUEUE"> & Partial<PayEnv>;
+}
+
+/** Refunds after the business cancels (deactivate, archive): Step 4, §10.5. */
+async function refundAfterClose(
+  { db, now, env }: ServiceCtx,
+  outcomes: PaidOutcome[],
+): Promise<void> {
+  if (outcomes.length === 0 || !env.DB) return;
+  await refundOutcomes({ db, now, env: env as PayEnv }, outcomes);
 }
 
 // ---------- views ----------
@@ -64,6 +76,8 @@ function queueView(
     updatedAt: toMs(q.updatedAt),
   };
   if (live !== undefined) view.live = live;
+  // PRI-07: "Priority lane on · 1 in N" is public.
+  view.priority = priorityInfo(QueueSettings.parse(q.settingsJson));
   if (role) {
     view.settings = QueueSettings.parse(q.settingsJson);
     view.settingsVersion = q.settingsVersion;
@@ -450,8 +464,10 @@ export async function setBusinessStatus(
     );
   if (status === "inactive") {
     for (const q of await loadQueues(db, [businessId])) {
-      // TODO(Step 4): refund `paidTokens` returned by close().
-      unwrap(await queueStub(env, q.id).close());
+      // The business cancels: every paid token (BOOKED passes too) is
+      // refunded in full and nothing carries over (§10.5, PAY-15).
+      const r = unwrap(await queueStub(env, q.id).close({ business: true }));
+      await refundAfterClose({ db, now, env }, r.paidTokens);
     }
   } else {
     await markFirstListed(db, businessId, now);
@@ -594,7 +610,11 @@ export async function archiveQueue(
       "The queue still has waiting tokens",
     );
   }
-  unwrap(await queueStub(env, queueId).close());
+  // Archive = the business ends this queue: BOOKED passes are refunded (§10.5).
+  const closed = unwrap(
+    await queueStub(env, queueId).close({ business: true }),
+  );
+  await refundAfterClose({ db, now, env }, closed.paidTokens);
   const [updated] = await db
     .update(queues)
     .set({ status: "archived", updatedAt: new Date(now) })
@@ -618,6 +638,8 @@ export async function getQueueInfo(
   const role = await findRole(db, b.id, userId);
   const listed = isListed(b, await loadQueues(db, [b.id]));
   if (!role && (!listed || q.status !== "active")) throw notFound();
+  const settings = QueueSettings.parse(q.settingsJson);
+  const live = await queueStub(env, q.id).getSummary();
   return {
     queue: queueView(q, role),
     business: {
@@ -632,9 +654,14 @@ export async function getQueueInfo(
       todayHours: todayHours(b.hoursJson, now),
     },
     myRole: role,
-    live: await queueStub(env, q.id).getSummary(),
-    // Deferred from Step 2: the join screen shows the walk-in radius to everyone.
-    // Only this one setting is public (fees and the rest stay members-only).
-    joinRadiusM: QueueSettings.parse(q.settingsJson).joinRadiusM,
+    live,
+    // The join screen shows the walk-in radius to everyone.
+    joinRadiusM: settings.joinRadiusM,
+    // Step 4 (§12): the public Priority Pass fields for "Priority lane on ·
+    // 1 in N", the price and "Sold out". Other settings stay members-only.
+    priority: {
+      ...priorityInfo(settings),
+      soldOut: live.priority?.soldOut ?? false,
+    },
   };
 }

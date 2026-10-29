@@ -7,6 +7,7 @@ import {
   type TicketPayload,
   type TicketPublicJwk,
   type TokenView,
+  ticketHolder,
   ticketSigningInput,
 } from "@qpeer/shared";
 
@@ -92,8 +93,22 @@ function signer(env: TicketEnv): Promise<Signer | null> {
   return cached.signer;
 }
 
-/** The payload for a token view (`iat` = join time, so it is deterministic). */
-export function ticketPayload(t: TokenView, kid: string): TicketPayload | null {
+/** C4: who holds the ticket (only the first name and last 4 phone digits are signed). */
+export type TicketHolder = {
+  displayName: string | null;
+  phone: string | null;
+} | null;
+
+/**
+ * The payload for a token view (`iat` = join time, so it is deterministic).
+ * Step 4: the check code (R2) and the holder's first name + last 4 phone
+ * digits (C4). A BOOKED pass (no session or number yet) gets no ticket.
+ */
+export function ticketPayload(
+  t: TokenView,
+  kid: string,
+  holder: TicketHolder = null,
+): TicketPayload | null {
   if (!t.sessionId || !t.cls) return null;
   return {
     v: 1,
@@ -106,6 +121,8 @@ export function ticketPayload(t: TokenView, kid: string): TicketPayload | null {
     iat: t.joinedAt,
     exp: t.expiresAt ?? t.joinedAt + TICKET_DEFAULT_LIFETIME_MS,
     kid,
+    ...(t.checkCode ? { cc: t.checkCode } : {}),
+    ...(holder ? ticketHolder(holder) : {}),
   };
 }
 
@@ -113,11 +130,12 @@ export function ticketPayload(t: TokenView, kid: string): TicketPayload | null {
 export async function signTicket(
   env: TicketEnv,
   t: TokenView,
+  holder: TicketHolder = null,
 ): Promise<string | null> {
   if (!isActiveState(t.state)) return null;
   const s = await signer(env);
   if (!s) return null;
-  const payload = ticketPayload(t, s.kid);
+  const payload = ticketPayload(t, s.kid, holder);
   if (!payload) return null;
   const input = ticketSigningInput(payload);
   const sig = await crypto.subtle.sign("Ed25519", s.key, asciiBytes(input));
@@ -128,8 +146,9 @@ export async function signTicket(
 export async function withTicket(
   env: TicketEnv,
   t: TokenView,
+  holder: TicketHolder = null,
 ): Promise<TokenView> {
-  return { ...t, signedTicket: await signTicket(env, t) };
+  return { ...t, signedTicket: await signTicket(env, t, holder) };
 }
 
 /** Public keys for `GET /v1/ticket-keys`: the signing key plus rotation extras. */

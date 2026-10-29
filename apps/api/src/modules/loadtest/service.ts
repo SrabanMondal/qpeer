@@ -1,8 +1,9 @@
+import type { TokenView } from "@qpeer/shared";
 import type { Bindings } from "../../env";
 import { notFound } from "../../lib/errors";
 import type { AuditDump } from "../../queue/queue-do";
 import { LOADTEST_TICKET_PREFIX } from "../notifications/expo-push";
-import { queueStub } from "../queue/do-client";
+import { queueStub, unwrap } from "../queue/do-client";
 
 /**
  * Load-test helpers (Step 3.5). Only reachable through `loadtest/routes.ts`,
@@ -147,8 +148,40 @@ export async function auditQueue(
   return { do: dump, d1Tokens: rows.results };
 }
 
+/**
+ * Step 4: books and checks in a Priority Pass for `userId` straight on the
+ * DO (no Razorpay in the load test; the made-up order id matches no D1
+ * payment, so money items are no-ops). A pass that can't check in (queue
+ * paused/closed) is cancelled at once, so no BOOKED token outlives the run.
+ */
+export async function loadtestPass(
+  env: Env,
+  queueId: string,
+  userId: string,
+): Promise<TokenView> {
+  const stub = queueStub(env, queueId);
+  const order = `lt_${crypto.randomUUID()}`;
+  const booked = unwrap(
+    await stub.book({
+      userId,
+      paymentOrderId: order,
+      paymentId: order,
+      deviceHash: null,
+    }),
+  );
+  const r = await stub.checkIn(booked.token.id, userId);
+  if (!r.ok) {
+    await stub.cancel(booked.token.id, userId);
+    return unwrap(r);
+  }
+  return r.value;
+}
+
 /** Tables wiped by reset, children first (business_members/queues → businesses). */
 export const RESET_TABLES = [
+  "ledger_entries",
+  "payments",
+  "webhook_events",
   "push_tickets",
   "devices",
   "free_lane_strikes",

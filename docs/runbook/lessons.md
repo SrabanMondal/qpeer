@@ -32,6 +32,7 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 3. A flag that schedules work must clear when no work is left. Otherwise the alarm runs in a loop. ([INC-025](incidents/INC-025-far-fanout-alarm-spin.md))
 4. Recompute a value derived from state (like "now serving") after every change, not in one action only. ([INC-048](incidents/INC-048-now-serving-after-leave.md))
 5. A safety job that a step defers becomes a visible bug once data lives longer than a day. Build it with the feature. ([INC-047](incidents/INC-047-queue-open-overnight.md))
+6. In a D1 batch, use D1 prepared statements or Drizzle query builders, never `db.run(sql…)`. ([INC-055](incidents/INC-055-drizzle-run-in-d1-batch.md))
 
 ## Migrations
 
@@ -51,7 +52,7 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 ## Tooling
 
 1. Biome is the linter. Never run `npx expo lint`. It tries to add eslint to `package.json`. ([INC-019](incidents/INC-019-expo-lint-added-eslint.md))
-2. If you stop a background task that ran Metro or `wrangler tail`, its `node` processes can keep running. Read the command line of each process, then stop it by exact PID. ([INC-027](incidents/INC-027-wrangler-tail-file-lock.md), [INC-038](incidents/INC-038-metro-kept-running.md))
+2. If you stop a background task that ran Metro, `wrangler tail` or `wrangler dev`, its `node` and `workerd` processes can keep running. Check the port, read the command line of each process, then stop it by exact PID. ([INC-027](incidents/INC-027-wrangler-tail-file-lock.md), [INC-038](incidents/INC-038-metro-kept-running.md), [INC-054](incidents/INC-054-wrangler-dev-kept-running.md))
 3. If `npx expo install` fails with `EALLOWSCRIPTS`, run `npm install -w @qpeer/mobile <packages>`, then `npx expo install --check`. Approve install scripts in `allowScripts` in the root `package.json`. ([INC-037](incidents/INC-037-npm-eallowscripts.md))
 4. If a new `workers.dev` URL fails with a TLS error right after the first deploy, retry after a short wait. ([INC-036](incidents/INC-036-workers-dev-tls-after-deploy.md))
 5. If a slow DO and D1 integration test fails at random, raise its timeout. The API `testTimeout` is 20 s. ([INC-018](incidents/INC-018-flaky-dev-seed-test-timeout.md))

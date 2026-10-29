@@ -1,14 +1,22 @@
 import {
+  ACTIVE_TOKEN_STATES,
   type CancelResponse,
   type ConsoleState,
+  type ConsoleToken,
   distanceMeters,
   type JoinBody,
+  type LocationCheckBody,
   type MyTokensQuery,
+  normalizeCheckCode,
+  type PriorityPreview,
+  parseTokenLabel,
   QueueSettings,
+  type StaffRejoinBody,
   type TokenSummary,
   type TokenView,
   type TriageResponse,
   tokenLabel,
+  verifyTicket,
 } from "@qpeer/shared";
 import { and, desc, eq, gt, inArray, notInArray, sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
@@ -20,10 +28,10 @@ import {
   type TokenRow,
   tokens,
   type User,
+  users,
 } from "../../db/schema";
-import type { Bindings } from "../../env";
 import { AppError, notFound } from "../../lib/errors";
-import { type TicketEnv, withTicket } from "../../lib/ticket-sign";
+import { ticketPublicKeys, withTicket } from "../../lib/ticket-sign";
 import { toMs } from "../../lib/time";
 import { findRole } from "../../middleware/guards";
 import {
@@ -31,7 +39,7 @@ import {
   STRIKE_LIMIT,
   STRIKE_WINDOW_MS,
 } from "../../queue/outbox";
-import type { DoResult } from "../../queue/queue-do";
+import type { DoResult, StaffRejoinRef } from "../../queue/queue-do";
 import {
   initQueueDO,
   isListed,
@@ -39,6 +47,11 @@ import {
   loadQueue,
   loadQueues,
 } from "../business/service";
+import {
+  type PayEnv,
+  refundDueForToken,
+  refundOutcomes,
+} from "../payments/service";
 import { queueStub, unwrap } from "./do-client";
 
 /**
@@ -47,14 +60,14 @@ import { queueStub, unwrap } from "./do-client";
  */
 export interface QueueCtx {
   db: Db;
-  env: Pick<Bindings, "QUEUE"> & TicketEnv;
+  env: PayEnv;
   now: number;
 }
 
 /** Reported accuracy worse than this = no usable fix (JON-05). */
 export const MAX_ACCURACY_M = 1000;
 
-const ACTIVE = ["WAITING", "CALLED", "GRACE"] as const;
+const ACTIVE = ACTIVE_TOKEN_STATES;
 const RECENT_LIMIT = 20;
 
 // ---------- console (staff; the route guard resolved queue → business) ----------
@@ -86,13 +99,17 @@ export async function openQueue(
   return unwrap(await queueStub(env, queueId).open());
 }
 
-/** QUE-09: close for the day; remaining tokens expire. */
+/**
+ * QUE-09: close for the day; remaining tokens expire. Paid tokens that end
+ * are refunded (PAY-09, C6) right away; MISSED ones are forfeited unless the
+ * close is early (PAY-14/15). A failed refund is retried by the cron.
+ */
 export async function closeQueue(
-  { env }: QueueCtx,
+  ctx: QueueCtx,
   queueId: string,
 ): Promise<ConsoleState> {
-  const r = unwrap(await queueStub(env, queueId).close());
-  // TODO(Step 4): refund r.paidTokens via the payments service.
+  const r = unwrap(await queueStub(ctx.env, queueId).close());
+  await refundOutcomes(ctx, r.paidTokens);
   return r.console;
 }
 
@@ -149,11 +166,82 @@ export async function insertTriage(
   return unwrap(await queueStub(env, queueId).insertTriage());
 }
 
+/**
+ * Console state; C4 (2026-10-18): staff see each holder's full name when
+ * online (added here from D1; socket messages never carry names).
+ */
 export async function getConsole(
-  { env }: QueueCtx,
+  { db, env }: QueueCtx,
   queueId: string,
 ): Promise<ConsoleState> {
-  return queueStub(env, queueId).getState();
+  const stub = queueStub(env, queueId);
+  const [state, owners] = await Promise.all([
+    stub.getState(),
+    stub.consoleOwners(),
+  ]);
+  const userIds = [...new Set(Object.values(owners))];
+  if (userIds.length === 0) return state;
+  const names = new Map<string, string | null>();
+  for (let i = 0; i < userIds.length; i += 90) {
+    const rows = await db
+      .select({ id: users.id, name: users.displayName })
+      .from(users)
+      .where(inArray(users.id, userIds.slice(i, i + 90)))
+      .all();
+    for (const r of rows) names.set(r.id, r.name);
+  }
+  const named = (t: ConsoleToken): ConsoleToken => {
+    const uid = owners[t.id];
+    return uid ? { ...t, holderName: names.get(uid) ?? null } : t;
+  };
+  return {
+    ...state,
+    serving: state.serving.map(named),
+    waiting: state.waiting.map(named),
+    grace: state.grace.map(named),
+    missed: state.missed?.map(named),
+  };
+}
+
+/**
+ * R2 / QUE-29 staff "Rejoin for customer" after MISSED: ticket label +
+ * check code, or a scanned signed ticket QR (verified with the server's own
+ * keys, for this queue). Same once-only and position rule as "I'm here".
+ */
+export async function staffRejoin(
+  { env, now }: QueueCtx,
+  queueId: string,
+  body: StaffRejoinBody,
+): Promise<{ token: TokenView; console: ConsoleState }> {
+  let ref: StaffRejoinRef;
+  if ("signedTicket" in body) {
+    const check = verifyTicket(body.signedTicket, await ticketPublicKeys(env), {
+      now,
+      queueId,
+    });
+    if (check.status !== "valid") {
+      throw new AppError(404, "not_found", "This ticket can't be used here", {
+        ticket: check.status,
+      });
+    }
+    ref = { tokenId: check.payload.t };
+  } else {
+    const label = parseTokenLabel(body.label);
+    const code = normalizeCheckCode(body.checkCode);
+    if (!label || !code)
+      throw new AppError(404, "not_found", "No ticket matches");
+    ref = { ...label, checkCode: code };
+  }
+  return unwrap(await queueStub(env, queueId).staffRejoin(ref));
+}
+
+/** PRI-02: the honest preview before buying a pass (any signed-in user). */
+export async function priorityPreview(
+  { db, env }: QueueCtx,
+  queueId: string,
+): Promise<PriorityPreview> {
+  await loadJoinable(db, queueId);
+  return queueStub(env, queueId).priorityPreview();
 }
 
 // ---------- walk-in join (JON-04…07) ----------
@@ -200,30 +288,7 @@ export async function joinQueue(
   unwrap(await stub.checkJoin());
   const t2 = Date.now();
 
-  if (body.mocked) {
-    throw new AppError(422, "mock_location", "Fake location detected");
-  }
-  if (body.accuracyM > MAX_ACCURACY_M) {
-    throw new AppError(
-      422,
-      "no_location_fix",
-      "Location is not accurate enough",
-      {
-        maxAccuracyM: MAX_ACCURACY_M,
-      },
-    );
-  }
-  const settings = QueueSettings.parse(queue.settingsJson);
-  const distance = distanceMeters(
-    { lat: body.lat, lng: body.lng },
-    { lat: business.lat, lng: business.lng },
-  );
-  if (distance - body.accuracyM > settings.joinRadiusM) {
-    throw new AppError(422, "too_far", "You are too far from this queue", {
-      distanceM: Math.round(distance),
-      joinRadiusM: settings.joinRadiusM,
-    });
-  }
+  checkLocation(body, business, QueueSettings.parse(queue.settingsJson));
   const blockedUntil = user.freeLaneBlockedUntil
     ? toMs(user.freeLaneBlockedUntil)
     : null;
@@ -261,11 +326,108 @@ export async function joinQueue(
       }),
     );
   }
-  return withTicket(env, unwrap(result).token);
+  return withTicket(env, unwrap(result).token, user);
 }
 
 /** Joins slower than this log their phase timings. */
 const SLOW_JOIN_MS = 1_000;
+
+/**
+ * The walk-in GPS check (JON-05), shared by join, "I'm here" rejoin (QUE-23)
+ * and Priority Pass check-in (PRI-03): mocked → 422 `mock_location`,
+ * accuracy > 1000 m → 422 `no_location_fix`, distance − accuracy > radius
+ * → 422 `too_far`. The location is used for this check only: never stored,
+ * sent to the DO or logged.
+ */
+export function checkLocation(
+  body: { lat: number; lng: number; accuracyM: number; mocked: boolean },
+  business: { lat: number; lng: number },
+  settings: QueueSettings,
+): void {
+  if (body.mocked) {
+    throw new AppError(422, "mock_location", "Fake location detected");
+  }
+  if (body.accuracyM > MAX_ACCURACY_M) {
+    throw new AppError(
+      422,
+      "no_location_fix",
+      "Location is not accurate enough",
+      { maxAccuracyM: MAX_ACCURACY_M },
+    );
+  }
+  const distance = distanceMeters(
+    { lat: body.lat, lng: body.lng },
+    { lat: business.lat, lng: business.lng },
+  );
+  if (distance - body.accuracyM > settings.joinRadiusM) {
+    throw new AppError(422, "too_far", "You are too far from this queue", {
+      distanceM: Math.round(distance),
+      joinRadiusM: settings.joinRadiusM,
+    });
+  }
+}
+
+/** The owner's token row plus its queue's pin and settings, for a GPS check. */
+async function ownTokenWithPlace(db: Db, tokenId: string, userId: string) {
+  const row = await db
+    .select()
+    .from(tokens)
+    .where(eq(tokens.id, tokenId))
+    .get();
+  if (!row || row.userId !== userId) throw notFound();
+  const q = await loadQueue(db, row.queueId);
+  const b = await loadBusiness(db, q.businessId);
+  if (b.lat === null || b.lng === null) throw notFound();
+  return {
+    row,
+    business: { lat: b.lat, lng: b.lng },
+    settings: QueueSettings.parse(q.settingsJson),
+  };
+}
+
+/**
+ * QUE-23 "I'm here" after MISSED: the walk-in GPS check, then the DO places
+ * the ticket (R1). Once per ticket. Owner only.
+ */
+export async function rejoinToken(
+  { db, env }: QueueCtx,
+  user: User,
+  tokenId: string,
+  body: LocationCheckBody,
+): Promise<TokenView> {
+  const { row, business, settings } = await ownTokenWithPlace(
+    db,
+    tokenId,
+    user.id,
+  );
+  checkLocation(body, business, settings);
+  const view = unwrap(
+    await queueStub(env, row.queueId).rejoin(tokenId, user.id),
+  );
+  return withTicket(env, view, user);
+}
+
+/**
+ * PRI-03 Priority Pass check-in on arrival: the walk-in GPS check (a photo
+ * of the counter QR alone is not enough), then BOOKED → the priority lane.
+ */
+export async function checkInToken(
+  { db, env }: QueueCtx,
+  user: User,
+  tokenId: string,
+  body: LocationCheckBody,
+): Promise<TokenView> {
+  const { row, business, settings } = await ownTokenWithPlace(
+    db,
+    tokenId,
+    user.id,
+  );
+  checkLocation(body, business, settings);
+  const view = unwrap(
+    await queueStub(env, row.queueId).checkIn(tokenId, user.id),
+  );
+  return withTicket(env, view, user);
+}
 
 /**
  * C2: the JON-07 rule per device hash: 3 no-shows on this phone within 30
@@ -362,45 +524,75 @@ function viewFromRow(
     sessionId: row.sessionId,
     cls: row.class,
     expiresAt: row.expiresAt ? toMs(row.expiresAt) : null,
+    checkCode: row.checkCode,
+    missedAt: row.missedAt ? toMs(row.missedAt) : null,
+    checkedInAt: row.checkedInAt ? toMs(row.checkedInAt) : null,
   };
+}
+
+/** C4: the holder whose first name / last 4 phone digits go in the signed ticket. */
+async function holderOf(
+  db: Db,
+  userId: string | null,
+  caller: User,
+): Promise<User | null> {
+  if (!userId) return null;
+  if (userId === caller.id) return caller;
+  return (
+    (await db.select().from(users).where(eq(users.id, userId)).get()) ?? null
+  );
 }
 
 /** TOK-01/TOK-03: live token view (owner or staff of its business). */
 export async function getToken(
   { db, env }: QueueCtx,
   tokenId: string,
-  userId: string,
+  user: User,
 ): Promise<TokenView> {
-  const { row } = await loadTokenFor(db, tokenId, userId);
+  const { row } = await loadTokenFor(db, tokenId, user.id);
   const r = await queueStub(env, row.queueId).getToken(tokenId);
-  if (r.ok) return withTicket(env, r.value.token);
+  if (r.ok) {
+    const holder = await holderOf(db, r.value.userId, user);
+    return withTicket(env, r.value.token, holder);
+  }
   return viewFromRow(row, await namesFor(db, row.queueId));
 }
 
-/** QUE-10/TOK-05: leave. Owner, or staff of the business acting for them. */
+/**
+ * QUE-10/TOK-05: leave (no refund). Owner, or staff of the business acting
+ * for them. A BOOKED pass is cancelled instead (refund at the business's %).
+ */
 export async function leaveToken(
-  { db, env }: QueueCtx,
+  ctx: QueueCtx,
   tokenId: string,
   userId: string,
 ): Promise<TokenView> {
+  const { db, env } = ctx;
   const { row, isOwner } = await loadTokenFor(db, tokenId, userId);
-  return unwrap(
+  const view = unwrap(
     await queueStub(env, row.queueId).leave(tokenId, isOwner ? userId : null),
   );
+  if (view.paid) await refundDueForToken(ctx, tokenId);
+  return view;
 }
 
-/** TOK-05: cancel. Free tokens = leave; paid refunds come in Step 4. */
+/**
+ * TOK-05 / PAY-07: cancel. Free tokens = leave. Paid: the DO decides the
+ * refund (reservation inside the cancel window; BOOKED pass at the
+ * business's %); the Refunds API is called right away (cron retries).
+ */
 export async function cancelToken(
-  { db, env }: QueueCtx,
+  ctx: QueueCtx,
   tokenId: string,
   userId: string,
 ): Promise<CancelResponse> {
+  const { db, env } = ctx;
   const { row, isOwner } = await loadTokenFor(db, tokenId, userId);
   const r = unwrap(
     await queueStub(env, row.queueId).cancel(tokenId, isOwner ? userId : null),
   );
-  // TODO(Step 4): when r.token.paid && r.refund → Razorpay refund.
-  return r;
+  if (r.refund) await refundDueForToken(ctx, tokenId);
+  return { token: r.token, refund: r.refund, refundPct: r.refundPct };
 }
 
 /** TOK-06: my tokens from D1 — active (newest first) or recent history (last 20). */
@@ -446,6 +638,7 @@ export async function myTokens(
     endedAt: t.endedAt ? toMs(t.endedAt) : null,
     endReason: t.endReason,
     expiresAt: t.expiresAt ? toMs(t.expiresAt) : null,
+    checkCode: t.checkCode,
   }));
 }
 

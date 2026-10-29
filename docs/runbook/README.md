@@ -101,6 +101,8 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-051 | 2026-10-16 | `expo prebuild` rewrote the app's npm scripts | S4 | tooling | fixed | none | [file](incidents/INC-051-prebuild-rewrites-scripts.md) |
 | INC-052 | 2026-10-16 | An open ticket screen did not switch to the offline state | S3 | mobile | open | none | [file](incidents/INC-052-warm-offline-not-detected.md) |
 | INC-053 | 2026-10-16 | "No wait" before joining, "~4 min" right after | S3 | mobile, shared | open | none | [file](incidents/INC-053-no-wait-then-four-minutes.md) |
+| INC-054 | 2026-10-29 | `wrangler dev` kept port 8787 after its background task stopped | S4 | tooling | fixed | none | [file](incidents/INC-054-wrangler-dev-kept-running.md) |
+| INC-055 | 2026-10-29 | `db.run(sql…)` inside a Drizzle D1 batch failed every payment | S4 | api | fixed | none | [file](incidents/INC-055-drizzle-run-in-d1-batch.md) |
 
 ## Load-test runs
 

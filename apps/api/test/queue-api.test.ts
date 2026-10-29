@@ -472,7 +472,14 @@ describe("Console (staff)", () => {
       200,
       ConsoleState,
     );
-    expect(c.counts).toEqual({ waiting: 1, inService: 0, grace: 0, total: 1 });
+    expect(c.counts).toEqual({
+      waiting: 1,
+      inService: 0,
+      grace: 0,
+      total: 1,
+      missed: 0,
+      booked: 0,
+    });
     c = await expectOk(
       await api.call("POST", `/v1/queues/${q}/tokens/${b.id}/skip`, owner),
       200,

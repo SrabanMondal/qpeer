@@ -180,6 +180,8 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 ## M8 Payments (Razorpay test mode)
 
+> **Step 4 backend status (2026-10-29, branch `feat/step4-backend`, not yet on a phone, so not ticked):** server side built and covered by API/DO tests (named after the IDs) for PAY-01, PAY-03…PAY-15, PRI-01…PRI-12, QUE-02 (priority lane), QUE-06, QUE-22…QUE-29, ALR-08, and the server data for TOK-04 (BOOKED/MISSED states), TOK-08 (`rejoinAvailable`, `rejoinUntil`, `POST /v1/tokens/:id/rejoin`) and TOK-09 (`graceEndsAt`). PAY-02 and the TOK/PRI-07 screens are the mobile task. Razorpay calls were tested against a recording fake only; the real test-mode run is pending.
+
 - [ ] **PAY-01** Create order: checks sign-in (non-anonymous), queue open, walk-in quota, per-user cap. Amount comes from queue settings, never from the client.
 - [ ] **PAY-02** Checkout opens with the fee, refund rules and no-show rule shown first
 - [ ] **PAY-03** Client callback verified by signature → token allocated

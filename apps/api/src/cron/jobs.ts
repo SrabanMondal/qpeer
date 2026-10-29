@@ -1,8 +1,14 @@
+import { db } from "../db/client";
 import type { Bindings } from "../env";
 import {
   checkPushReceipts,
   pushTransport,
 } from "../modules/notifications/expo-push";
+import {
+  expireStaleOrders,
+  processDueRefunds,
+  reconcile,
+} from "../modules/payments/service";
 import { autoCloseQueues } from "../modules/queue/auto-close";
 
 /**
@@ -11,6 +17,8 @@ import { autoCloseQueues } from "../modules/queue/auto-close";
  */
 export const CRON_HOURLY = "0 * * * *";
 export const CRON_QUARTER_HOUR = "*/15 * * * *";
+/** Daily at 03:00 IST (21:30 UTC). */
+export const CRON_DAILY = "30 21 * * *";
 
 interface JobEnv {
   DB: D1Database;
@@ -18,6 +26,10 @@ interface JobEnv {
   /** `loadtest` swaps in the recording push sender (expo-push.ts). */
   ENVIRONMENT?: string;
   EXPO_ACCESS_TOKEN?: string;
+  RAZORPAY_KEY_ID?: string;
+  RAZORPAY_KEY_SECRET?: string;
+  RAZORPAY_WEBHOOK_SECRET?: string;
+  TICKET_SIGNING_KEY?: string;
 }
 
 type Job = (env: JobEnv, now: number) => Promise<unknown>;
@@ -29,11 +41,25 @@ export const JOBS: Record<string, { name: string; run: Job }[]> = {
       run: (env, now) => checkPushReceipts(env.DB, pushTransport(env), now),
     },
   ],
-  // Step 4: expire unpaid orders.
   [CRON_QUARTER_HOUR]: [
     // B20: close queues 30 min after their last hours range (safety net for
     // the DO's own alarm, see modules/queue/auto-close.ts).
     { name: "auto_close", run: (env) => autoCloseQueues(env) },
+    // Step 4: unpaid orders expire after 30 min (§10.1).
+    {
+      name: "expire_orders",
+      run: (env, now) => expireStaleOrders(db(env.DB), now),
+    },
+    // Step 4: refunds decided by a QueueDO (auto-close, validity, a failed
+    // inline refund) are made here.
+    {
+      name: "refunds",
+      run: (env, now) => processDueRefunds({ db: db(env.DB), env, now }, 40),
+    },
+  ],
+  // Step 4: payment reconciliation (§10.4, PAY-12) + webhook id cleanup.
+  [CRON_DAILY]: [
+    { name: "reconcile", run: (env, now) => reconcile(env, db(env.DB), now) },
   ],
 };
 

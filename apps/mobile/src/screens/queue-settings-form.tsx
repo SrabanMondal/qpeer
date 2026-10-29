@@ -23,7 +23,10 @@ import { apiFieldErrors, type FieldErrors, useFieldErrors } from "@/lib/form";
 import { formatRupees, paiseToRupeesText } from "@/lib/format";
 import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 
-type SettingKey = keyof QueueSettings;
+/** Plain number settings (the Step 4 switch/nullable ones need their own inputs). */
+type SettingKey = {
+  [K in keyof QueueSettings]: QueueSettings[K] extends number ? K : never;
+}[keyof QueueSettings];
 
 type FieldSpec = {
   key: SettingKey;

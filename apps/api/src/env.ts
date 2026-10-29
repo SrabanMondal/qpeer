@@ -22,6 +22,14 @@ export interface Bindings {
   TICKET_SIGNING_KEY?: string;
   /** C3: extra public JWK set accepted during a key rotation (var, optional). */
   TICKET_PUBLIC_KEYS?: string;
+  /**
+   * Step 4 Razorpay (test mode). All three are Worker secrets (`.dev.vars`
+   * locally); the key id is returned to the app in order responses, never
+   * bundled. Missing → payment routes answer 500 with a clear log line.
+   */
+  RAZORPAY_KEY_ID?: string;
+  RAZORPAY_KEY_SECRET?: string;
+  RAZORPAY_WEBHOOK_SECRET?: string;
 }
 
 export type AuthSource = "firebase" | "loadtest";
