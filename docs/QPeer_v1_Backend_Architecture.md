@@ -203,7 +203,7 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `analytics_hourly` | queue_id, business_id, hour_start (IST hour, epoch ms), joins, leaves, served, no_shows, cancels, sum_wait_ms, waits, sum_interval_ms, intervals, eta_hits, eta_total | pk(queue_id, hour_start), idx(business_id, hour_start) | 2 (written), 5 (read) |
 | `ratings` *(x)* | id, token_id, business_id, queue_id, user_id, lane (`regular`/`priority`), experience_stars (0–5), service_stars (0–5), created_at. Replaces the older `reviews` (stars + text) row, superseded 2026-10-18. | unique(token_id), idx(business_id, created_at) | 6 |
 
-**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, Priority Pass (2026-10-18, all business-set, no platform limits): `priorityEnabled` false, `priorityFeePaise` 10000 (pass and upgrade price), `priorityPerRegular` N (whole number ≥ 1; the form prefills 2 when switched on; replaces the old "0 = off"), `priorityDailyCap` null (no cap), `priorityValidityMin` 0 (= today; else hours to days), `priorityCancelRefundPct` 50, `upgradeMinSavingMin` 5; `businessSharePct` 70, `graceMinutes` 10, missed-turn rejoin (R1, decided 2026-10-18): `rejoinDelayMin` 15 (penalty in minutes of service, turned into people at rejoin time, §9.4), `lateWindowMin` 15 (null = no limit; "I'm here" after the window → end of the line); `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2, `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
+**Settings JSON** (`queues.settings_json`, validated by a shared zod schema with defaults): `joinRadiusM` 150, `walkinQuotaPct` 50, `reservationFeePaise` 2000, Priority Pass (2026-10-18, all business-set, no platform limits): `priorityEnabled` false, `priorityFeePaise` 10000 (pass and upgrade price), `priorityPerRegular` N (whole number ≥ 1; the form prefills 2 when switched on; replaces the old "0 = off"), `priorityDailyCap` null (no cap), `priorityValidityMin` 0 (= today; else hours to days), `priorityCancelRefundPct` 50, `upgradeMinSavingMin` 5; `businessSharePct` 70, `graceMinutes` 10, missed-turn rejoin (R1, decided 2026-10-18): `rejoinDelayMin` 15 (penalty in minutes of service, turned into people at rejoin time, §9.4), `lateWindowMin` 15 (null = no limit; "I'm here" after the window → end of the line); `cancelWindowMin` 15, `counters` 1, `maxSize` 300, `serviceMinutesHint` 5, `triageDailyCap` 5, `paidPerUserCap` 2 (retired 2026-10-30, INC-065: still accepted and stored, never read; one active ticket per person per queue applies to paid reservations), `ticketValidityMin` 0 (C4: 0 = until the queue closes; else 1 h … 7 days from joining, presets 1 h, 2 h, 4 h, 8 h, 1 day, 2 days, 7 days in the app; max 10 080). Changing settings increments `settings_version`; the QueueDO receives the new settings and applies them to **new** tokens only (a token's `expires_at` is fixed at join).
 
 **Step 4 data (2026-10-18):** token state `BOOKED`, `tokens.checked_in_at` (check-in or upgrade time), `tokens.session_id` empty while BOOKED (the pass gets its session and P number at check-in), `payments.device_hash`, `payments.refund_paise`.
 
@@ -301,9 +301,9 @@ Terminal: `SERVED`, `EXPIRED`, `LEFT`, `CANCELLED`. A token is **active** while 
 | `updateSettings(settings, version)` | New settings for new tokens | Ignores older versions |
 | `open()` / `close()` | Start/end a session | `close` returns paid tokens to refund |
 | `pause()` / `resume()` | Pause state, paused time excluded from ETA | |
-| `allocate({ method, userId, cls, paymentOrderId?, deviceHash? })` | New token at the end of its class | Checks: open, not full, one active free token per user, paid cap per user, **one active free walk-in per device hash (C2, `device_in_queue`)**, walk-in quota for `remote`. **Idempotent by `paymentOrderId`.** |
+| `allocate({ method, userId, cls, paymentOrderId?, deviceHash? })` | New token at the end of its class | Checks: open, not full, one active free token per user, a paid reservation only when the user has no active ticket here (`already_in_queue` + `tokenId`, INC-065; `paidPerUserCap` retired), **one active free walk-in per device hash (C2, `device_in_queue`)**, walk-in quota for `remote`. **Idempotent by `paymentOrderId`.** |
 | `setHours(hours)` · `keepOpen()` · `autoCloseCheck(hours)` | B20 auto-close: store hours; push the auto-close 1 h later; cron safety net | `keepOpen` fails `invalid_state` when closed or hours unknown |
-| `checkQuota(userId)` | Can a remote reservation be made right now? | Used before creating a Razorpay order |
+| `checkQuota(userId)` | Can a remote reservation be made right now? | Used before creating a Razorpay order: open, not full, no active ticket of the user here (any active state incl. BOOKED/MISSED → `already_in_queue` + `tokenId`), remote quota |
 | `next(counter)` / `undoNext()` | Call the next token; undo within 30 s | Records interval. Step 4: picks by the credit rule (§9.4); undo restores the credits. |
 | `book({ userId, paymentOrderId, deviceHash, validUntil })` | New Priority Pass in `BOOKED` (Step 4) | Only from `confirmPayment`. Checks: priority on, daily cap, one active token per user. **Idempotent by `paymentOrderId`.** |
 | `checkIn(tokenId, userId)` | `BOOKED` → `WAITING` in the priority lane (Step 4) | Worker runs the GPS check first. Fails `invalid_state` if closed or the window ended. |
@@ -413,6 +413,7 @@ created ──(captured, verified)──► captured ──► allocated
 - Payments `created` past `expires_at` → `expired`.
 - Fetch Razorpay payments for the last day (test mode) and compare with D1: every captured or authorized payment that is not its order's recorded payment goes through `confirmPayment` (missed capture → ticket or refund; second payment or wrong amount → stray refund); log mismatches.
 - **Every 15 min** (`recover_orders`, G3): captured payments without a ticket for 2+ min are confirmed again; our orders still `created` / `failed` / `expired` from the last 2 h (≤ 15 per run, the one checked longest ago first) are looked up with `GET /orders/:id/payments` and any paid attempt is confirmed. So a lost webhook plus a dead phone costs ≤ 15 min, not a day.
+- **Call budget** (INC-064): every scheduled run shares one budget of 40 outbound calls (each Razorpay call and each `refund_issued` push), see §14. Recovery, refunds and the daily scan stop cleanly when it is used up and the next run continues; an order lookup that did not happen is not rotated, so it is asked first next time. In the daily run the provider scan comes before reconcile's own due-refunds step.
 
 ### 10.5 Priority Pass and upgrade money rules (decided 2026-10-18, Step 4)
 
@@ -466,7 +467,13 @@ Tests are in `apps/api/test/payments-edge.test.ts` (names quoted in short).
 | Partial % refund of an odd fee | Whole paise; refund and reversed shares add up exactly | "partial % refund of an odd fee …" |
 | Logs | Ids and codes only: no signature, body, token or secret | "verify, webhook and refund logs …" |
 
-A paid reservation does **not** by itself block another one: `paidPerUserCap` (default 2) allows a second paid reservation per user and queue, so G5 only blocks a second Checkout for the *same* purchase (the same order, a captured payment without its ticket, a booked pass, a paid upgrade).
+**One active ticket per person per queue, paid reservations included** (owner, 2026-10-18; enforced for reservations 2026-10-30, INC-065). A reservation order when the user already has any active ticket in the queue (BOOKED, WAITING, CALLED, GRACE or MISSED) → `409 already_in_queue` with `details.tokenId` (the app opens that ticket). If such a ticket appears between the order and the payment, `confirmPayment` gets `already_in_queue` from the DO and refunds the payment in full (reason `already_in_queue`). `paidPerUserCap` is retired: the settings schema still accepts and stores it, nothing reads it. A free walk-in while holding a paid reservation is still allowed (§23, "Walk-in while holding a pass").
+
+| Situation | Behaviour | Test |
+|---|---|---|
+| Reservation already allocated (app lost the answer), Pay again | `409 already_in_queue` + `tokenId`, no new Razorpay order | "reservation already allocated by the webhook …" |
+| Free ticket or booked pass, then a reservation order | `409 already_in_queue` + that ticket's id | "a free ticket or a booked Priority Pass also blocks …" |
+| Active ticket made after the reservation order, then paid | Refunded in full, reason `already_in_queue`; the other ticket untouched | "an active ticket made after the order was created …" |
 
 Partial refunds are whole paise: the outbox's `refund_paise = CAST((amount_paise × pct) / 100 AS INTEGER)` (D1 binds the percentage as a REAL; before 2026-10-29 a 33 % refund of ₹99.99 stored 3299.67, INC-062).
 
@@ -508,7 +515,11 @@ Partial refunds are whole paise: the outbox's `refund_paise = CAST((amount_paise
 |---|---|
 | every 15 min (`*/15 * * * *`) | `auto_close` (B20): hand open queues their hours, close overdue sessions (safety net for the DO alarm, §9.1); `expire_orders`: unpaid orders past 30 min → `expired`; `recover_orders` (G3, §10.4): confirm paid orders of the last 2 h whose webhook was lost (≤ 15 per run) and captured payments without a ticket; `refunds`: make the Razorpay refunds of `refund_due` payments whose backoff is over (≤ 40 per run) |
 | hourly | check Expo push receipts; prune dead push tokens |
-| daily 03:00 IST (`30 21 * * *`) | `reconcile` (§10.4): expire orders, retry captured-without-token, due refunds, compare Razorpay's captured payments of the last day, flag paid tokens without a payment; delete `webhook_events` older than 30 days |
+| daily 03:00 IST (`30 21 * * *`) | `reconcile` (§10.4): expire orders, retry captured-without-token, compare Razorpay's captured payments of the last day, due refunds, flag paid tokens without a payment; delete `webhook_events` older than 30 days |
+
+Each env registers only the quarter-hour trigger; it also runs the hourly jobs at minute 0 and the daily jobs at 21:30 UTC, in the same invocation (INC-056).
+
+**Call budget per run (INC-064).** The Workers free plan allows 50 external subrequests per invocation, cron runs included (D1 and Durable Object bindings don't count). `runScheduled` gives one run one `CallBudget` of `CRON_CALL_BUDGET` = **40**, shared by all its jobs: every Razorpay call counts (`withBudget`), and so does the `refund_issued` push of a refund (skipped when nothing is left). The other 10 are headroom for the hourly push-receipt call and later additions. Order: `recover_orders` (paid, no ticket) → `refunds` → `reconcile`. At 21:30 UTC the quarter-hour jobs may spend at most 40 − `RECONCILE_RESERVE` (15) = 25, so the daily provider scan always gets its calls. A job stops before a call it can't pay for (a refund needs 2 left, an order lookup 1); a call the budget refuses throws `BudgetSpent`, which is never a provider failure (no refund attempt counted, no backoff, no error log; a refund lease is given back). Job results carry `deferred` (left for the next run), and the run logs one `info` line `call_budget_used_up` with `limit`, `used` and `deferred` per job, only when something was deferred. HTTP requests carry no budget. Tests: `apps/api/test/payments-budget.test.ts`.
 
 Cron handlers are thin and call the same services as the API, so they are tested the same way.
 
@@ -516,7 +527,7 @@ Cron handlers are thin and call the same services as the API, so they are tested
 
 ## 15. Rate Limiting
 
-- Queue-level limits are enforced by the DO itself (one active free token per user per queue, paid cap per user, max size, triage cap).
+- Queue-level limits are enforced by the DO itself (one active free token per user per queue, no paid reservation next to another active ticket, max size, triage cap).
 - Endpoint-level limits (join, order, verify) use a simple per-user fixed window counter. v1 implementation: the Workers Rate Limiting binding if available on the plan, otherwise a small D1 counter table keyed by `(user_id, action, window)`. **Step 2 decision: deferred** (NFR-11, `TODO(NFR-11)` at the join route); only the DO's queue-level caps exist so far.
 - OTP and sign-in abuse are handled by Firebase.
 
@@ -669,7 +680,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Question | Decision |
 |---|---|
 | WebSocket auth | The client sends `Authorization: Bearer <Firebase ID token>` on the upgrade request (React Native's WebSocket supports headers). Tokens are never accepted in the URL. The Worker authorises (token owner, or staff with `?console=1`) and forwards only the upgrade to the DO. |
-| Rate limiting | Only the queue-level caps in the DO for now (one active free token per user per queue, max size, paid cap, triage cap). Endpoint limits (NFR-11) are deferred; `TODO(NFR-11)` marks the join route. |
+| Rate limiting | Only the queue-level caps in the DO for now (one active free token per user per queue, max size, one active ticket per person for paid reservations (was a paid cap, INC-065), triage cap). Endpoint limits (NFR-11) are deferred; `TODO(NFR-11)` marks the join route. |
 | Skip semantics | The skipped token is re-sequenced behind the next **3** waiting tokens, or to the end if fewer remain. A skipped CALLED token re-enters behind the first 3 waiting. *Superseded 2026-10-18: Skip uses the rejoin delay (§9.4, "Skip uses the rejoin delay" below).* |
 | Heartbeat | Client sends `{"type":"ping"}` every 30 s; the DO's Hibernation auto-response answers `{"type":"pong"}` without waking the object (no server pings, no alarm wake-ups). |
 | Console live message | `{ type: "queue", console: ConsoleState }` (full state) instead of only status/nowServing/waiting, so the console never refetches after a push. |

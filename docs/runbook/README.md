@@ -111,6 +111,8 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-061 | 2026-10-29 | Order creation could send a paid purchase to Checkout again | S2 | api | fixed | G5 (payments review) | [file](incidents/INC-061-pay-again-when-already-paid.md) |
 | INC-062 | 2026-10-29 | A partial refund could ask for a fraction of a paisa | S1 | queue engine, api | fixed | none | [file](incidents/INC-062-fractional-partial-refund.md) |
 | INC-063 | 2026-10-29 | A failed refund was never retried, and refunds could race | S1 | api | fixed | none | [file](incidents/INC-063-failed-refund-never-retried.md) |
+| INC-064 | 2026-10-30 | A busy scheduled run could pass the free-plan subrequest limit | S2 | api | fixed | none (review 2026-10-30) | [file](incidents/INC-064-cron-subrequest-limit.md) |
+| INC-065 | 2026-10-30 | A user could buy a second paid reservation in the same queue | S2 | api, queue engine, mobile | fixed-unverified-on-device | none (review 2026-10-30) | [file](incidents/INC-065-second-paid-reservation.md) |
 
 ## Load-test runs
 

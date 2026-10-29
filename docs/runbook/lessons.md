@@ -56,6 +56,8 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 3. Every money path needs a recovery within minutes that does not depend on the app or one webhook, and before you offer a payment again, ask the provider whether the last one went through. ([INC-059](incidents/INC-059-lost-webhook-waits-a-day.md), [INC-061](incidents/INC-061-pay-again-when-already-paid.md))
 4. In D1 SQL, cast money arithmetic on a bound JavaScript number to `INTEGER`. ([INC-062](incidents/INC-062-fractional-partial-refund.md))
 5. Claim a payment in the database (a lease) before a provider call that two paths can make; count failures, back off, and alert. ([INC-063](incidents/INC-063-failed-refund-never-retried.md))
+6. A per-invocation platform limit (50 subrequests on the free plan) needs one call budget shared by every job of that invocation; stop cleanly when it is used up, and never count "out of budget" as a provider failure. ([INC-064](incidents/INC-064-cron-subrequest-limit.md))
+7. When the owner changes a rule, find every path that still enforces the old one (settings, DO checks, docs) and retire the old setting explicitly. ([INC-065](incidents/INC-065-second-paid-reservation.md))
 
 ## Tooling
 
