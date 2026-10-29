@@ -85,3 +85,4 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 - 2026-10-16T08:03Z `full` 300 customers / 300 s: **green**, 1576 requests, join p95 2654 ms, next p95 2247 ms — [report](scripts/loadtest/reports/2026-10-16T08-03-01-316Z-full.md)
 - Earlier red runs and their fixes: runbook INC-020 to INC-034.
 - 2026-10-16T14:47Z `baseline` 50 customers / 120 s: **green**, 395 requests, join p95 2483 ms, next p95 1899 ms — [report](scripts/loadtest/reports/2026-10-16T14-47-56-863Z-baseline.md)
+- 2026-10-29T17:54Z `baseline` 50 customers / 120 s: **green**, 497 requests, join p95 1099 ms, next p95 695 ms — [report](scripts/loadtest/reports/2026-10-29T17-54-23-486Z-baseline.md)
