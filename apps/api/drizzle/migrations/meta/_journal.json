@@ -43,6 +43,13 @@
       "when": 1792159852428,
       "tag": "0005_fix_batch",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1793293838658,
+      "tag": "0006_step4_payments",
+      "breakpoints": true
     }
   ]
 }

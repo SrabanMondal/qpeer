@@ -9,14 +9,24 @@ import type {
   TokenState,
   WeeklyHours,
 } from "@qpeer/shared";
-import { defaultQueueSettings, EMPTY_EWMA } from "@qpeer/shared";
+import {
+  defaultQueueSettings,
+  EMPTY_EWMA,
+  makeCheckCode,
+  QueueSettings as QueueSettingsSchema,
+} from "@qpeer/shared";
 
 /**
  * DO-local SQLite schema and typed queries (architecture doc §9.2, §18).
  * Schema changes are applied lazily in `migrate()`, keyed by `schema_version`
  * in `meta`. Every value in `meta` is JSON text.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
+
+/** Active = holds a ticket (Step 4 adds BOOKED and MISSED). */
+const ACTIVE_SQL = "('BOOKED','WAITING','CALLED','GRACE','MISSED')";
+/** In the session: in the live order, at a counter, in grace or MISSED. */
+const SESSION_SQL = "('WAITING','CALLED','GRACE','MISSED')";
 
 export type TokenRow = {
   id: string;
@@ -51,6 +61,20 @@ export type TokenRow = {
   expires_at: number | null;
   /** C4: 1 = still valid when its session closed; kept for the next one. */
   carried: number;
+  /** R2: 4-character check code (schema v3). */
+  check_code: string | null;
+  /** Priority Pass check-in or upgrade time (schema v3). */
+  checked_in_at: number | null;
+  /** When grace ended (MISSED) (schema v3). */
+  missed_at: number | null;
+  /** 1 = the one rejoin after MISSED was used (schema v3). */
+  rejoined: number;
+  /** Razorpay order of a "Skip ahead" upgrade (schema v3). */
+  upgrade_order_id: string | null;
+  /** D1 `payments.id` of the payment that made (or upgraded) the token. */
+  payment_id: string | null;
+  /** BOOKED pass: cancel refund % captured at purchase (schema v3). */
+  cancel_refund_pct: number | null;
 };
 
 export type OutboxKind =
@@ -58,7 +82,8 @@ export type OutboxKind =
   | "snapshot"
   | "analytics"
   | "strike"
-  | "push";
+  | "push"
+  | "payment";
 
 export type OutboxRow = {
   id: string;
@@ -100,6 +125,8 @@ export interface UndoRecord {
     nowServing: string | null;
     /** Absent in undo records written before schema v2. */
     lastServed?: string | null;
+    /** Priority credit counter before the call (C1; schema v3). */
+    credits?: number;
   };
   intervalId: number | null;
   hourStart: number;
@@ -136,6 +163,10 @@ export interface Meta {
   hours: WeeklyHours | null;
   /** B20: "Keep open" moved the auto-close to this time (this session). */
   keep_open_until: number | null;
+  /** PRI-06 credit counter (C1): 0 at session open, capped at N. */
+  priority_credits: number;
+  /** Priority passes + upgrades sold per IST day (daily cap). */
+  priority_sales: { day: number; count: number };
 }
 
 const META_DEFAULTS: Meta = {
@@ -165,6 +196,8 @@ const META_DEFAULTS: Meta = {
   last_served: null,
   hours: null,
   keep_open_until: null,
+  priority_credits: 0,
+  priority_sales: { day: 0, count: 0 },
 };
 
 /** Class rank in the sort key: triage first, then priority, then regular. */
@@ -267,6 +300,51 @@ export class QueueStore {
         CREATE INDEX IF NOT EXISTS tokens_expiry_idx ON tokens (state, expires_at);
       `);
     }
+    if (version < 3) {
+      // Step 4: check code (R2), Priority Pass (BOOKED, check-in, upgrade),
+      // missed turn (MISSED, one rejoin).
+      this.sql.exec(`
+        ALTER TABLE tokens ADD COLUMN check_code TEXT;
+        ALTER TABLE tokens ADD COLUMN checked_in_at INTEGER;
+        ALTER TABLE tokens ADD COLUMN missed_at INTEGER;
+        ALTER TABLE tokens ADD COLUMN rejoined INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE tokens ADD COLUMN upgrade_order_id TEXT;
+        ALTER TABLE tokens ADD COLUMN payment_id TEXT;
+        ALTER TABLE tokens ADD COLUMN cancel_refund_pct INTEGER;
+        CREATE INDEX IF NOT EXISTS tokens_upgrade_order_idx ON tokens (upgrade_order_id);
+        CREATE INDEX IF NOT EXISTS tokens_number_idx ON tokens (session_id, series, number);
+      `);
+      // Open queues keep working: tickets already in the line get a code
+      // (without a rev bump; their next change carries it to D1)…
+      const open = this.sql
+        .exec<{ id: string }>(
+          `SELECT id FROM tokens WHERE check_code IS NULL AND state IN ${ACTIVE_SQL}`,
+        )
+        .toArray();
+      for (const r of open) {
+        this.sql.exec(
+          "UPDATE tokens SET check_code = ? WHERE id = ?",
+          makeCheckCode(),
+          r.id,
+        );
+      }
+      // …and the stored settings gain the Step 4 fields (with defaults; the
+      // legacy `priorityPerRegular: 0` reads as the prefill).
+      const row = this.sql
+        .exec<{ value: string }>(
+          "SELECT value FROM meta WHERE key = 'settings'",
+        )
+        .toArray()[0];
+      if (row) {
+        const parsed = QueueSettingsSchema.safeParse(
+          JSON.parse(String(row.value)),
+        );
+        this.sql.exec(
+          "UPDATE meta SET value = ? WHERE key = 'settings'",
+          JSON.stringify(parsed.success ? parsed.data : defaultQueueSettings()),
+        );
+      }
+    }
     this.cache.clear();
     this.set("schema_version", SCHEMA_VERSION);
   }
@@ -320,13 +398,43 @@ export class QueueStore {
     );
   }
 
+  tokenByUpgradeOrder(orderId: string): TokenRow | null {
+    return (
+      this.sql
+        .exec<TokenRow>(
+          "SELECT * FROM tokens WHERE upgrade_order_id = ?",
+          orderId,
+        )
+        .toArray()[0] ?? null
+    );
+  }
+
+  /** R2: a session's token by series + number (staff "Rejoin for customer"). */
+  tokenByNumber(
+    sessionId: string,
+    series: TokenSeries,
+    number: number,
+  ): TokenRow | null {
+    return (
+      this.sql
+        .exec<TokenRow>(
+          "SELECT * FROM tokens WHERE session_id = ? AND series = ? AND number = ?",
+          sessionId,
+          series,
+          number,
+        )
+        .toArray()[0] ?? null
+    );
+  }
+
   insertToken(t: TokenRow): void {
     this.sql.exec(
       `INSERT INTO tokens (id, session_id, number, series, cls, method, user_id, state, sort_key,
         joined_at, called_at, counter, grace_until, served_at, ended_at, end_reason,
         payment_order_id, alert_flags, rev, grace_ms, cancel_window_ms, eta_low_at_join, eta_high_at_join,
-        device_hash, expires_at, carried)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        device_hash, expires_at, carried, check_code, checked_in_at, missed_at, rejoined,
+        upgrade_order_id, payment_id, cancel_refund_pct)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       t.id,
       t.session_id,
       t.number,
@@ -353,6 +461,13 @@ export class QueueStore {
       t.device_hash,
       t.expires_at,
       t.carried,
+      t.check_code,
+      t.checked_in_at,
+      t.missed_at,
+      t.rejoined,
+      t.upgrade_order_id,
+      t.payment_id,
+      t.cancel_refund_pct,
     );
   }
 
@@ -379,10 +494,11 @@ export class QueueStore {
     this.sql.exec("UPDATE tokens SET alert_flags = ? WHERE id = ?", flags, id);
   }
 
+  /** Tokens the user holds here (BOOKED and MISSED count, Step 4). */
   activeForUser(userId: string): TokenRow[] {
     return this.sql
       .exec<TokenRow>(
-        "SELECT * FROM tokens WHERE user_id = ? AND state IN ('WAITING','CALLED','GRACE')",
+        `SELECT * FROM tokens WHERE user_id = ? AND state IN ${ACTIVE_SQL}`,
         userId,
       )
       .toArray();
@@ -392,7 +508,8 @@ export class QueueStore {
   activeFreeWalkinsForDevice(deviceHash: string): TokenRow[] {
     return this.sql
       .exec<TokenRow>(
-        "SELECT * FROM tokens WHERE device_hash = ? AND state IN ('WAITING','CALLED','GRACE') AND method = 'walkin' AND payment_order_id IS NULL",
+        `SELECT * FROM tokens WHERE device_hash = ? AND state IN ${ACTIVE_SQL} AND method = 'walkin'
+           AND payment_order_id IS NULL AND upgrade_order_id IS NULL`,
         deviceHash,
       )
       .toArray();
@@ -409,24 +526,94 @@ export class QueueStore {
     );
   }
 
-  /** C4: earliest validity end among WAITING tokens. */
+  /**
+   * C4: earliest validity end among WAITING and MISSED tokens, and the end of
+   * BOOKED passes' windows (Step 4).
+   */
   nextValidityExpiry(): number | null {
     const row = this.sql
       .exec<{ t: number | null }>(
-        "SELECT MIN(expires_at) AS t FROM tokens WHERE state = 'WAITING' AND expires_at IS NOT NULL",
+        "SELECT MIN(expires_at) AS t FROM tokens WHERE state IN ('WAITING','MISSED','BOOKED') AND expires_at IS NOT NULL",
       )
       .one();
     return row.t ?? null;
   }
 
-  /** C4: WAITING tokens whose validity ran out. */
+  /** C4: WAITING/MISSED tokens whose validity ran out; BOOKED passes past their window. */
   validityDue(now: number): TokenRow[] {
     return this.sql
       .exec<TokenRow>(
-        "SELECT * FROM tokens WHERE state = 'WAITING' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at",
+        "SELECT * FROM tokens WHERE state IN ('WAITING','MISSED','BOOKED') AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at",
         now,
       )
       .toArray();
+  }
+
+  // ---------- lanes (Step 4: triage / priority / regular) ----------
+
+  /** Waiting tokens per lane (rank of the sort key). */
+  laneCounts(): { triage: number; priority: number; regular: number } {
+    const row = this.sql
+      .exec<{ t: number | null; p: number | null; r: number | null }>(
+        `SELECT SUM(sort_key < ?) AS t, SUM(sort_key >= ? AND sort_key < ?) AS p,
+                SUM(sort_key >= ?) AS r
+         FROM tokens WHERE state = 'WAITING'`,
+        RANK_SPAN,
+        RANK_SPAN,
+        2 * RANK_SPAN,
+        2 * RANK_SPAN,
+      )
+      .one();
+    return {
+      triage: Number(row.t ?? 0),
+      priority: Number(row.p ?? 0),
+      regular: Number(row.r ?? 0),
+    };
+  }
+
+  /** Waiting tokens with `lo ≤ sortKey < hi`. */
+  countWaitingBetween(lo: number, hi: number): number {
+    return this.count(
+      "SELECT COUNT(*) AS n FROM tokens WHERE state = 'WAITING' AND sort_key >= ? AND sort_key < ?",
+      lo,
+      hi,
+    );
+  }
+
+  /** Waiting tokens of one lane rank, in order. */
+  waitingInLane(rank: number, limit = 100_000): TokenRow[] {
+    return this.sql
+      .exec<TokenRow>(
+        "SELECT * FROM tokens WHERE state = 'WAITING' AND sort_key >= ? AND sort_key < ? ORDER BY sort_key LIMIT ?",
+        rank * RANK_SPAN,
+        (rank + 1) * RANK_SPAN,
+        limit,
+      )
+      .toArray();
+  }
+
+  /** Waiting tokens with `from < sortKey < below`, in order. */
+  waitingAfterBelow(from: number, below: number, limit: number): TokenRow[] {
+    return this.sql
+      .exec<TokenRow>(
+        "SELECT * FROM tokens WHERE state = 'WAITING' AND sort_key > ? AND sort_key < ? ORDER BY sort_key LIMIT ?",
+        from,
+        below,
+        limit,
+      )
+      .toArray();
+  }
+
+  /** Largest waiting sort key below `below`, ignoring one token. */
+  maxWaitingBelow(below: number, exceptId: string): number | null {
+    const row = this.sql
+      .exec<{ k: number | null }>(
+        "SELECT MAX(sort_key) AS k FROM tokens WHERE state = 'WAITING' AND sort_key < ? AND id <> ?",
+        below,
+        exceptId,
+      )
+      .one();
+    return row.k ?? null;
   }
 
   /** Waiting tokens in queue order. */
@@ -459,10 +646,11 @@ export class QueueStore {
       .toArray();
   }
 
-  active(): TokenRow[] {
+  /** Tokens of the session: waiting, at a counter, in grace or MISSED (what a close ends or carries). */
+  sessionTokens(): TokenRow[] {
     return this.sql
       .exec<TokenRow>(
-        "SELECT * FROM tokens WHERE state IN ('WAITING','CALLED','GRACE') ORDER BY sort_key",
+        `SELECT * FROM tokens WHERE state IN ${SESSION_SQL} ORDER BY sort_key`,
       )
       .toArray();
   }
@@ -489,9 +677,10 @@ export class QueueStore {
     );
   }
 
+  /** Tokens in the session (WAITING/CALLED/GRACE/MISSED); BOOKED passes are not in a session. */
   countActive(): number {
     return this.count(
-      "SELECT COUNT(*) AS n FROM tokens WHERE state IN ('WAITING','CALLED','GRACE')",
+      `SELECT COUNT(*) AS n FROM tokens WHERE state IN ${SESSION_SQL}`,
     );
   }
 
@@ -541,7 +730,7 @@ export class QueueStore {
   /** Removes finished tokens of earlier sessions (D1 holds their history). */
   pruneOldSessions(currentSession: string): void {
     this.sql.exec(
-      "DELETE FROM tokens WHERE session_id <> ? AND state NOT IN ('WAITING','CALLED','GRACE')",
+      `DELETE FROM tokens WHERE session_id <> ? AND state NOT IN ${ACTIVE_SQL}`,
       currentSession,
     );
   }

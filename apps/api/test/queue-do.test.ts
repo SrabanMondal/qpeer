@@ -7,7 +7,6 @@ import { env } from "cloudflare:workers";
 import { ConsoleState, newerTokenView, TokenView } from "@qpeer/shared";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { pushOverride } from "../src/modules/notifications/expo-push";
-import { SKIP_BEHIND } from "../src/queue/ordering";
 import { outboxFaults } from "../src/queue/outbox";
 import type { QueueDO } from "../src/queue/queue-do";
 import { earliestDue } from "../src/queue/scheduler";
@@ -24,6 +23,12 @@ import {
 } from "./queue-helpers";
 
 let push: ReturnType<typeof fakePush>;
+
+/**
+ * QUE-06 (2026-10-18): Skip goes behind K = max(1, ceil(rejoinDelayMin ÷
+ * avgServiceMin)); with the defaults at cold start (15 ÷ 5 min) K = 3.
+ */
+const SKIP_BEHIND = 3;
 
 beforeAll(() => {
   push = fakePush();
@@ -152,8 +157,9 @@ describe("QueueDO numbering and order", () => {
     must(await stub.next(1)); // r1 called
     const tri = [];
     for (let i = 0; i < 4; i++) tri.push(must(await stub.insertTriage()).token);
-    // Called regular re-enters "behind the first 3 waiting" = among triage
-    // tokens by position; it must stay behind every triage token instead.
+    // QUE-06 (2026-10-18): a called regular re-enters behind K = 3 waiting
+    // people of its own class; only r2 waits there, so it goes to the end of
+    // the regulars — and never inside the triage range.
     must(await stub.skip(r1.id));
     let c = await consoleOf(stub);
     expect(c.waiting.map((w) => w.cls)).toEqual([
@@ -164,8 +170,8 @@ describe("QueueDO numbering and order", () => {
       "regular",
       "regular",
     ]);
-    expect(c.waiting[4].id).toBe(r1.id); // head of the regulars, ahead of r2
-    expect(c.waiting[5].id).toBe(r2.id);
+    expect(c.waiting[4].id).toBe(r2.id);
+    expect(c.waiting[5].id).toBe(r1.id);
     // A later triage arrival goes ahead of the skipped regular.
     const late = must(await stub.insertTriage()).token;
     c = await consoleOf(stub);
@@ -280,7 +286,7 @@ describe("QueueDO operations", () => {
     expect((await view(stub, a.id)).state).toBe("SERVED");
   });
 
-  it("QUE-08/JON-07: grace expiry via the alarm → EXPIRED no-show and a free-lane strike in D1", async () => {
+  it("QUE-22/QUE-24/JON-07: grace expiry → MISSED (no strike yet); close → EXPIRED no-show + one free-lane strike in D1", async () => {
     const { stub } = await seedQueue({ settings: { graceMinutes: 1 } });
     const user = crypto.randomUUID();
     const a = await join(stub, user);
@@ -289,14 +295,24 @@ describe("QueueDO operations", () => {
     await stub.testAdvanceClock(1 * MIN + 1000);
     await runDurableObjectAlarm(stub);
     const v = await view(stub, a.id);
-    expect(v.state).toBe("EXPIRED");
-    expect(v.endReason).toBe("no_show");
-    const strikes = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM free_lane_strikes WHERE user_id = ? AND token_id = ?",
-    )
-      .bind(user, a.id)
-      .first<{ n: number }>();
-    expect(strikes?.n).toBe(1);
+    expect(v.state).toBe("MISSED");
+    expect(v.missedAt).not.toBeNull();
+    expect(v.rejoinAvailable).toBe(true);
+    const strikesOf = async () =>
+      (
+        await env.DB.prepare(
+          "SELECT COUNT(*) AS n FROM free_lane_strikes WHERE user_id = ? AND token_id = ?",
+        )
+          .bind(user, a.id)
+          .first<{ n: number }>()
+      )?.n;
+    expect(await strikesOf()).toBe(0);
+    must(await stub.close());
+    await stub.flushOutbox();
+    const ended = await view(stub, a.id);
+    expect(ended.state).toBe("EXPIRED");
+    expect(ended.endReason).toBe("no_show");
+    expect(await strikesOf()).toBe(1);
     const d1 = await env.DB.prepare(
       "SELECT state, end_reason FROM tokens WHERE id = ?",
     )
@@ -315,11 +331,19 @@ describe("QueueDO operations", () => {
       .bind(userId, `fb-${userId}`, t0, t0)
       .run();
     for (let i = 0; i < 3; i++) {
+      // QUE-24: miss → MISSED → rejoin once → miss again → EXPIRED + strike.
       const tok = await join(stub, userId);
       must(await stub.next(1));
       must(await stub.noShow(tok.id));
       await stub.testAdvanceClock(MIN + 1000);
       await runDurableObjectAlarm(stub);
+      expect((await view(stub, tok.id)).state).toBe("MISSED");
+      must(await stub.rejoin(tok.id, userId));
+      must(await stub.next(1));
+      must(await stub.noShow(tok.id));
+      await stub.testAdvanceClock(MIN + 1000);
+      await runDurableObjectAlarm(stub);
+      await stub.flushOutbox();
       expect((await view(stub, tok.id)).state).toBe("EXPIRED");
       const u = await env.DB.prepare(
         "SELECT free_lane_blocked_until AS until FROM users WHERE id = ?",
@@ -1003,10 +1027,13 @@ describe("QueueDO live updates (QUE-17)", () => {
     await stub.testAdvanceClock(61_000);
     await runDurableObjectAlarm(stub);
     const last = await waitFor(() =>
-      messages.find((m) => m.type === "token" && m.token.state === "EXPIRED"),
+      messages.find((m) => m.type === "token" && m.token.state === "MISSED"),
     );
-    if (last.type === "token") expect(last.token.endReason).toBe("no_show");
-    expect((await view(stub, a.id)).state).toBe("EXPIRED");
+    if (last.type === "token") {
+      expect(last.token.rejoinAvailable).toBe(true);
+      expect(last.token.missedAt).not.toBeNull();
+    }
+    expect((await view(stub, a.id)).state).toBe("MISSED");
     ws.close();
   });
 });

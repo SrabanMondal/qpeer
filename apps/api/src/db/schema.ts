@@ -1,4 +1,5 @@
 import type { QueueSettings, WeeklyHours } from "@qpeer/shared";
+import { sql } from "drizzle-orm";
 import {
   index,
   integer,
@@ -146,9 +147,11 @@ export const queueSnapshots = sqliteTable(
 export type QueueSnapshot = typeof queueSnapshots.$inferSelect;
 
 export const TOKEN_STATES = [
+  "BOOKED",
   "WAITING",
   "CALLED",
   "GRACE",
+  "MISSED",
   "SERVED",
   "EXPIRED",
   "LEFT",
@@ -185,20 +188,25 @@ export const tokens = sqliteTable(
     rev: integer("rev").notNull(),
     /** C2: SHA-256 of ANDROID_ID + app salt (walk-ins); never the raw id. */
     deviceHash: text("device_hash"),
-    /** C4: end of the ticket's validity; null = until the queue closes. */
+    /** C4: end of the ticket's validity; null = until the queue closes. BOOKED: end of the pass window. */
     expiresAt: ms("expires_at"),
+    /** R2 (Step 4): 4-character check code given at allocation. */
+    checkCode: text("check_code"),
+    /** Step 4: Priority Pass check-in (or upgrade) time. */
+    checkedInAt: ms("checked_in_at"),
+    /** Step 4: when grace ended (MISSED). */
+    missedAt: ms("missed_at"),
     createdAt: ms("created_at").notNull(),
     updatedAt: ms("updated_at").notNull(),
   },
   (t) => [
     index("tokens_user_id_state_idx").on(t.userId, t.state),
     index("tokens_queue_id_session_id_idx").on(t.queueId, t.sessionId),
-    uniqueIndex("tokens_queue_session_series_number_uq").on(
-      t.queueId,
-      t.sessionId,
-      t.series,
-      t.number,
-    ),
+    // BOOKED passes have no session or number yet (session_id ''), so the
+    // uniqueness only covers numbered tokens (Step 4).
+    uniqueIndex("tokens_queue_session_series_number_uq")
+      .on(t.queueId, t.sessionId, t.series, t.number)
+      .where(sql`session_id <> ''`),
   ],
 );
 
@@ -299,3 +307,110 @@ export const outboxReceipts = sqliteTable("outbox_receipts", {
   kind: text("kind").notNull(),
   appliedAt: ms("applied_at").notNull(),
 });
+
+// ---------- Step 4: payments (Razorpay test mode, architecture doc §10) ----------
+
+export const PAYMENT_STATUSES = [
+  "created",
+  "captured",
+  "allocated",
+  "refund_due",
+  "refunded",
+  "forfeited",
+  "failed",
+  "expired",
+] as const;
+
+/**
+ * One Razorpay order and what became of it. `id` is our payment id (also the
+ * order's receipt). Status transitions are guarded in SQL so the client
+ * verify, the webhook and the cron can run in any order.
+ */
+export const payments = sqliteTable(
+  "payments",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id").notNull(),
+    queueId: text("queue_id").notNull(),
+    businessId: text("business_id").notNull(),
+    /** Set once a token exists (reservation, pass) or for the upgraded token. */
+    tokenId: text("token_id"),
+    kind: text("kind", {
+      enum: ["reservation", "priority", "upgrade"],
+    }).notNull(),
+    amountPaise: integer("amount_paise").notNull(),
+    /** Business share at purchase time (demo constant 70). */
+    businessSharePct: integer("business_share_pct").notNull(),
+    /** PRI-11: device hash on pass purchases and upgrades. */
+    deviceHash: text("device_hash"),
+    razorpayOrderId: text("razorpay_order_id").notNull().unique(),
+    razorpayPaymentId: text("razorpay_payment_id").unique(),
+    status: text("status", { enum: PAYMENT_STATUSES }).notNull(),
+    refundId: text("refund_id"),
+    refundPaise: integer("refund_paise"),
+    refundStatus: text("refund_status", {
+      enum: ["pending", "processed", "failed"],
+    }),
+    /** Why a refund or failure happened (`closed`, `cancelled`, `quota_full`…). */
+    reason: text("reason"),
+    expiresAt: ms("expires_at").notNull(),
+    createdAt: ms("created_at").notNull(),
+    updatedAt: ms("updated_at").notNull(),
+  },
+  (t) => [
+    index("payments_user_id_created_at_idx").on(t.userId, t.createdAt),
+    index("payments_status_expires_at_idx").on(t.status, t.expiresAt),
+    index("payments_queue_device_created_idx").on(
+      t.queueId,
+      t.deviceHash,
+      t.createdAt,
+    ),
+    index("payments_queue_user_created_idx").on(
+      t.queueId,
+      t.userId,
+      t.createdAt,
+    ),
+    index("payments_business_created_idx").on(t.businessId, t.createdAt),
+    index("payments_token_id_idx").on(t.tokenId),
+  ],
+);
+
+export type Payment = typeof payments.$inferSelect;
+
+/** Append-only money ledger (§10.3). Ids are deterministic per event, so retries never double-write. */
+export const ledgerEntries = sqliteTable(
+  "ledger_entries",
+  {
+    id: text("id").primaryKey(),
+    paymentId: text("payment_id").notNull(),
+    businessId: text("business_id").notNull(),
+    kind: text("kind", {
+      enum: [
+        "capture",
+        "refund",
+        "forfeit",
+        "business_share",
+        "platform_share",
+      ],
+    }).notNull(),
+    amountPaise: integer("amount_paise").notNull(),
+    at: ms("at").notNull(),
+    createdAt: ms("created_at").notNull(),
+  },
+  (t) => [
+    index("ledger_entries_business_id_at_idx").on(t.businessId, t.at),
+    index("ledger_entries_payment_id_idx").on(t.paymentId),
+  ],
+);
+
+/** Razorpay webhook dedupe (event id). `processed_at` null = retry on redelivery. */
+export const webhookEvents = sqliteTable(
+  "webhook_events",
+  {
+    id: text("id").primaryKey(),
+    type: text("type").notNull(),
+    receivedAt: ms("received_at").notNull(),
+    processedAt: ms("processed_at"),
+  },
+  (t) => [index("webhook_events_received_at_idx").on(t.receivedAt)],
+);

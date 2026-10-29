@@ -42,6 +42,28 @@ export interface TokenUpsertPayload {
   /** Absent in items queued before the fix batch. */
   deviceHash?: string | null;
   expiresAt?: number | null;
+  /** Step 4 (absent in older items). */
+  checkCode?: string | null;
+  checkedInAt?: number | null;
+  missedAt?: number | null;
+}
+
+/**
+ * Step 4: the DO decided a paid token's money outcome. Applied to D1
+ * `payments` in the row batch (idempotent status transitions):
+ * `refund` → `refund_due` with `refund_paise` (the Worker / cron then calls
+ * the Razorpay Refunds API); `forfeit` → `forfeited` + a ledger `forfeit`
+ * marker (the capture split stands).
+ */
+export interface PaymentPayload {
+  /** Razorpay order id (unique on `payments`). */
+  orderId: string;
+  tokenId: string;
+  action: "refund" | "forfeit";
+  /** Refund share, 0–100 (ignored for a forfeit). */
+  pct: number;
+  reason: string;
+  at: number;
 }
 
 export interface SnapshotPayload {
@@ -91,7 +113,11 @@ export interface OutboxDeps {
  * trip instead of N (Step 3.5 finding F2).
  */
 export function isRowItem(item: OutboxRow): boolean {
-  return item.kind === "token_upsert" || item.kind === "snapshot";
+  return (
+    item.kind === "token_upsert" ||
+    item.kind === "snapshot" ||
+    item.kind === "payment"
+  );
 }
 
 /**
@@ -108,17 +134,60 @@ export async function applyOutboxRows(
     outboxFaults.failD1--;
     throw new Error("simulated D1 failure");
   }
-  const stmts = items.map((item) => {
+  const stmts = items.flatMap((item) => {
     const payload = JSON.parse(item.payload);
     if (item.kind === "token_upsert") {
-      return upsertTokenStmt(deps.d1, payload as TokenUpsertPayload);
+      return [upsertTokenStmt(deps.d1, payload as TokenUpsertPayload)];
     }
     if (item.kind === "snapshot") {
-      return upsertSnapshotStmt(deps.d1, payload as SnapshotPayload);
+      return [upsertSnapshotStmt(deps.d1, payload as SnapshotPayload)];
+    }
+    if (item.kind === "payment") {
+      return paymentStmts(deps.d1, payload as PaymentPayload);
     }
     throw new Error(`not a row item: ${item.kind}`);
   });
   await deps.d1.batch(stmts);
+}
+
+/**
+ * Payment decision statements. Guarded by status, so a retry (or a decision
+ * that arrives after a webhook moved the payment on) changes nothing.
+ */
+function paymentStmts(d1: D1Database, p: PaymentPayload) {
+  if (p.action === "refund") {
+    return [
+      d1
+        .prepare(
+          `UPDATE payments SET status = 'refund_due',
+             refund_paise = (amount_paise * ?) / 100, reason = ?, updated_at = ?
+           WHERE razorpay_order_id = ? AND status IN ('allocated', 'captured')`,
+        )
+        .bind(
+          Math.min(100, Math.max(0, Math.round(p.pct))),
+          p.reason,
+          p.at,
+          p.orderId,
+        ),
+    ];
+  }
+  return [
+    d1
+      .prepare(
+        `UPDATE payments SET status = 'forfeited', reason = ?, updated_at = ?
+         WHERE razorpay_order_id = ? AND status = 'allocated'`,
+      )
+      .bind(p.reason, p.at, p.orderId),
+    // Marker entry (amount 0): the capture split stands (§10.3).
+    d1
+      .prepare(
+        `INSERT INTO ledger_entries (id, payment_id, business_id, kind, amount_paise, at, created_at)
+         SELECT 'forfeit:' || id, id, business_id, 'forfeit', 0, ?, ?
+         FROM payments WHERE razorpay_order_id = ? AND status = 'forfeited'
+         ON CONFLICT(id) DO NOTHING`,
+      )
+      .bind(p.at, p.at, p.orderId),
+  ];
 }
 
 /**
@@ -149,6 +218,7 @@ export async function applyOutboxItem(
   switch (item.kind) {
     case "token_upsert":
     case "snapshot":
+    case "payment":
       return;
     case "analytics":
       return addAnalytics(deps.d1, item.id, payload as AnalyticsPayload, now);
@@ -160,18 +230,27 @@ export async function applyOutboxItem(
   }
 }
 
-/** Upsert by id; only a higher `rev` applies, so a token never moves backwards. */
+/**
+ * Upsert by id; only a higher `rev` applies, so a token never moves
+ * backwards. Step 4: a pass gets its session and P number at check-in and an
+ * upgrade changes the class, so those columns follow too (a check code that
+ * was missing on an older row is filled in, never replaced).
+ */
 function upsertTokenStmt(d1: D1Database, t: TokenUpsertPayload) {
   return d1
     .prepare(
       `INSERT INTO tokens (id, queue_id, session_id, business_id, user_id, number, series, class, method,
          state, joined_at, called_at, served_at, ended_at, end_reason, payment_id, rev, created_at, updated_at,
-         device_hash, expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         device_hash, expires_at, check_code, checked_in_at, missed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET
          state = excluded.state, called_at = excluded.called_at, served_at = excluded.served_at,
          ended_at = excluded.ended_at, end_reason = excluded.end_reason, payment_id = excluded.payment_id,
-         rev = excluded.rev, updated_at = excluded.updated_at
+         rev = excluded.rev, updated_at = excluded.updated_at,
+         session_id = excluded.session_id, number = excluded.number, series = excluded.series,
+         class = excluded.class, expires_at = excluded.expires_at,
+         check_code = COALESCE(tokens.check_code, excluded.check_code),
+         checked_in_at = excluded.checked_in_at, missed_at = excluded.missed_at
        WHERE excluded.rev > tokens.rev`,
     )
     .bind(
@@ -196,6 +275,9 @@ function upsertTokenStmt(d1: D1Database, t: TokenUpsertPayload) {
       t.at,
       t.deviceHash ?? null,
       t.expiresAt ?? null,
+      t.checkCode ?? null,
+      t.checkedInAt ?? null,
+      t.missedAt ?? null,
     );
 }
 

@@ -209,7 +209,8 @@ describe("Device hash (C2, INC-042)", () => {
     must(await stub.next(1));
     must(await stub.noShow(t.id));
     await stub.testAdvanceClock(MIN + 1000);
-    await runDurableObjectAlarm(stub);
+    await runDurableObjectAlarm(stub); // → MISSED
+    must(await stub.close()); // never rejoined → EXPIRED + strike (QUE-24)
     await stub.flushOutbox();
     const tok = await env.DB.prepare(
       "SELECT device_hash FROM tokens WHERE id = ?",

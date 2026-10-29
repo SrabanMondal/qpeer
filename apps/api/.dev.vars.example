@@ -8,3 +8,8 @@ ENVIRONMENT=dev
 # TICKET_SIGNING_KEY='{"kty":"OKP","crv":"Ed25519","d":"…","x":"…","kid":"…"}'
 # Optional: extra public JWK set still accepted during a key rotation.
 # TICKET_PUBLIC_KEYS='{"keys":[]}'
+# Step 4 Razorpay (test mode). All three are secrets on deployed Workers
+# (`wrangler secret put`); without them payment routes answer 500.
+# RAZORPAY_KEY_ID=rzp_test_…
+# RAZORPAY_KEY_SECRET=
+# RAZORPAY_WEBHOOK_SECRET=
