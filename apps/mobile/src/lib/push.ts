@@ -176,6 +176,7 @@ const TONE_FOR_KIND: Record<AlertKind, ToastTone> = {
   refund_issued: "info",
   queue_paused: "warning",
   queue_closed: "warning",
+  missed: "warning",
 };
 
 function tokenIdOf(data: Record<string, unknown> | undefined): string | null {

@@ -49,6 +49,12 @@ export const ErrorCode = z.enum([
   "queue_paused",
   "queue_full",
   "quota_full",
+  /** Step 4: the queue's Priority Pass is switched off. */
+  "priority_off",
+  /** Step 4: the daily Priority Pass sales cap is reached. */
+  "sold_out",
+  /** Step 4: this account or phone already bought a pass here today (PRI-11). */
+  "pass_limit",
   "invalid_state",
   "too_far",
   "mock_location",

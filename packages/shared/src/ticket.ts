@@ -39,8 +39,30 @@ export const TicketPayload = z.object({
   exp: z.number().int(),
   /** Signing key id. */
   kid: z.string(),
+  // Step 4 (optional, so tickets signed before still parse):
+  /** R2: the ticket's 4-character check code. */
+  cc: z.string().optional(),
+  /**
+   * C4 (2026-10-18): the holder's first name and the last 4 digits of their
+   * phone, nothing more. The ticket is signed, not encrypted.
+   */
+  fn: z.string().optional(),
+  p4: z.string().optional(),
 });
 export type TicketPayload = z.infer<typeof TicketPayload>;
+
+/** C4: the holder fields a ticket may carry (first name ≤ 20 chars, last 4 phone digits). */
+export function ticketHolder(user: {
+  displayName: string | null;
+  phone: string | null;
+}): { fn?: string; p4?: string } {
+  const out: { fn?: string; p4?: string } = {};
+  const first = user.displayName?.trim().split(/\s+/)[0];
+  if (first) out.fn = [...first].slice(0, 20).join("");
+  const digits = user.phone?.replace(/\D/g, "") ?? "";
+  if (digits.length >= 4) out.p4 = digits.slice(-4);
+  return out;
+}
 
 /** A public Ed25519 key as a JWK (no `d`). */
 export const TicketPublicJwk = z.object({
@@ -117,9 +139,20 @@ function asciiText(bytes: Uint8Array): string {
 
 // ---------- encode / parse ----------
 
+/**
+ * JSON with every non-ASCII character escaped (`\uXXXX`), so a holder name
+ * in any script keeps the payload ASCII; `JSON.parse` restores it.
+ */
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(
+    /[\u007f-￿]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
 /** The part the signature covers: `QPT1.<base64url(payload)>`. */
 export function ticketSigningInput(p: TicketPayload): string {
-  return `${TICKET_PREFIX}.${base64UrlEncode(asciiBytes(JSON.stringify(p)))}`;
+  return `${TICKET_PREFIX}.${base64UrlEncode(asciiBytes(asciiJson(p)))}`;
 }
 
 export function encodeTicket(signingInput: string, signature: Uint8Array) {

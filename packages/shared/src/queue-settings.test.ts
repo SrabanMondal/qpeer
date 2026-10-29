@@ -14,10 +14,17 @@ describe("QueueSettings", () => {
       joinRadiusM: 150,
       walkinQuotaPct: 50,
       reservationFeePaise: 2000,
+      priorityEnabled: false,
       priorityFeePaise: 10000,
-      priorityPerRegular: 0,
+      priorityPerRegular: 2,
+      priorityDailyCap: null,
+      priorityValidityMin: 0,
+      priorityCancelRefundPct: 50,
+      upgradeMinSavingMin: 5,
       businessSharePct: 70,
       graceMinutes: 10,
+      rejoinDelayMin: 15,
+      lateWindowMin: 15,
       cancelWindowMin: 15,
       counters: 1,
       maxSize: 300,
@@ -89,6 +96,38 @@ describe("QueueSettings", () => {
     ["maxSize", 2000],
   ])("accepts boundary %s = %s", (field, value) => {
     expect(QueueSettings.safeParse({ [field]: value }).success).toBe(true);
+  });
+});
+
+describe("PRI-01 / R1 settings", () => {
+  it("PRI-01: priority is off by default; N ≥ 1 (1-in-1 allowed); legacy 0 reads as the prefill 2", () => {
+    const s = defaultQueueSettings();
+    expect(s.priorityEnabled).toBe(false);
+    expect(
+      QueueSettings.parse({ priorityPerRegular: 1 }).priorityPerRegular,
+    ).toBe(1);
+    expect(
+      QueueSettings.parse({ priorityPerRegular: 0 }).priorityPerRegular,
+    ).toBe(2);
+    expect(
+      QueueSettingsPatch.safeParse({ priorityPerRegular: 0 }).success,
+    ).toBe(false);
+    expect(
+      QueueSettingsPatch.safeParse({ priorityDailyCap: null }).success,
+    ).toBe(true);
+    expect(
+      QueueSettingsPatch.safeParse({ priorityCancelRefundPct: 101 }).success,
+    ).toBe(false);
+  });
+
+  it("R1: late window may be null (no limit); rejoin delay 0 is allowed", () => {
+    expect(
+      QueueSettings.parse({ lateWindowMin: null }).lateWindowMin,
+    ).toBeNull();
+    expect(QueueSettings.parse({ rejoinDelayMin: 0 }).rejoinDelayMin).toBe(0);
+    expect(QueueSettingsPatch.safeParse({ lateWindowMin: 0 }).success).toBe(
+      false,
+    );
   });
 });
 
