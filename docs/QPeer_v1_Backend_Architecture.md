@@ -197,7 +197,7 @@ Columns are listed in logical order; every table also has `created_at` / `update
 | `push_tickets` | id (Expo ticket id), token_id, expo_push_token, kind, sent_at, receipt_checked_at, status | idx(receipt_checked_at) | 2 |
 | `free_lane_strikes` | id (outbox id), user_id, token_id, device_hash (C2), at (one row per no-show) | idx(user_id, at), idx(device_hash, at) | 2 |
 | `outbox_receipts` | id (QueueDO outbox id), kind, applied_at — dedupe for additive analytics upserts | pk(id) | 2 |
-| `payments` | id, user_id, queue_id, business_id, token_id, kind (`reservation`/`priority`/`upgrade`), amount_paise, device_hash (priority and upgrade, 2026-10-18), razorpay_order_id, razorpay_payment_id, status, refund_id, refund_paise (partial refunds), expires_at | unique(razorpay_order_id), unique(razorpay_payment_id), idx(user_id), idx(status, expires_at), idx(queue_id, device_hash, created_at) | 4 |
+| `payments` | id, user_id, queue_id, business_id, token_id, kind (`reservation`/`priority`/`upgrade`), amount_paise, device_hash (priority and upgrade, 2026-10-18), razorpay_order_id, razorpay_payment_id, status, refund_id, refund_paise (partial refunds), reason (`duplicate_payment` / `amount_mismatch` mark a stray row, §10.6), refund_attempts, refund_retry_at (refund backoff and lease, migration 0007), expires_at | unique(razorpay_order_id), unique(razorpay_payment_id), idx(user_id), idx(status, expires_at), idx(queue_id, device_hash, created_at) | 4 |
 | `ledger_entries` | id, payment_id, business_id, kind (`capture`/`refund`/`forfeit`/`business_share`/`platform_share`), amount_paise, at | idx(business_id, at), idx(payment_id) — **append-only** | 4 |
 | `webhook_events` | id (Razorpay event id), type, received_at, processed_at | pk(id) — dedupe | 4 |
 | `analytics_hourly` | queue_id, business_id, hour_start (IST hour, epoch ms), joins, leaves, served, no_shows, cancels, sum_wait_ms, waits, sum_interval_ms, intervals, eta_hits, eta_total | pk(queue_id, hour_start), idx(business_id, hour_start) | 2 (written), 5 (read) |
@@ -392,9 +392,9 @@ created ──(captured, verified)──► captured ──► allocated
 
 1. **Create order** `POST /v1/queues/:id/orders { kind }` — `requireRegistered`; DO `checkQuota`; amount from queue settings; create Razorpay order (receipt = our payment id); insert `payments` row `created` with `expires_at` = now + 30 min. For `kind: priority` (and `POST /v1/tokens/:id/upgrade`, kind `upgrade`) the body carries `deviceHash`; the Worker checks priority on, not sold out, 1 pass per account **and** per device hash per queue per IST day (`pass_limit`), and stores `device_hash` on the payment (§10.5).
 2. **App pays** with Razorpay Checkout using the order id.
-3. **Client confirmation** `POST /v1/payments/verify { orderId, paymentId, signature }` — verify `HMAC_SHA256(orderId|paymentId, keySecret)`; then `confirmPayment(orderId, paymentId)`.
-4. **Webhook** `POST /v1/webhooks/razorpay` — verify `X-Razorpay-Signature` = `HMAC_SHA256(rawBody, webhookSecret)` **on the raw body before parsing**; dedupe by event id in `webhook_events`; `payment.captured` → `confirmPayment(...)`; `refund.processed` → mark refund done.
-5. **`confirmPayment`** (shared by 3 and 4, idempotent): if already `allocated`, return the token. Else D1 status → `captured`; DO `allocate(... paymentOrderId)` (priority: `book`, upgrade: `upgrade`); on success → `allocated` + token id; on `quota_full`/`queue_closed` → refund via API → `refunded`. Ledger rows are written in one D1 batch with the status change.
+3. **Client confirmation** `POST /v1/payments/verify { orderId, paymentId, signature }` — verify `HMAC_SHA256(orderId|paymentId, keySecret)`; then `confirmPayment(orderId, paymentId)`. The signature alone is not money: `confirmPayment` fetches the payment from Razorpay; not captured (and not capturable) → `409 invalid_state` with `details.paymentStatus`, nothing recorded.
+4. **Webhook** `POST /v1/webhooks/razorpay` — verify `X-Razorpay-Signature` = `HMAC_SHA256(rawBody, webhookSecret)` **on the raw body before parsing**; dedupe by event id in `webhook_events`; `payment.captured` / `order.paid` / `payment.authorized` → `confirmPayment(...)` with the signed payment entity; `refund.processed` → mark refund done; `refund.failed` → back to `refund_due` (§10.6). An unknown order is logged and answered 200.
+5. **`confirmPayment`** (shared by 3, 4, the 15-min recovery and the daily reconcile; idempotent): only a Razorpay `captured` payment counts; an `authorized` one of the order's amount is captured first (Capture API). The order's first captured payment becomes its payment: D1 status → `captured`; DO `allocate(... paymentOrderId)` (priority: `book`, upgrade: `upgrade`); on success → `allocated` + token id; on `quota_full`/`queue_closed`/… → refund via API → `refunded`. Ledger rows are written in one D1 batch with the status change. Any other captured payment on the order, or one of the wrong amount, is a stray (§10.6), refunded in full.
 6. **Cancel** (`TOK-05`/`PAY-07`): DO `cancel` says whether the window applies → Refunds API → `refunded`.
 7. **Forfeit**: DO expiry of a paid token → outbox → payment `forfeited` + ledger `forfeit`, `business_share`, `platform_share`.
 8. **Queue closed**: DO `close` returns paid active tokens → refunds.
@@ -411,7 +411,8 @@ created ──(captured, verified)──► captured ──► allocated
 
 - Payments `captured` for more than 10 minutes without a token → retry `confirmPayment`, else refund and flag.
 - Payments `created` past `expires_at` → `expired`.
-- Fetch Razorpay payments for the last day (test mode) and compare with D1; log mismatches as errors.
+- Fetch Razorpay payments for the last day (test mode) and compare with D1: every captured or authorized payment that is not its order's recorded payment goes through `confirmPayment` (missed capture → ticket or refund; second payment or wrong amount → stray refund); log mismatches.
+- **Every 15 min** (`recover_orders`, G3): captured payments without a ticket for 2+ min are confirmed again; our orders still `created` / `failed` / `expired` from the last 2 h (≤ 15 per run, the one checked longest ago first) are looked up with `GET /orders/:id/payments` and any paid attempt is confirmed. So a lost webhook plus a dead phone costs ≤ 15 min, not a day.
 
 ### 10.5 Priority Pass and upgrade money rules (decided 2026-10-18, Step 4)
 
@@ -427,6 +428,47 @@ created ──(captured, verified)──► captured ──► allocated
 
 - Checked-in priority tokens never carry over; `close` returns them for a full refund (C6).
 - **Anti-misuse:** the pass is tied to the buyer's account (no transfer). `payments.device_hash` is recorded for `priority` and `upgrade`, and the 1-pass-per-queue-per-day rule is checked per user and per device hash. This extends the C2 device-hash rule, which so far ignored paid flows. Every call is logged with its time (audit for staff favouritism).
+
+### 10.6 Payment edge cases (review of 2026-10-29)
+
+A **stray** is a captured Razorpay payment that buys nothing: a second captured payment on an order already paid by another one, or a payment of the wrong amount. It gets its own `payments` row (`id = stray_<razorpay payment id>`, the order's kind, its real amount, `reason` `duplicate_payment` or `amount_mismatch`, `razorpay_order_id = <order id>:<payment id>` so the order's own row stays unique), a capture split and a full refund that reverses it. It nets to zero in the ledger and shows in both payment histories. Refunds hold a 2-min lease on `refund_retry_at` (no two refunds at once); after a failure the same column holds the backoff (next 15-min run, then 15 min, 30 min, 1 h … 6 h) and `refund_attempts` counts failures; from the 3rd failure on each one logs `refund_stuck` (error, alert on it). A live refund with our receipt is reused; a refund is capped at the captured amount minus Razorpay's other live refunds of the payment.
+
+Tests are in `apps/api/test/payments-edge.test.ts` (names quoted in short).
+
+| Situation | Behaviour | Test |
+|---|---|---|
+| Verify of an `authorized` payment (auto-capture off) | Captured via the Capture API, then the ticket | "verify of an authorized payment …" |
+| Verify with a valid signature, payment failed at Razorpay | `409 invalid_state` (`details.paymentStatus`), nothing recorded | "verify with a valid signature of a failed payment …" |
+| Razorpay unreachable at verify | `502 payment_provider_error`, nothing recorded; a retry works | "verify while Razorpay is unreachable …" |
+| Webhook `payment.authorized` | Captured and confirmed; the later `payment.captured` is a no-op | "webhook payment.authorized …" |
+| Authorized for a wrong amount | Never captured (Razorpay releases the hold), error log | "authorized for an amount other than the order's …" |
+| Two captured payments on one order (UPI retry) | One ticket; the other is a `duplicate_payment` stray, refunded in full | "UPI retry: two captured payments …" |
+| The duplicate seen again (verify, webhook, reconcile) | One refund only; its verify answers with the order's ticket | "the duplicate seen again …" |
+| Two payments confirmed at the same time | One ticket, one capture set, one refund | "two captured payments confirmed at the same time …" |
+| Verify and webhook of one payment at the same time | One ticket, one capture ledger set | "concurrent verify + webhook …" |
+| Webhook lost and no verify (phone died) | 15-min `recover_orders` confirms it | "webhook lost and the app never verified …" |
+| Authorized payment found by the 15-min run | Captured, then the ticket | "an authorized payment found by the 15-min run …" |
+| Order expired, payment captured late | Confirmed (ticket, or full refund if impossible) by webhook or the 15-min run | "order expired …" (2 tests), "a late capture whose ticket can no longer be made …" |
+| Order older than 2 h | Left to the daily reconcile, which confirms it | "orders older than 2 h …" |
+| Webhook for an order not in D1 | Logged, `200` (no retry storm); confirmed by the 15-min run once the row exists | "webhook for an order we don't know …" |
+| DO made the ticket, D1 `allocated` update failed | Payment stays `captured`; the next run/verify completes it, same ticket | "DO made the ticket but the D1 status update failed …" |
+| Captured amount ≠ order amount | `amount_mismatch` stray, actual amount refunded in full, error log; the order stays unpaid | "captured amount ≠ order amount …" |
+| Order asked again, its payment captured but unconfirmed | Confirmed now; `409 already_in_queue` with `details.tokenId` | "order requested again while its payment is captured …" |
+| Captured payment stuck without ticket, order asked again | Finished now; `409 already_in_queue` | "a captured payment stuck without its ticket …" |
+| Unpaid order asked again | Same order returned (no paid attempt at Razorpay) | "an unpaid order …" |
+| Pass already booked / upgrade already paid | `409 already_in_queue` with the ticket id | "Priority Pass already booked …", "Skip ahead already paid …" |
+| `payment.failed`, then a retry succeeds on the same order | One ticket | "payment.failed, then a retry succeeds …" |
+| `refund.failed` | Back to `refund_due`; the 15-min run makes a new refund; one live refund | "refund.failed → back to refund_due …" |
+| Webhook replay, same event id | No effect | "webhook replay with the same event id …" |
+| Refunds keep failing | Backoff; no attempt before it ends; `refund_stuck` after 3 failures | "refunds keep failing …" |
+| Two refund attempts at once | One Razorpay refund | "two refund attempts at the same time …" |
+| Refund larger than captured, or after a manual refund | Capped at what is left | "a refund asked for more than captured …" |
+| Partial % refund of an odd fee | Whole paise; refund and reversed shares add up exactly | "partial % refund of an odd fee …" |
+| Logs | Ids and codes only: no signature, body, token or secret | "verify, webhook and refund logs …" |
+
+A paid reservation does **not** by itself block another one: `paidPerUserCap` (default 2) allows a second paid reservation per user and queue, so G5 only blocks a second Checkout for the *same* purchase (the same order, a captured payment without its ticket, a booked pass, a paid upgrade).
+
+Partial refunds are whole paise: the outbox's `refund_paise = CAST((amount_paise × pct) / 100 AS INTEGER)` (D1 binds the percentage as a REAL; before 2026-10-29 a 33 % refund of ₹99.99 stored 3299.67, INC-062).
 
 ---
 
@@ -464,7 +506,7 @@ created ──(captured, verified)──► captured ──► allocated
 
 | Schedule | Job |
 |---|---|
-| every 15 min (`*/15 * * * *`) | `auto_close` (B20): hand open queues their hours, close overdue sessions (safety net for the DO alarm, §9.1); `expire_orders`: unpaid orders past 30 min → `expired`; `refunds`: make the Razorpay refunds of `refund_due` payments (≤ 40 per run) |
+| every 15 min (`*/15 * * * *`) | `auto_close` (B20): hand open queues their hours, close overdue sessions (safety net for the DO alarm, §9.1); `expire_orders`: unpaid orders past 30 min → `expired`; `recover_orders` (G3, §10.4): confirm paid orders of the last 2 h whose webhook was lost (≤ 15 per run) and captured payments without a ticket; `refunds`: make the Razorpay refunds of `refund_due` payments whose backoff is over (≤ 40 per run) |
 | hourly | check Expo push receipts; prune dead push tokens |
 | daily 03:00 IST (`30 21 * * *`) | `reconcile` (§10.4): expire orders, retry captured-without-token, due refunds, compare Razorpay's captured payments of the last day, flag paid tokens without a payment; delete `webhook_events` older than 30 days |
 

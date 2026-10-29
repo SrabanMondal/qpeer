@@ -49,6 +49,14 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 6. If one invariant check has an exemption, apply it to the related checks too. An invariant is a rule that must hold at all times. ([INC-028](incidents/INC-028-triage-order-checker-rule.md))
 7. When a checker finding is harmless, still read the whole log of that queue. A real bug was next to it. ([INC-025](incidents/INC-025-far-fanout-alarm-spin.md), [INC-029](incidents/INC-029-skipped-regular-in-triage-range.md))
 
+## Payments
+
+1. A client signature is never money. Ask Razorpay for the payment's status; only `captured` counts. ([INC-057](incidents/INC-057-ticket-for-uncaptured-payment.md))
+2. One order can have many payments. Refund every captured payment that did not buy anything, and every guard on money must decide ticket or refund, never just log. ([INC-058](incidents/INC-058-second-payment-on-order-kept.md), [INC-060](incidents/INC-060-amount-mismatch-money-kept.md))
+3. Every money path needs a recovery within minutes that does not depend on the app or one webhook, and before you offer a payment again, ask the provider whether the last one went through. ([INC-059](incidents/INC-059-lost-webhook-waits-a-day.md), [INC-061](incidents/INC-061-pay-again-when-already-paid.md))
+4. In D1 SQL, cast money arithmetic on a bound JavaScript number to `INTEGER`. ([INC-062](incidents/INC-062-fractional-partial-refund.md))
+5. Claim a payment in the database (a lease) before a provider call that two paths can make; count failures, back off, and alert. ([INC-063](incidents/INC-063-failed-refund-never-retried.md))
+
 ## Tooling
 
 1. Biome is the linter. Never run `npx expo lint`. It tries to add eslint to `package.json`. ([INC-019](incidents/INC-019-expo-lint-added-eslint.md))
