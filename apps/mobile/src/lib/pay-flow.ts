@@ -98,27 +98,86 @@ async function pollPayment(paymentId: string): Promise<PayOutcome> {
   return { kind: "pending" };
 }
 
+/** Verify attempts when Razorpay did not answer the server (502). */
+const VERIFY_TRIES = 3;
+const VERIFY_RETRY_MS = 2_000;
+
+/**
+ * The 409 `invalid_state` verify answers when Razorpay has not captured the
+ * payment yet (`details.paymentStatus`, e.g. `authorized` or `created` while
+ * a UPI payment settles). Not an error for the user: the webhook or the
+ * server's 15-min recovery confirms it, so the app waits for it.
+ */
+export function isNotCapturedYet(e: unknown): boolean {
+  if (!(e instanceof ApiError)) return false;
+  if (e.status !== 409 || e.code !== "invalid_state") return false;
+  const d = e.details;
+  return (
+    typeof d === "object" &&
+    d !== null &&
+    typeof (d as { paymentStatus?: unknown }).paymentStatus === "string"
+  );
+}
+
+/** A 502 `payment_provider_error`: the server could not reach Razorpay; retry. */
+function isProviderError(e: unknown): boolean {
+  return e instanceof ApiError && e.code === "payment_provider_error";
+}
+
 /** Confirms a successful Checkout and returns what to show next. */
 export async function confirmCheckout(
   order: OrderResponse,
   result: Extract<CheckoutResult, { kind: "success" }>,
 ): Promise<PayOutcome> {
   if (result.paymentId && /^[0-9a-f]{64}$/.test(result.signature)) {
-    try {
-      const r = await verifyPayment({
-        orderId: result.orderId,
-        paymentId: result.paymentId,
-        signature: result.signature,
-      });
-      if (r.token) return { kind: "ticket", token: r.token };
-      if (r.failure) return refundedOutcome(r.failure.code);
-      const done = fromPayment(r.payment);
-      if (done) return done;
-    } catch (e) {
-      // Network or a signature the server can't check: the webhook still
-      // confirms a real payment, so wait for it below.
-      if (!isNetworkError(e) && !(e instanceof ApiError)) throw e;
+    for (let attempt = 1; attempt <= VERIFY_TRIES; attempt++) {
+      try {
+        const r = await verifyPayment({
+          orderId: result.orderId,
+          paymentId: result.paymentId,
+          signature: result.signature,
+        });
+        if (r.token) return { kind: "ticket", token: r.token };
+        if (r.failure) return refundedOutcome(r.failure.code);
+        const done = fromPayment(r.payment);
+        if (done) return done;
+        break;
+      } catch (e) {
+        // Razorpay did not answer the server: nothing was recorded, so the
+        // same verify is safe to repeat after a short wait.
+        if (isProviderError(e) && attempt < VERIFY_TRIES) {
+          await sleep(VERIFY_RETRY_MS * attempt);
+          continue;
+        }
+        // Not captured yet (409 + paymentStatus), network, a provider error
+        // that persists, or a signature the server can't check: the webhook
+        // still confirms a real payment, so wait for it below ("Payment
+        // received — confirming").
+        if (
+          !isNotCapturedYet(e) &&
+          !isNetworkError(e) &&
+          !(e instanceof ApiError)
+        ) {
+          throw e;
+        }
+        break;
+      }
     }
   }
   return pollPayment(order.paymentId);
+}
+
+/**
+ * An order request answered 409 `already_in_queue` with the ticket the user
+ * already holds here (one active ticket per person per queue): its id, so
+ * the app opens it instead of showing an error. Null for anything else.
+ */
+export function existingTicketId(e: unknown): string | null {
+  if (!(e instanceof ApiError) || e.code !== "already_in_queue") return null;
+  const d = e.details;
+  const id =
+    typeof d === "object" && d !== null
+      ? (d as { tokenId?: unknown }).tokenId
+      : undefined;
+  return typeof id === "string" && id.length > 0 ? id : null;
 }

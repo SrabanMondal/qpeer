@@ -288,7 +288,7 @@ export function payErrorView(error: unknown): JoinProblem {
       return {
         title: "No reservations left right now",
         message:
-          "The places kept for reservations are taken, or you already hold the most paid tickets allowed here. Try again later or walk in.",
+          "The places kept for reservations are taken. Try again later or walk in.",
         fix: "retry",
         support,
       };

@@ -5,6 +5,8 @@
  * logged; errors carry Razorpay's status and error code only.
  */
 
+import type { CallBudget } from "../../lib/call-budget";
+
 const API = "https://api.razorpay.com/v1";
 const TIMEOUT_MS = 10_000;
 
@@ -201,4 +203,30 @@ export function razorpayWebhookSecret(env: RazorpayEnv): string {
 export function razorpayTransport(env: RazorpayEnv): RazorpayTransport {
   if (razorpayOverride.transport) return razorpayOverride.transport;
   return httpTransport(razorpayKeyId(env), razorpayKeySecret(env));
+}
+
+/**
+ * Counts every call against `budget` (one scheduled run, §14). With the
+ * budget used up a call throws `BudgetSpent` before reaching Razorpay.
+ */
+export function withBudget(
+  t: RazorpayTransport,
+  budget: CallBudget | undefined,
+): RazorpayTransport {
+  if (!budget) return t;
+  const spend =
+    <A extends unknown[], R>(fn: (...a: A) => Promise<R>) =>
+    async (...a: A): Promise<R> => {
+      budget.take();
+      return fn(...a);
+    };
+  return {
+    createOrder: spend(t.createOrder.bind(t)),
+    createRefund: spend(t.createRefund.bind(t)),
+    listRefunds: spend(t.listRefunds.bind(t)),
+    listPayments: spend(t.listPayments.bind(t)),
+    fetchOrderPayments: spend(t.fetchOrderPayments.bind(t)),
+    fetchPayment: spend(t.fetchPayment.bind(t)),
+    capturePayment: spend(t.capturePayment.bind(t)),
+  };
 }

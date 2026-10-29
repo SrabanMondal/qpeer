@@ -100,7 +100,7 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **QUE-01** Atomic numbers: concurrent joins never get the same number (tested with parallel requests)
 - [ ] **QUE-02** Order: triage → priority (x) → regular, each by join sequence. A remote reservation gets its place when payment is confirmed. *(since 2026-10-18 priority follows the 1-in-N credit rule: PRI-06)*
 - [ ] **QUE-03** People ahead = waiting tokens before mine. Correct after leaves, cancels, no-shows and skips.
-- [ ] **QUE-04** One active free token per user per queue. Paid reservations are capped per user (e.g. 2 per queue).
+- [ ] **QUE-04** One active free token per user per queue. *(Since 2026-10-30, INC-065: one active ticket per person per queue applies to paid reservations too — a reservation next to any active ticket is `already_in_queue`; the old paid cap, `paidPerUserCap`, is retired.)*
 
 **Operations**
 - [x] **QUE-05** Next (calls the next waiting token, records the interval and the counter)

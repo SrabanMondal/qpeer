@@ -715,6 +715,90 @@ describe("G5 · no second Checkout for a paid purchase", () => {
   });
 });
 
+// ---------- one active ticket per person per queue, paid too (INC-065) ----------
+
+describe("one active ticket per person per queue · paid reservations", () => {
+  it("reservation already allocated by the webhook (app lost the answer) → a new order is 409 already_in_queue with its tokenId; no second Razorpay order", async () => {
+    const q = await setup();
+    const tok = await user();
+    const o = await newOrder(q, tok);
+    const a = rzp.attempt(o.orderId, o.amountPaise);
+    await webhook(paymentEvent("payment.captured", a), `evt_one_${a.id}`);
+    const p = await row(o.paymentId);
+    expect(p?.status).toBe("allocated");
+    const before = rzp.orders.length;
+    const e = await expectError(await order(q, tok), 409, "already_in_queue");
+    expect(e.details).toMatchObject({ tokenId: p?.token_id });
+    expect(rzp.orders.length).toBe(before);
+  });
+
+  it("a free ticket or a booked Priority Pass also blocks a paid reservation → 409 already_in_queue with that ticket's id", async () => {
+    const q = await setup(PRIORITY);
+    const walker = await user();
+    const free = await expectOk(
+      await api.call("POST", `/v1/queues/${q}/join`, walker, NEAR),
+      201,
+      TokenView,
+    );
+    const e1 = await expectError(
+      await order(q, walker),
+      409,
+      "already_in_queue",
+    );
+    expect(e1.details).toMatchObject({ tokenId: free.id });
+
+    const passer = await user();
+    const body = { kind: "priority", deviceHash: "a1".repeat(32) };
+    const o = await newOrder(q, passer, body);
+    const a = rzp.attempt(o.orderId, o.amountPaise);
+    const r = await expectOk(
+      await verify(o, passer, a.id),
+      200,
+      ConfirmPaymentResponse,
+    );
+    expect(r.token?.state).toBe("BOOKED");
+    const e2 = await expectError(
+      await order(q, passer),
+      409,
+      "already_in_queue",
+    );
+    expect(e2.details).toMatchObject({ tokenId: r.token?.id });
+  });
+
+  it("an active ticket made after the order was created → the paid reservation is refused at confirm and refunded in full (reason already_in_queue)", async () => {
+    const q = await setup();
+    const tok = await user();
+    const o = await newOrder(q, tok);
+    const free = await expectOk(
+      await api.call("POST", `/v1/queues/${q}/join`, tok, NEAR),
+      201,
+      TokenView,
+    );
+    const a = rzp.attempt(o.orderId, o.amountPaise);
+    const r = await expectOk(
+      await verify(o, tok, a.id),
+      200,
+      ConfirmPaymentResponse,
+    );
+    expect(r.token).toBeNull();
+    expect(r.failure?.code).toBe("already_in_queue");
+    expect(await row(o.paymentId)).toMatchObject({
+      status: "refunded",
+      reason: "already_in_queue",
+      refund_paise: o.amountPaise,
+    });
+    expect(rzp.refundsOf(a.id).map((x) => x.amount)).toEqual([o.amountPaise]);
+    expect(await ticketsFor(o.paymentId)).toBe(0);
+    // The free ticket is untouched.
+    const t = await expectOk(
+      await api.call("GET", `/v1/tokens/${free.id}`, tok),
+      200,
+      TokenView,
+    );
+    expect(t.state).toBe("WAITING");
+  });
+});
+
 // ---------- retries and refunds ----------
 
 describe("Retries and refunds", () => {

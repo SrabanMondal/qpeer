@@ -302,13 +302,16 @@ Scan QR → app reads queueId → expo-location (high accuracy, once)
 ### 6.3 Remote reservation (Razorpay test mode)
 ```text
 Customer (signed in, not anonymous) taps Reserve
-→ POST /orders → Worker checks walk-in quota with QueueDO → creates Razorpay order
+→ POST /orders → Worker checks with QueueDO: no active ticket of this person in the queue,
+  walk-in quota → creates Razorpay order
 → app opens Razorpay Checkout → success callback {order_id, payment_id, signature}
 → POST /payments/verify → Worker verifies signature (HMAC) → QueueDO.allocate(remote, orderId)
 → webhook payment.captured → same idempotent allocate (whichever arrives first wins)
 → D1 batch: payment captured + ledger capture + business_share + platform_share
-If the quota filled up in between → automatic refund + ledger refund
+If the quota filled up in between, or the person got another active ticket here → automatic refund + ledger refund
 ```
+
+**One active ticket per person per queue, paid reservations too (owner, 2026-10-18; enforced for reservations 2026-10-30).** A person who already holds any active ticket in the queue (booked, waiting, called, in grace or missed) can't buy a reservation there: the server answers "already in queue" with that ticket and the app opens it. The old setting "paid tickets per person" (2) is retired.
 
 **Fee after a missed turn (decided 2026-10-18, built in Step 4):** the fee is kept only if the ticket expires and the person never arrived. If the person is served, even after a rejoin, the fee paid for holding the place (no refund). If the business cancels or closes early, the fee is refunded. A paid ticket that misses gets no no-show strike (C5).
 

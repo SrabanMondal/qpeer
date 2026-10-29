@@ -40,6 +40,8 @@ Code review of the Step 4 payments by the orchestrator on 2026-10-29.
 
 The app should treat `already_in_queue` from `POST /v1/queues/:id/orders` and `POST /v1/tokens/:id/upgrade` like the join flow: open `details.tokenId`. If the product wants "one paid reservation per person" instead of the cap of 2, that is a settings decision, not this fix.
 
+Update 2026-10-30: both done in [INC-065](INC-065-second-paid-reservation.md) (the app opens `details.tokenId`; one active ticket per person per queue now covers paid reservations and the cap is retired).
+
 ## Lessons
 
 Before you offer a payment again, ask the provider whether the last one already went through.
