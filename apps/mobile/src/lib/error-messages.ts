@@ -19,9 +19,10 @@ const API_MESSAGES: Record<ErrorCode, string> = {
   queue_paused: "This queue is paused right now.",
   queue_full: "This queue is full.",
   quota_full: "No more reservations are available for this hour.",
-  priority_off: "Priority Pass is not offered at this queue.",
-  sold_out: "Priority Passes are sold out for today.",
-  pass_limit: "You already bought a Priority Pass for this queue today.",
+  priority_off: "This queue has no priority lane right now.",
+  sold_out: "Priority Passes are sold out for today. Try again tomorrow.",
+  pass_limit:
+    "Only one Priority Pass per person and per phone, per queue, each day. You or this phone already have one here today.",
   invalid_state: "That is not possible right now.",
   too_far: "You are too far from the business to join as a walk-in.",
   mock_location: "Turn off mock location to join.",
@@ -29,7 +30,8 @@ const API_MESSAGES: Record<ErrorCode, string> = {
   free_lane_blocked:
     "You missed several turns recently, so walk-in joins are paused for a while.",
   rate_limited: "Too many requests. Wait a moment and try again.",
-  payment_provider_error: "The payment service had a problem. Try again.",
+  payment_provider_error:
+    "The payment service had a problem. You were not charged. Try again in a moment.",
   internal: "The server had a problem. Try again.",
 };
 
@@ -38,6 +40,11 @@ const CLIENT_MESSAGES: Record<string, string> = {
   network: "Could not reach the server. Check your internet connection.",
   no_user: "Still connecting. Try again in a moment.",
   invalid_response: "The server sent an unexpected response. Try again.",
+  no_device_id: "Priority Passes can only be bought on an Android phone.",
+  payment_unavailable:
+    "Payments are not available in this version of the app. Update Qpeer and try again.",
+  payment_dismissed: "Payment not completed. You were not charged.",
+  payment_failed: "The payment did not go through. You were not charged.",
 };
 
 export function messageForCode(code: string, status?: number): string {

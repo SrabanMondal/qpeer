@@ -22,4 +22,12 @@ export const queryKeys = {
   myTokensAll: (uid: string | null) => ["tokens", uid, "mine"] as const,
   myTokens: (uid: string | null, status: "active" | "recent") =>
     ["tokens", uid, "mine", status] as const,
+  /** Step 4: the caller's payment history (PAY-11). */
+  myPayments: (uid: string | null) => ["payments", uid, "mine"] as const,
+  /** Step 4: an owner's business payments with the net split. */
+  businessPayments: (uid: string | null, businessId: string) =>
+    ["payments", uid, "business", businessId] as const,
+  /** Step 4: the honest Priority Pass preview (PRI-02). */
+  priorityPreview: (uid: string | null, queueId: string) =>
+    ["priority-preview", uid, queueId] as const,
 };

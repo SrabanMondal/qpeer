@@ -5,5 +5,6 @@ export * from "./devices";
 export * from "./keys";
 export * from "./map";
 export * from "./me";
+export * from "./payments";
 export * from "./queues";
 export * from "./tokens";
