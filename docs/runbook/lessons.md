@@ -58,6 +58,8 @@ The queue engine runs in one Durable Object (DO) for each queue. D1 is the Cloud
 5. Claim a payment in the database (a lease) before a provider call that two paths can make; count failures, back off, and alert. ([INC-063](incidents/INC-063-failed-refund-never-retried.md))
 6. A per-invocation platform limit (50 subrequests on the free plan) needs one call budget shared by every job of that invocation; stop cleanly when it is used up, and never count "out of budget" as a provider failure. ([INC-064](incidents/INC-064-cron-subrequest-limit.md))
 7. When the owner changes a rule, find every path that still enforces the old one (settings, DO checks, docs) and retire the old setting explicitly. ([INC-065](incidents/INC-065-second-paid-reservation.md))
+8. Money can move outside our system (the provider's dashboard). Reconcile against the provider's own refund totals for a payment, not only against the refunds we made. ([INC-067](incidents/INC-067-refund-outside-qpeer.md))
+9. When a row moves to a new state, reset every field that describes the old state. ([INC-068](incidents/INC-068-stale-failure-reason.md))
 
 ## Tooling
 
