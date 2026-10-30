@@ -38,7 +38,7 @@ Cloud baseline rerun on 2026-10-30.
 
 ## Follow-ups
 
-The owner decided "if no priority person is waiting, regulars proceed normally" (2026-10-18). The mirror rule (a priority holder is called when no regular waits) is engine behaviour; confirm it with the owner and record it in architecture §23.
+None. The owner confirmed the mirror rule on 2026-10-30: when no regular is waiting, a priority holder is called at once. It is recorded in architecture §23 (Priority Pass "Next rule").
 
 ## Lessons
 
