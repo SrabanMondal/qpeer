@@ -192,9 +192,9 @@ const paymentEvent = (
   },
 });
 
-const refundEvent = (event: string, refundId: string) => ({
+const refundEvent = (event: string, refundId: string, paymentId?: string) => ({
   event,
-  payload: { refund: { entity: { id: refundId } } },
+  payload: { refund: { entity: { id: refundId, payment_id: paymentId } } },
 });
 
 interface Row {
@@ -920,7 +920,7 @@ describe("Retries and refunds", () => {
     expect((await row(o.paymentId))?.status).toBe("refunded");
   });
 
-  it("a refund asked for more than captured, or after an earlier refund by hand → capped at what is left", async () => {
+  it("a refund asked for more than captured, or after an earlier refund by hand → only what is left is refunded; total recorded", async () => {
     const q = await setup();
     const tok = await user();
     const o = await newOrder(q, tok);
@@ -940,8 +940,113 @@ describe("Retries and refunds", () => {
     expect(await processRefund(payCtx(), o.paymentId)).toBe(true);
     const total = rzp.refundsOf(a.id).reduce((s, r) => s + r.amount, 0);
     expect(total).toBe(o.amountPaise);
-    expect((await row(o.paymentId))?.refund_paise).toBe(o.amountPaise - 500);
+    // What Razorpay really refunded on the payment (hand-made 500 + ours).
+    expect((await row(o.paymentId))?.refund_paise).toBe(o.amountPaise);
+    expect(sum(await ledger(o.paymentId), "refund")).toBe(-o.amountPaise);
     expect(logged("refund_capped")).toBe(true);
+    expect(logged("refund_outside")).toBe(true);
+  });
+
+  /** A captured, allocated reservation, then made `refund_due` in full. */
+  async function paidThenDue() {
+    const q = await setup();
+    const tok = await user();
+    const o = await newOrder(q, tok);
+    const a = rzp.attempt(o.orderId, o.amountPaise);
+    await verify(o, tok, a.id);
+    const due = () =>
+      env.DB.prepare(
+        "UPDATE payments SET status = 'refund_due', refund_paise = amount_paise, reason = 'closed' WHERE id = ?",
+      )
+        .bind(o.paymentId)
+        .run();
+    return { o, a, due };
+  }
+
+  it("full refund made in the Razorpay dashboard, then our refund is due → adopted once, no new refund", async () => {
+    const { o, a, due } = await paidThenDue();
+    const manual = await rzp.transport.createRefund(a.id, {
+      amount: o.amountPaise,
+      receipt: "",
+      notes: {},
+    });
+    await due();
+    const calls = rzp.calls.createRefund;
+    expect(await processRefund(payCtx(), o.paymentId)).toBe(true);
+    expect(rzp.calls.createRefund).toBe(calls);
+    expect(await row(o.paymentId)).toMatchObject({
+      status: "refunded",
+      refund_paise: o.amountPaise,
+      refund_id: manual.id,
+      refund_attempts: 0,
+    });
+    // Replays: processRefund again, the cron, and the webhook → no double ledger.
+    await processRefund(payCtx(api.clock.now() + 5 * MIN), o.paymentId);
+    await quarter(api.clock.now() + 5 * MIN);
+    await webhook(
+      refundEvent("refund.processed", manual.id, a.id),
+      `evt_adopt1_${a.id}`,
+    );
+    const l = await ledger(o.paymentId);
+    expect(sum(l, "refund")).toBe(-o.amountPaise);
+    expect(sum(l, "business_share") + sum(l, "platform_share")).toBe(0);
+    expect(rzp.refundsOf(a.id)).toHaveLength(1);
+    expect(logged("refund_stuck")).toBe(false);
+  });
+
+  it("refund.processed for a dashboard refund on a refund_due payment → adopted from the webhook", async () => {
+    const { o, a, due } = await paidThenDue();
+    rzp.failNextRefunds(100);
+    await due();
+    expect(await processRefund(payCtx(), o.paymentId)).toBe(false);
+    rzp.failNextRefunds(0);
+    // Our refund kept failing; the owner refunds by hand in the dashboard.
+    const manual = await rzp.transport.createRefund(a.id, {
+      amount: o.amountPaise,
+      receipt: "",
+      notes: {},
+    });
+    const ev = refundEvent("refund.processed", manual.id, a.id);
+    expect((await webhook(ev, `evt_adopt2_${a.id}`)).status).toBe(200);
+    expect(await row(o.paymentId)).toMatchObject({
+      status: "refunded",
+      refund_paise: o.amountPaise,
+      refund_id: manual.id,
+    });
+    // A replay under another event id changes nothing.
+    await webhook(ev, `evt_adopt2b_${a.id}`);
+    expect(sum(await ledger(o.paymentId), "refund")).toBe(-o.amountPaise);
+    expect(rzp.refundsOf(a.id)).toHaveLength(1);
+  });
+
+  it("partial dashboard refund, then our full refund is due → we refund only the remainder", async () => {
+    const { o, a, due } = await paidThenDue();
+    const part = Math.floor(o.amountPaise / 3);
+    const manual = await rzp.transport.createRefund(a.id, {
+      amount: part,
+      receipt: "",
+      notes: {},
+    });
+    // The webhook for a partial refund on a payment that owes nothing yet:
+    // logged, nothing changes.
+    await webhook(
+      refundEvent("refund.processed", manual.id, a.id),
+      `evt_part_${a.id}`,
+    );
+    expect((await row(o.paymentId))?.status).toBe("allocated");
+    expect(logged("refund_outside_not_due")).toBe(true);
+    await due();
+    expect(await processRefund(payCtx(), o.paymentId)).toBe(true);
+    const ours = rzp.refundsOf(a.id).filter((r) => r.receipt === o.paymentId);
+    expect(ours.map((r) => r.amount)).toEqual([o.amountPaise - part]);
+    expect(await row(o.paymentId)).toMatchObject({
+      status: "refunded",
+      refund_paise: o.amountPaise,
+      refund_id: ours[0].id,
+    });
+    await processRefund(payCtx(api.clock.now() + 5 * MIN), o.paymentId);
+    expect(sum(await ledger(o.paymentId), "refund")).toBe(-o.amountPaise);
+    expect(rzp.refundsOf(a.id)).toHaveLength(2);
   });
 
   it("partial % refund of an odd fee → refund and reversed shares add up exactly; net shares = fee − refund", async () => {

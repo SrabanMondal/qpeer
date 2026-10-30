@@ -15,8 +15,9 @@ import { confirmPayment, markFailed, markRefund, type PayCtx } from "./service";
  * 3. `payment.captured` / `order.paid` / `payment.authorized` →
  *    `confirmPayment` (same idempotent path as the client verify; an
  *    authorized payment is captured there, G1); `payment.failed` → `failed`;
- *    `refund.processed` → done; `refund.failed` → `refund_due` again for the
- *    cron. Other events are acknowledged. A provider error answers 502, so
+ *    `refund.processed` → done (a refund we did not make, e.g. from the
+ *    Razorpay dashboard, is adopted if it covers what we owe);
+ *    `refund.failed` → `refund_due` again for the cron. Other events are acknowledged. A provider error answers 502, so
  *    Razorpay delivers the event again.
  *
  * Never logs the body or the signature.
@@ -137,6 +138,7 @@ export async function handleRazorpayWebhook(
           ctx,
           refund.id,
           type === "refund.processed" ? "processed" : "failed",
+          refund.payment_id,
         );
       }
       break;
