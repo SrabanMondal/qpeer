@@ -3,12 +3,15 @@ import {
   boxFromCorners,
   clampMapBox,
   type LatLng,
+  LIST_RADIUS_KM,
+  listBox,
   type MapBox,
   type MapBusiness,
   type MapSort,
   mapQueryString,
   markerFeatures,
   sortBusinesses,
+  withinRadius,
 } from "@qpeer/shared";
 import type { MapState } from "@rnmapbox/maps";
 import { useIsFocused, useRouter } from "expo-router";
@@ -159,9 +162,26 @@ export function DiscoverScreen() {
   const [pulling, setPulling] = useState(false);
   const [topHeight, setTopHeight] = useState(0);
 
+  // The map centre (last camera stop); the List reaches around it when the
+  // user's location is unknown.
+  const [mapCentre, setMapCentre] = useState<LatLng>(start);
+
+  const listMode = view === "list" || !hasToken;
+  // The map asks for its visible box (pills); the List for ~25 km around the
+  // user (or the map centre), whatever the map's zoom.
   const query = mapQueryString(box, { category, openNow });
-  const data = useMapBusinesses(query, focused);
+  const data = useMapBusinesses(listMode ? null : query, focused);
   const items = useMemo(() => data.data?.items ?? [], [data.data]);
+  const listCentre = userLoc ?? mapCentre;
+  const listQuery = mapQueryString(listBox(listCentre), { category, openNow });
+  const listData = useMapBusinesses(listMode ? listQuery : null, focused);
+  const listItems = useMemo(
+    () => withinRadius(listData.data?.items ?? [], listCentre),
+    [listData.data, listCentre],
+  );
+  // What the visible view shows: notices, loading/empty/error states.
+  const shown = listMode ? listData : data;
+  const shownItems = listMode ? listItems : items;
 
   // MAP-01: start on the user when location permission was already given
   // (no prompt on open); otherwise stay on Jammu.
@@ -187,6 +207,9 @@ export function DiscoverScreen() {
       const { ne, sw } = state.properties.bounds;
       const [lng, lat] = state.properties.center;
       void writeStored("mapCamera", { lat, lng, zoom: state.properties.zoom });
+      setMapCentre((old) =>
+        old.lat === lat && old.lng === lng ? old : { lat, lng },
+      );
       const next = clampMapBox(boxFromCorners(ne, sw));
       setClamped(next.clamped);
       setBox((old) =>
@@ -221,8 +244,8 @@ export function DiscoverScreen() {
   const effectiveSort: MapSort =
     sort === "distance" && !userLoc ? "wait" : sort;
   const rows = useMemo(
-    () => sortBusinesses(items, effectiveSort, userLoc),
-    [items, effectiveSort, userLoc],
+    () => sortBusinesses(listItems, effectiveSort, userLoc),
+    [listItems, effectiveSort, userLoc],
   );
 
   const openDetails = (id: string) =>
@@ -269,11 +292,10 @@ export function DiscoverScreen() {
     }
   };
 
-  const listMode = view === "list" || !hasToken;
   const filtersOn = category !== null || openNow;
-  const firstLoad = data.isPending && data.fetchStatus === "fetching";
-  const failedWithoutData = data.isError && !data.data;
-  const empty = data.data !== undefined && items.length === 0;
+  const firstLoad = shown.isPending && shown.fetchStatus === "fetching";
+  const failedWithoutData = shown.isError && !shown.data;
+  const empty = shown.data !== undefined && shownItems.length === 0;
 
   const notices = (
     <>
@@ -288,19 +310,23 @@ export function DiscoverScreen() {
           </ThemedText>
         </Card>
       ) : null}
-      {clamped ? (
+      {clamped && !listMode ? (
         <Notice
           icon="zoom_in"
           text="Zoom in to see queues across this whole area."
         />
       ) : null}
-      {data.data?.truncated ? (
+      {shown.data?.truncated ? (
         <Notice
           icon="info"
-          text="Showing the nearest 200. Zoom in to see more."
+          text={
+            listMode
+              ? "Showing the nearest 200."
+              : "Showing the nearest 200. Zoom in to see more."
+          }
         />
       ) : null}
-      {data.isError && data.data && !isNetworkError(data.error) ? (
+      {shown.isError && shown.data && !isNetworkError(shown.error) ? (
         <Notice
           icon="cloud_off"
           text="Could not refresh. Showing the last results."
@@ -312,7 +338,7 @@ export function DiscoverScreen() {
   // B13/B14: offline with nothing to show, or the map style failed: a calm
   // card with the saved tickets, never a spinner or a black map.
   const offlineCard =
-    (offline && !data.data) || (mapFailed && !listMode) ? (
+    (offline && !shown.data) || (mapFailed && !listMode) ? (
       <OfflineTicketsCard
         title={
           mapFailed && !offline
@@ -322,7 +348,7 @@ export function DiscoverScreen() {
         onRetry={() => {
           setMapFailed(false);
           setMapKey((k) => k + 1);
-          void data.refetch();
+          void shown.refetch();
         }}
       />
     ) : null;
@@ -334,18 +360,22 @@ export function DiscoverScreen() {
   ) : failedWithoutData ? (
     <ErrorState
       title="Could not load queues"
-      error={data.error}
-      onRetry={() => void data.refetch()}
-      retrying={data.isFetching}
+      error={shown.error}
+      onRetry={() => void shown.refetch()}
+      retrying={shown.isFetching}
     />
   ) : empty ? (
     <EmptyState
       icon="map"
       title={filtersOn ? "No matching queues here" : "No queues here yet"}
       message={
-        filtersOn
-          ? "Try All categories, turn off Open now, or move the map."
-          : "Try zooming out or another area."
+        listMode
+          ? filtersOn
+            ? `Nothing within ~${LIST_RADIUS_KM} km. Try All categories or turn off Open now.`
+            : `Nothing within ~${LIST_RADIUS_KM} km yet.`
+          : filtersOn
+            ? "Try All categories, turn off Open now, or move the map."
+            : "Try zooming out or another area."
       }
       action={
         filtersOn ? (
@@ -392,12 +422,17 @@ export function DiscoverScreen() {
             refreshing={pulling}
             onRefresh={() => {
               setPulling(true);
-              void data.refetch().finally(() => setPulling(false));
+              void listData.refetch().finally(() => setPulling(false));
             }}
             topInset={topHeight}
             header={
               <View style={styles.listTop}>
                 {notices}
+                <ThemedText type="small" themeColor="inkMuted">
+                  {userLoc
+                    ? `Within ~${LIST_RADIUS_KM} km of you`
+                    : `Within ~${LIST_RADIUS_KM} km of the map centre`}
+                </ThemedText>
                 {userLoc === null ? (
                   <Pressable
                     onPress={() => void recenter()}
@@ -451,7 +486,7 @@ export function DiscoverScreen() {
             pointerEvents="box-none"
           >
             {notices}
-            {data.isFetching && !firstLoad ? (
+            {shown.isFetching && !firstLoad ? (
               <View
                 style={[styles.refreshing, { backgroundColor: theme.card }]}
                 accessibilityLabel="Refreshing"

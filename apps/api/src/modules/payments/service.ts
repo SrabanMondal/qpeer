@@ -717,9 +717,10 @@ export async function confirmPayment(
   if (p.razorpayPaymentId === null) {
     // The order's first captured payment becomes its payment. One D1 batch
     // (one transaction): the status change and the capture split. The ledger
-    // ids are per order, so a racing second payment writes nothing new.
+    // ids are per order, so a racing second payment writes nothing new. The
+    // reason of an earlier failed attempt on this order is cleared.
     const claim = env.DB.prepare(
-      `UPDATE payments SET status = 'captured', razorpay_payment_id = ?, updated_at = ?
+      `UPDATE payments SET status = 'captured', razorpay_payment_id = ?, reason = NULL, updated_at = ?
        WHERE id = ? AND razorpay_payment_id IS NULL
          AND status IN ('created', 'failed', 'expired')`,
     ).bind(cap.id, now, p.id);
@@ -1005,8 +1006,10 @@ async function refundAttemptFailed(
  *   column holds the backoff after a failure (`refundBackoffMs`).
  * - Idempotent: a live (not failed) refund with our receipt (= payment id) is
  *   reused, never a second one.
- * - Never more than captured: the amount is capped at the captured amount
- *   minus Razorpay's other live refunds of this payment.
+ * - Refunds made outside our system (Razorpay dashboard, other receipt) count
+ *   towards what we owe: if they cover it they are adopted (no new refund),
+ *   else only the remainder is refunded. The recorded amount is the sum of
+ *   all live refunds, capped at the captured amount.
  * Provider errors leave it `refund_due` for the 15-min cron. Returns true
  * when the payment is now refunded.
  */
@@ -1014,7 +1017,7 @@ export async function processRefund(
   ctx: PayCtx,
   paymentId: string,
 ): Promise<boolean> {
-  const { db, env, now } = ctx;
+  const { db, now } = ctx;
   const p = await paymentById(db, paymentId);
   if (!p) return false;
   if (p.status !== "refund_due") return p.status === "refunded";
@@ -1030,36 +1033,51 @@ export async function processRefund(
       WHERE id = ${p.id} AND status = 'refund_due'
         AND (refund_retry_at IS NULL OR refund_retry_at <= ${now})`);
   if (!lease.meta.changes) return false;
-  let refund: RazorpayRefund;
+  let live: RazorpayRefund[];
+  let main: RazorpayRefund;
   try {
     const transport = rzp(ctx);
-    const live = (await transport.listRefunds(p.razorpayPaymentId)).filter(
-      (r) => r.status !== "failed",
-    );
-    const earlier = live.find((r) => r.receipt === p.id);
-    if (earlier) {
-      refund = earlier;
+    live = liveRefunds(await transport.listRefunds(p.razorpayPaymentId));
+    const ours = live.find((r) => r.receipt === p.id);
+    const before = live.reduce((sum, r) => sum + r.amount, 0);
+    const want = refundWanted(p);
+    if ((p.refundPaise ?? 0) > p.amountPaise) {
+      logPayment("error", "refund_capped", {
+        paymentId: p.id,
+        amountPaise: p.amountPaise,
+        wantedPaise: p.refundPaise,
+      });
+    }
+    if (ours) {
+      main = ours;
+    } else if (before >= want && before > 0) {
+      // Refunded outside our system (e.g. the Razorpay dashboard) and that
+      // already covers what we owe: adopt it, never refund again.
+      logPayment("warn", "refund_outside", {
+        paymentId: p.id,
+        outsidePaise: before,
+        wantedPaise: want,
+      });
+      main = live[live.length - 1];
     } else {
-      const before = live.reduce((sum, r) => sum + r.amount, 0);
-      // Whole paise only (Razorpay rejects fractions).
-      const want = Math.floor(
-        Math.min(p.refundPaise ?? p.amountPaise, p.amountPaise),
-      );
-      const amount = Math.min(want, p.amountPaise - before);
-      if (amount <= 0) throw new RefundBlocked("nothing_left_to_refund");
-      if (amount < want) {
-        logPayment("error", "refund_capped", {
+      // Refunds made outside our system count towards what we owe: only the
+      // remainder is refunded (never more than captured).
+      const amount = Math.min(want - before, p.amountPaise - before);
+      if (amount <= 0) throw new RefundBlocked("nothing_to_refund");
+      if (before > 0) {
+        logPayment("warn", "refund_outside", {
           paymentId: p.id,
-          amountPaise: amount,
+          outsidePaise: before,
           wantedPaise: want,
         });
       }
-      refund = await transport.createRefund(p.razorpayPaymentId, {
+      main = await transport.createRefund(p.razorpayPaymentId, {
         amount,
         receipt: p.id,
         notes: { paymentId: p.id, reason: p.reason ?? "refund" },
       });
-      if (refund.status === "failed") throw new RefundBlocked("refund_failed");
+      if (main.status === "failed") throw new RefundBlocked("refund_failed");
+      live = [...live, main];
     }
   } catch (e) {
     if (e instanceof BudgetSpent) {
@@ -1072,22 +1090,56 @@ export async function processRefund(
     await refundAttemptFailed(ctx, p, p.refundAttempts + 1, e);
     return false;
   }
-  const amount = refund.amount;
+  return recordRefunded(ctx, p, live, main);
+}
+
+/** Razorpay refunds that hold money (not `failed`), oldest first as listed. */
+function liveRefunds(list: RazorpayRefund[]): RazorpayRefund[] {
+  return list.filter((r) => r.status !== "failed");
+}
+
+/** What a `refund_due` payment owes: whole paise, never more than captured. */
+function refundWanted(p: Payment): number {
+  return Math.floor(Math.min(p.refundPaise ?? p.amountPaise, p.amountPaise));
+}
+
+/**
+ * Marks a `refund_due` payment `refunded` (one D1 batch with the ledger
+ * refund + reversed shares). The amount is what Razorpay really refunded on
+ * this payment: the sum of its live refunds (ours and any made outside our
+ * system), capped at the captured amount. Idempotent: guarded by the status
+ * and deterministic ledger ids. Sends the `refund_issued` push.
+ */
+async function recordRefunded(
+  ctx: PayCtx,
+  p: Payment,
+  live: RazorpayRefund[],
+  main: RazorpayRefund,
+): Promise<boolean> {
+  const { env, now } = ctx;
+  const amount = Math.min(
+    live.reduce((sum, r) => sum + r.amount, 0),
+    p.amountPaise,
+  );
   const back = refundSplit(p.amountPaise, amount, p.businessSharePct);
-  const refundStatus = refund.status === "processed" ? "processed" : "pending";
+  const refundStatus = live.every((r) => r.status === "processed")
+    ? "processed"
+    : "pending";
   const rows: [string, string, number][] = [
     [`refund:${p.id}`, "refund", -amount],
     [`refund_business:${p.id}`, "business_share", -back.business],
     [`refund_platform:${p.id}`, "platform_share", -back.platform],
   ];
-  await env.DB.batch([
+  const [update] = await env.DB.batch([
     env.DB.prepare(
       `UPDATE payments SET status = 'refunded', refund_id = ?, refund_paise = ?,
          refund_status = ?, refund_retry_at = NULL, updated_at = ?
        WHERE id = ? AND status = 'refund_due'`,
-    ).bind(refund.id, amount, refundStatus, now, p.id),
+    ).bind(main.id, amount, refundStatus, now, p.id),
     ...rows.map((r) => ledgerStmt(env.DB, p, r, now)),
   ]);
+  // A racing call already marked it (its ledger rows are the same ids).
+  if (!update.meta.changes) return true;
   logPayment("info", "refunded", {
     paymentId: p.id,
     amountPaise: amount,
@@ -1197,11 +1249,17 @@ export async function markRefund(
   ctx: PayCtx,
   refundId: string,
   status: "processed" | "failed",
+  /** Razorpay payment id of the refund (from the event), when known. */
+  razorpayPaymentId?: string,
 ): Promise<void> {
   const { db, now } = ctx;
   if (status === "processed") {
-    await db.run(sql`UPDATE payments SET refund_status = 'processed', updated_at = ${now}
+    const r =
+      await db.run(sql`UPDATE payments SET refund_status = 'processed', updated_at = ${now}
         WHERE refund_id = ${refundId}`);
+    if (!r.meta.changes && razorpayPaymentId) {
+      await adoptOutsideRefund(ctx, razorpayPaymentId);
+    }
     return;
   }
   const p = await db
@@ -1225,6 +1283,57 @@ export async function markRefund(
     failures >= REFUND_ALERT_AFTER ? "refund_stuck" : "refund_failed",
     { paymentId: p.id, failures, source: "webhook" },
   );
+}
+
+/**
+ * `refund.processed` for a refund we did not make (e.g. from the Razorpay
+ * dashboard). A `refund_due` payment whose live refunds now cover what it
+ * owes is marked `refunded` at once (same path as `processRefund`, no new
+ * refund). If they cover only part, the next refund attempt refunds the
+ * remainder. A refund on a payment that owes nothing is logged for a human.
+ */
+async function adoptOutsideRefund(
+  ctx: PayCtx,
+  razorpayPaymentId: string,
+): Promise<void> {
+  const p = await ctx.db
+    .select()
+    .from(payments)
+    .where(eq(payments.razorpayPaymentId, razorpayPaymentId))
+    .get();
+  if (!p) {
+    logPayment("warn", "refund_unknown_payment", { razorpayPaymentId });
+    return;
+  }
+  if (p.status === "refunded") return;
+  if (p.status !== "refund_due") {
+    logPayment("error", "refund_outside_not_due", {
+      paymentId: p.id,
+      status: p.status,
+    });
+    return;
+  }
+  const live = liveRefunds(
+    await provider("list_refunds", () =>
+      rzp(ctx).listRefunds(razorpayPaymentId),
+    ),
+  );
+  const ours = live.find((r) => r.receipt === p.id);
+  const total = live.reduce((sum, r) => sum + r.amount, 0);
+  if (!ours && (total < refundWanted(p) || total <= 0)) {
+    logPayment("warn", "refund_outside_partial", {
+      paymentId: p.id,
+      outsidePaise: total,
+      wantedPaise: refundWanted(p),
+    });
+    return;
+  }
+  logPayment("warn", "refund_outside", {
+    paymentId: p.id,
+    outsidePaise: total,
+    wantedPaise: refundWanted(p),
+  });
+  await recordRefunded(ctx, p, live, ours ?? live[live.length - 1]);
 }
 
 /** Cron: unpaid orders past their 30 minutes → `expired`. */

@@ -2,6 +2,8 @@ import {
   AUTO_CLOSE_WARNING_MS,
   type ConsoleState,
   type ConsoleToken,
+  closeSummary,
+  lastCalledLabel,
   waitText,
 } from "@qpeer/shared";
 import { useQueryClient } from "@tanstack/react-query";
@@ -350,7 +352,9 @@ function ConsoleBody({
       </Screen>
       {showUndo ? (
         <UndoBar
-          label={state.nowServing}
+          // The token the last NEXT called (P1, T2…), even after a No-show
+          // emptied "Now serving".
+          label={lastCalledLabel(state) ?? state.nowServing}
           undoLeft={undoLeft}
           busy={busy}
           onUndo={() =>
@@ -398,7 +402,8 @@ function UndoBar({
       accessibilityLiveRegion="polite"
     >
       <ThemedText type="body" themeColor="onPrimary" style={styles.flex}>
-        Called #{label ?? "?"} · undo in {formatCountdown(undoLeft)}
+        {label ? `Called #${label}` : "Called next"} · undo in{" "}
+        {formatCountdown(undoLeft)}
       </ThemedText>
       <Pressable
         accessibilityRole="button"
@@ -508,20 +513,27 @@ function ConsoleView({
 
   const onClose = async () => {
     // C4: waiting tickets still valid after now carry over instead of ending.
-    const keep = state.waiting.filter(
-      (t) => t.expiresAt != null && t.expiresAt > now,
-    ).length;
-    const left = state.counts.total - keep;
+    // Step 4: paid tickets that end are refunded in full automatically.
+    const c = closeSummary(state, now);
+    const left = c.ending;
     const keepText =
-      keep > 0
-        ? ` ${keep} ${keep === 1 ? "ticket is" : "tickets are"} valid beyond today and will be served first next time.`
+      c.kept > 0
+        ? ` ${c.kept} ${c.kept === 1 ? "ticket is" : "tickets are"} valid beyond today and will be served first next time.`
+        : "";
+    const paidText =
+      c.paidRefunded > 0
+        ? ` ${c.paidRefunded} of them ${c.paidRefunded === 1 ? "is a paid ticket and is" : "are paid tickets and are"} refunded in full automatically.`
+        : "";
+    const bookedText =
+      c.booked > 0
+        ? ` ${c.booked} Priority ${c.booked === 1 ? "Pass" : "Passes"} not checked in yet ${c.booked === 1 ? "stays" : "stay"} valid.`
         : "";
     const ok = await ConfirmDialog.show({
       title: "Close for the day?",
       message:
         left > 0
-          ? `${left} ${left === 1 ? "ticket is" : "tickets are"} still active. They will expire and those customers are told the queue closed. Numbers start again at 1 when you open next time.${keepText}`
-          : `Nobody can join until you open the queue again. Numbers start again at 1 next time.${keepText}`,
+          ? `${left} ${left === 1 ? "ticket is" : "tickets are"} still active. They will expire and those customers are told the queue closed.${paidText} Numbers start again at 1 when you open next time.${keepText}${bookedText}`
+          : `Nobody can join until you open the queue again. Numbers start again at 1 next time.${keepText}${bookedText}`,
       confirmLabel: "Close queue",
     });
     if (ok) await run({ kind: "queue", action: "close" }, "Could not close");

@@ -114,6 +114,12 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-064 | 2026-10-30 | A busy scheduled run could pass the free-plan subrequest limit | S2 | api | fixed | none (review 2026-10-30) | [file](incidents/INC-064-cron-subrequest-limit.md) |
 | INC-065 | 2026-10-30 | A user could buy a second paid reservation in the same queue | S2 | api, queue engine, mobile | fixed-unverified-on-device | none (review 2026-10-30) | [file](incidents/INC-065-second-paid-reservation.md) |
 | INC-066 | 2026-10-30 | The load-test fairness check counted priority calls with no regular waiting | S4 | loadtest harness | fixed | none | [file](incidents/INC-066-fairness-check-too-strict.md) |
+| INC-067 | 2026-10-30 | A refund made outside QPeer kept the payment stuck in `refund_due` | S1 | api | fixed | Step 4 device check | [file](incidents/INC-067-refund-outside-qpeer.md) |
+| INC-068 | 2026-10-30 | A paid order kept the failure code of an earlier attempt | S3 | api | fixed | Step 4 device check | [file](incidents/INC-068-stale-failure-reason.md) |
+| INC-069 | 2026-10-30 | Every alert arrived twice on one phone | S2 | api | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-069-duplicate-pushes-one-phone.md) |
+| INC-070 | 2026-10-30 | The console Undo bar said "Called #?" for a Priority Pass | S3 | mobile, shared | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-070-undo-bar-question-mark.md) |
+| INC-071 | 2026-10-30 | "Close for the day" did not say that paid tickets are refunded | S3 | mobile, shared | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-071-close-dialog-paid-tickets.md) |
+| INC-072 | 2026-10-30 | The List view missed businesses outside the map's box | S2 | mobile, shared | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-072-list-misses-far-businesses.md) |
 
 ## Load-test runs
 

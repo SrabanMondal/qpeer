@@ -1,11 +1,12 @@
 import type { DeviceBody } from "@qpeer/shared";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, ne, sql } from "drizzle-orm";
 import type { Db } from "../../db/client";
 import { devices } from "../../db/schema";
 
 /**
  * ALR-02: register/refresh an Expo push token. Upsert by token: a token seen
  * under another user (shared phone, re-login) moves to the current user.
+ * With a `deviceHash`, older tokens of the same user and phone are removed.
  */
 export async function upsertDevice(
   db: Db,
@@ -35,6 +36,20 @@ export async function upsertDevice(
         updatedAt: sql`excluded.updated_at`,
       },
     });
+  // One phone, one token: an older registration of the same user on the
+  // same phone (e.g. an old dev build before the new APK) is dropped, so
+  // alerts are not sent twice.
+  if (body.deviceHash) {
+    await db
+      .delete(devices)
+      .where(
+        and(
+          eq(devices.userId, userId),
+          eq(devices.deviceHash, body.deviceHash),
+          ne(devices.expoPushToken, body.expoPushToken),
+        ),
+      );
+  }
 }
 
 /** ALR-02: remove on sign-out. Only the caller's own row; always succeeds. */

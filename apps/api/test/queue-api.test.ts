@@ -835,6 +835,36 @@ describe("Devices and push receipts (ALR-02)", () => {
     ).toBeNull();
   });
 
+  it("POST /me/devices with a deviceHash → older tokens of the same user and phone are removed; others stay", async () => {
+    const hash = crypto.randomUUID().replaceAll("-", "").padEnd(64, "a");
+    const oldTok = `ExponentPushToken[old-${crypto.randomUUID()}]`;
+    const newTok = `ExponentPushToken[new-${crypto.randomUUID()}]`;
+    const noHashTok = `ExponentPushToken[nohash-${crypto.randomUUID()}]`;
+    const otherTok = `ExponentPushToken[oth-${crypto.randomUUID()}]`;
+    const reg = (who: string, expoPushToken: string, deviceHash?: string) =>
+      api.call("POST", "/v1/me/devices", who, {
+        expoPushToken,
+        platform: "android",
+        ...(deviceHash ? { deviceHash } : {}),
+      });
+    await expectOk(await reg(customer, oldTok, hash), 200, OkResponse);
+    await expectOk(await reg(customer, noHashTok), 200, OkResponse);
+    // Another user on the same phone keeps their own token.
+    await expectOk(await reg(other, otherTok, hash), 200, OkResponse);
+    // The new APK on the same phone registers a new token.
+    await expectOk(await reg(customer, newTok, hash), 200, OkResponse);
+    // Refreshing the newest token keeps it.
+    await expectOk(await reg(customer, newTok, hash), 200, OkResponse);
+    const rows = await env.DB.prepare(
+      "SELECT expo_push_token AS t FROM devices WHERE expo_push_token IN (?, ?, ?, ?)",
+    )
+      .bind(oldTok, newTok, noHashTok, otherTok)
+      .all<{ t: string }>();
+    expect(rows.results.map((r) => r.t).sort()).toEqual(
+      [newTok, noHashTok, otherTok].sort(),
+    );
+  });
+
   it("hourly cron checks receipts older than 15 min and deletes DeviceNotRegistered devices", async () => {
     const now = Date.now();
     const dead = `ExponentPushToken[cron-dead-${crypto.randomUUID()}]`;
