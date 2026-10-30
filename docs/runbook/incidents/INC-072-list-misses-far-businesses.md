@@ -5,7 +5,7 @@
 | Date found | 2026-10-30 |
 | Severity | S2 |
 | Area | mobile, shared |
-| Status | fixed-unverified-on-device |
+| Status | fixed |
 | Original ID | Step 4 device check |
 
 ## Summary
@@ -37,7 +37,7 @@ Branch `fix/step4-device-findings`, fix commit `14ef30a`; merge commit unknown.
 
 ## Verification
 
-`packages/shared/src/map-view.test.ts`, "listBox / withinRadius (List view reach)": a business ~10 km away is inside the box; the box passes `MapQuery`; a huge radius is clamped to 1.5° per side; small moves give the same box; `withinRadius` drops a business ~40 km away. `npm run check` and `expo export` green. Not yet tried on a phone.
+`packages/shared/src/map-view.test.ts`, "listBox / withinRadius (List view reach)": a business ~10 km away is inside the box; the box passes `MapQuery`; a huge radius is clamped to 1.5° per side; small moves give the same box; `withinRadius` drops a business ~40 km away. `npm run check` and `expo export` green. Device check on 2026-10-30 with the preview APK (EAS build d9a4d731): the List header said "Within ~25 km of you" and showed Demo Clinic (1 m) and Billu Barbar (10 km).
 
 ## Follow-ups
 

@@ -119,7 +119,7 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-069 | 2026-10-30 | Every alert arrived twice on one phone | S2 | api | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-069-duplicate-pushes-one-phone.md) |
 | INC-070 | 2026-10-30 | The console Undo bar said "Called #?" for a Priority Pass | S3 | mobile, shared | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-070-undo-bar-question-mark.md) |
 | INC-071 | 2026-10-30 | "Close for the day" did not say that paid tickets are refunded | S3 | mobile, shared | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-071-close-dialog-paid-tickets.md) |
-| INC-072 | 2026-10-30 | The List view missed businesses outside the map's box | S2 | mobile, shared | fixed-unverified-on-device | Step 4 device check | [file](incidents/INC-072-list-misses-far-businesses.md) |
+| INC-072 | 2026-10-30 | The List view missed businesses outside the map's box | S2 | mobile, shared | fixed | Step 4 device check | [file](incidents/INC-072-list-misses-far-businesses.md) |
 
 ## Load-test runs
 
