@@ -817,6 +817,8 @@ describe("Retries and refunds", () => {
     );
     expect(r.payment.status).toBe("allocated");
     expect(await ticketsFor(o.paymentId)).toBe(1);
+    // The failed attempt's code does not stay on the paid payment.
+    expect((await row(o.paymentId))?.reason).toBeNull();
   });
 
   it("refund.failed → back to refund_due; the 15-min run makes a new refund; never two live refunds", async () => {

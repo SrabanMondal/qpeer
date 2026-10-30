@@ -717,9 +717,10 @@ export async function confirmPayment(
   if (p.razorpayPaymentId === null) {
     // The order's first captured payment becomes its payment. One D1 batch
     // (one transaction): the status change and the capture split. The ledger
-    // ids are per order, so a racing second payment writes nothing new.
+    // ids are per order, so a racing second payment writes nothing new. The
+    // reason of an earlier failed attempt on this order is cleared.
     const claim = env.DB.prepare(
-      `UPDATE payments SET status = 'captured', razorpay_payment_id = ?, updated_at = ?
+      `UPDATE payments SET status = 'captured', razorpay_payment_id = ?, reason = NULL, updated_at = ?
        WHERE id = ? AND razorpay_payment_id IS NULL
          AND status IN ('created', 'failed', 'expired')`,
     ).bind(cap.id, now, p.id);
