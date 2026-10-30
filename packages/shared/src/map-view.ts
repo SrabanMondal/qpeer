@@ -77,6 +77,55 @@ export function clampMapBox(
   };
 }
 
+// ---------- list area ----------
+
+/** The List view's reach around the user (or the map centre), in km. */
+export const LIST_RADIUS_KM = 25;
+/** The list centre snaps to this grid (≈ 1 km), so small pans reuse the query. */
+const LIST_CENTRE_SNAP_DEG = 0.01;
+const KM_PER_DEG_LAT = 111.32;
+
+/**
+ * The List view's own box: a square of about `radiusKm` around
+ * `centre`, whatever the map's zoom, so a business 10 km away is listed even
+ * when the map shows only the city centre. The centre snaps to a ~1 km grid;
+ * each side stays within the API's `MAP_MAX_BOX_DEG`.
+ */
+export function listBox(
+  centre: LatLng,
+  radiusKm: number = LIST_RADIUS_KM,
+  maxDeg: number = MAP_MAX_BOX_DEG,
+): MapBox {
+  const snap = (v: number) =>
+    Math.round(v / LIST_CENTRE_SNAP_DEG) * LIST_CENTRE_SNAP_DEG;
+  const lat = clamp(snap(centre.lat), -89, 89);
+  const lng = snap(centre.lng);
+  const halfLat = radiusKm / KM_PER_DEG_LAT;
+  const halfLng =
+    radiusKm /
+    (KM_PER_DEG_LAT * Math.max(0.01, Math.cos((lat * Math.PI) / 180)));
+  return clampMapBox(
+    {
+      minLat: lat - halfLat,
+      minLng: lng - halfLng,
+      maxLat: lat + halfLat,
+      maxLng: lng + halfLng,
+    },
+    maxDeg,
+  ).box;
+}
+
+/** The businesses within `radiusKm` of `centre` (the box's corners reach further). */
+export function withinRadius<T extends Pick<MapBusiness, "location">>(
+  items: readonly T[],
+  centre: LatLng,
+  radiusKm: number = LIST_RADIUS_KM,
+): T[] {
+  return items.filter(
+    (b) => distanceMeters(centre, b.location) <= radiusKm * 1000,
+  );
+}
+
 /** Query string for `GET /v1/map` (no leading `?`). */
 export function mapQueryString(
   box: MapBox,

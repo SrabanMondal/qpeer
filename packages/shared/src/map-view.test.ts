@@ -3,6 +3,8 @@ import { type MapBusiness, MapQuery, type MapQueue } from "./map";
 import {
   boxFromCorners,
   clampMapBox,
+  LIST_RADIUS_KM,
+  listBox,
   mapQueryString,
   markerFeatures,
   markerLabel,
@@ -10,6 +12,7 @@ import {
   shortWait,
   sortBusinesses,
   statsSummary,
+  withinRadius,
 } from "./map-view";
 
 const MIN = 60_000;
@@ -46,6 +49,42 @@ function biz(over: Partial<MapBusiness> & { id: string }): MapBusiness {
     ...over,
   };
 }
+
+describe("listBox / withinRadius (List view reach)", () => {
+  const centre = { lat: 32.7266, lng: 74.857 };
+  // ~10 km north-east of the centre (Billu Barbar on the device check).
+  const far = biz({ id: "far", location: { lat: 32.79, lng: 74.93 } });
+  const tooFar = biz({ id: "too-far", location: { lat: 33.1, lng: 74.857 } });
+
+  it("covers ~25 km around the centre, whatever the map zoom, within the API limit", () => {
+    const b = listBox(centre);
+    expect(b.maxLat - b.minLat).toBeGreaterThan((2 * LIST_RADIUS_KM) / 112);
+    expect(b.maxLat - b.minLat).toBeLessThanOrEqual(1.5);
+    expect(b.maxLng - b.minLng).toBeLessThanOrEqual(1.5);
+    expect(b.minLat).toBeLessThan(far.location.lat);
+    expect(b.maxLat).toBeGreaterThan(far.location.lat);
+    expect(b.maxLng).toBeGreaterThan(far.location.lng);
+    expect(MapQuery.safeParse(b).success).toBe(true);
+  });
+
+  it("a huge radius is clamped to the API's 1.5° per side", () => {
+    const b = listBox(centre, 500);
+    expect(b.maxLat - b.minLat).toBeLessThanOrEqual(1.5);
+    expect(b.maxLng - b.minLng).toBeLessThanOrEqual(1.5);
+  });
+
+  it("small moves of the centre give the same box (same query)", () => {
+    expect(listBox({ lat: 32.7266, lng: 74.857 })).toEqual(
+      listBox({ lat: 32.7281, lng: 74.8589 }),
+    );
+  });
+
+  it("keeps businesses within the radius only", () => {
+    expect(withinRadius([far, tooFar], centre).map((b) => b.id)).toEqual([
+      "far",
+    ]);
+  });
+});
 
 describe("boxFromCorners / clampMapBox (MAP-03)", () => {
   it("orders corners given as [lng, lat]", () => {
