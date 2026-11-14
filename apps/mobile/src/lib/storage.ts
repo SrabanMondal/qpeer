@@ -1,5 +1,7 @@
 import {
+  AnalyticsResponse,
   BusinessCategory,
+  EarningsResponse,
   isActiveState,
   TicketPublicJwk,
   TokenView,
@@ -44,6 +46,20 @@ export const MapCamera = z.object({
 });
 export type MapCamera = z.infer<typeof MapCamera>;
 
+export const InsightsPrefs = z.object({
+  businessId: z.string().nullable(),
+  range: z.union([z.literal(7), z.literal(28)]),
+  queueId: z.string().nullable(),
+});
+export type InsightsPrefs = z.infer<typeof InsightsPrefs>;
+
+export const SavedInsights = z.object({
+  analytics: AnalyticsResponse,
+  earnings: EarningsResponse.nullable(),
+  savedAt: z.number(),
+});
+export type SavedInsights = z.infer<typeof SavedInsights>;
+
 /** Every key: its schema and version. Bump `v` when the shape changes. */
 const KEYS = {
   /** Tickets per Firebase uid, by token id. */
@@ -64,6 +80,16 @@ const KEYS = {
       keys: z.array(TicketPublicJwk),
       fetchedAt: z.number(),
     }),
+  },
+  /** Step 5: the Insights tab's last choices. */
+  insightsPrefs: { v: 1, schema: InsightsPrefs },
+  /**
+   * Step 5: last answers per (uid, business, range, queue), so Insights opens
+   * offline with what was seen last (a few entries only).
+   */
+  insightsCache: {
+    v: 1,
+    schema: z.record(z.string(), SavedInsights),
   },
 } as const;
 

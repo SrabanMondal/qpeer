@@ -504,7 +504,7 @@ Partial refunds are whole paise: the outbox's `refund_paise = CAST((amount_paise
 ## 13. Analytics
 
 - The DO counts joins, leaves, served, no-shows, cancels, waits, intervals and ETA hits per IST hour in its `hourly` table, and flushes to `analytics_hourly` through the outbox at the end of each hour and on queue close.
-- Insights (`/v1/businesses/:id/analytics?range=7d|28d`) are computed **on read** with SQL aggregates over `analytics_hourly` — no rollup tables in v1.
+- Insights (`/v1/businesses/:id/analytics?range=7|28`) are computed **on read** with SQL aggregates over `analytics_hourly` — no rollup tables in v1. Step 5: one D1 batch (hourly sums of the range and the period before it, first analytics hour, queue list) feeds the shared pure `buildAnalytics` (`packages/shared/src/insights.ts`); earnings come from `ledger_entries` the same way (§23 "Decided in Step 5").
 - No customer identities in analytics tables.
 
 ---
@@ -552,6 +552,7 @@ Cron handlers are thin and call the same services as the API, so they are tested
 | `RAZORPAY_WEBHOOK_SECRET` | **secret** | same |
 | `EXPO_ACCESS_TOKEN` | **secret** (optional) | only if Expo push security is enabled |
 | `LOADTEST_JWKS` | **secret** (`loadtest` env only) | public JWK set of the load-test signing key; ignored unless `ENVIRONMENT` is exactly `loadtest` |
+| `DEMO_JWKS` | **secret** (`demo` and `dev`, Step 5) | public JWK set of the demo-tools key (`npm run demo:gen-key` → `secrets/demo-jwks.public.json`); ignored unless `ENVIRONMENT` is `demo`, `dev` or `local` (§19.2) |
 | `TICKET_SIGNING_KEY` | **secret** (optional, per env) | C3: Ed25519 private JWK with `kid` (`npm run ticket-keys:gen` → gitignored `secrets/ticket-signing-key.json`). Without it nothing is signed (`signedTicket: null`, empty `/v1/ticket-keys`); a broken value logs `ticket-sign` errors and also disables signing — joins never fail because of it. Never logged. |
 | `TICKET_PUBLIC_KEYS` | var (optional) | C3 rotation: extra public JWK set still served by `/v1/ticket-keys` |
 | `DB` | D1 binding | per env |
@@ -598,6 +599,17 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 - **Invariant checker** (after a 35 s quiet period, then again after closing every queue and draining): D1 tokens == DO tokens; numbers unique and gap-free per session+series; snapshot == DO; `/v1/map` summary == Σ queues == DO; people-ahead exact (DO rank and sampled `GET /tokens/:id`); WebSocket clients converge (a mismatch is re-checked against a fresh audit after 3 s, twice, because grace expiries keep changing the DO after the load stops); queue order (triage first, untouched regulars FIFO, console positions 1..n); people-ahead never rises without a skip/triage/undo; terminal states never move back except Undo; analytics totals == simulator log and final states; pushes deduplicated and every called token alerted once; rejection codes; no unexpected responses; no join coordinates in a `wrangler tail` capture (`--tail-log`). Reports go to `scripts/loadtest/reports/<timestamp>.md|.json`.
 - **Step 4 work (2026-10-18):** with the priority lane on, "people-ahead exact" and the queue-order check must follow the credit rule and the C3 range (§9.4), using the same shared function as the DO.
 
+### 19.2 Demo tools (Step 5)
+
+`scripts/demo/` (Node 24 type stripping, no dependencies; HTTP client and budget shared with the load test) seeds, drives and resets the demo data on `demo` or `dev` only.
+
+- **Target guard (DEM-06):** `--env dev|demo` picks a fixed URL (`qpeer-api-dev…` / `qpeer-api-demo.qpeer-api.workers.dev`), `--local` only `http://127.0.0.1:8787`; any other `--base-url` is refused, and `/v1/health` must report the same environment before the first write. Every request takes one unit of a hard budget.
+- **Auth (`middleware/demo-auth.ts`):** tokens with issuer/audience `qpeer-demo`, RS256, verified against the `DEMO_JWKS` secret only when `ENVIRONMENT` is `demo`, `dev` or `local`; in `loadtest` and anywhere else they reach the Firebase verifier and get 401. The verified uid is `demo:<sub>`: Firebase uids never contain `:`, so a demo token can never act as a real account, and every simulated user is findable by the prefix. Simulated users register no push devices, so they never get pushes.
+- **Helper routes (`modules/demo`):** 404 unless the environment is demo/dev/local **and** the caller came through the demo key. `POST /v1/demo/seed {businessIndex, ownerPhones}` (one catalogue business, its queues — DO initialised, not opened — and owners: the demo owner plus registered accounts with those phone numbers), `POST /v1/demo/seed/history {businessIndex, weeks 4–8, seed}` (replaces that business's synthetic `analytics_hourly`, payments and ledger rows in one D1 batch; multi-row literal INSERTs of generated values only), `GET /v1/demo/queues`, `POST /v1/demo/queues/:id/priority-pass` (book + check in on the DO without Razorpay, demo queues only), `POST /v1/demo/reset {wipeAll}` (close + flush the demo queues, 409 while outboxes drain; then delete rows scoped by the `de30000x-` ids and `demo:` users; `wipeAll` only on `demo`/`local`). One request per business keeps each request to a handful of D1 statements (free plan per-request limits).
+- **Data (`packages/shared/src/demo-data.ts`):** 12 made-up businesses in real Jammu neighbourhoods, all five categories, 15 queues (5 with the priority lane on). Deterministic generator: weekday factors per category, morning peak and lunch dip, +30 % trend over the history, waits ~20 % shorter by the end, no-shows 6–9 %, leaves ~5 %, ETA hits 74–88 %; ~3 % of joins pay a reservation (₹20) and ~1 % a pass (₹100) on priority queues: 82 % allocated, 10 % refunded (pass: 50 %), 8 % forfeited, with the ledger rows `confirmPayment` / `recordRefunded` / the forfeit outbox would write (same ids, 70/30 split). Only terminal payment statuses, so no cron job ever calls Razorpay for them.
+- **Cost:** 6 weeks ≈ 5,300 analytics rows, ~900 payments, ~3,100 ledger rows (≈ 10k rows written per seed, the same again per reset); D1 free plan allows 100k rows written per day.
+- **Simulator:** opens N demo queues as the demo owner; customers arrive with exponential gaps (`--joins-per-min`), join at the business pin (made-up walk-ins), some leave, staff call Next every `--next-every` s ± 40 %, some called people are marked no-show, a few take a Priority Pass. Ctrl+C or `--minutes` stops it; `--close-at-end` closes the queues.
+
 ---
 
 ## 20. API Catalogue (v1)
@@ -633,8 +645,10 @@ A separate `loadtest` Worker + D1 is driven by a Node simulator (`scripts/loadte
 | Priority | `GET /v1/queues/:id/priority-preview` | A | PRI-02 honest preview |
 | Console | `POST /v1/queues/:id/rejoin-for-customer` `{ label, checkCode } \| { signedTicket }` | S | QUE-29 (R2) |
 | Loadtest | `POST /v1/loadtest/queues/:id/priority-pass` (book + check in without Razorpay) | loadtest key only | §19.1 |
-| Insights | `GET /v1/businesses/:id/analytics?range=` · `GET /v1/businesses/:id/earnings?range=` | O | INS-01–08 |
-| Dev | `POST /v1/dev/seed` · `POST /v1/dev/simulate` · `GET /v1/dev/queue-ping/:id` | D | DEM-01–06 |
+| Insights | `GET /v1/businesses/:id/analytics?range=7\|28[&queueId=]` | S | INS-01–06, INS-08 (Step 5) |
+| Insights | `GET /v1/businesses/:id/earnings?range=7\|28[&limit&cursor]` | O | INS-07, INS-08 (Step 5) |
+| Demo | `POST /v1/demo/seed` · `POST /v1/demo/seed/history` · `GET /v1/demo/queues` · `POST /v1/demo/queues/:id/priority-pass` · `POST /v1/demo/reset` | demo key only (demo/dev/local) | DEM-01–06 (Step 5, §19.2) |
+| Dev | `GET /v1/dev/queue-ping/:id` | D | debugging |
 | Dev | `POST /v1/dev/seed-map` · `POST /v1/dev/unseed-map` (registered) | D | map testing before Step 5 |
 
 Every request/response pair has a named zod schema in `packages/shared` (e.g. `CreateBusinessBody`, `BusinessDetail`, `TokenView`, `MapResponse`).
@@ -828,5 +842,20 @@ Replaces the older `reviews` idea (one per served token within 7 days, stars + t
 | K guard | `avgServiceMs` below 1 s counts as 1 s (no division by zero). |
 | Audit log | Every call, skip, rejoin, check-in, booking and upgrade logs `queue-do.audit` with its time (ids/labels only). |
 | C4 names | Signed ticket: `cc` (check code), `fn` (first name ≤ 20 chars, non-ASCII escaped), `p4`. `GET /console` adds `holderName` from D1; sockets never carry names. |
+
+### Decided in Step 5 (2026-11-14, branch `feat/step5-insights`) — owner may revisit
+
+| Question | Built as |
+|---|---|
+| Who sees Insights | Analytics: owner **and staff** (they run the queue). Earnings: **owner only** (money; same as the Step 4 payments list); staff get 403, non-members 404. |
+| Range | `range=7|28`: IST midnight `range−1` days ago up to now (today is partial). "Previous" = the same length just before, **up to the same time of day**, so a half day is never compared with a whole one. |
+| Averages | Same math as MAP-05 (shared `statAverages`): totals need 20 samples, a day's average 3, else null ("—"). No-show % = no-shows ÷ (served + no-shows). Abandonment ("gave up") = (left + cancelled) ÷ joins. |
+| Peak hours | Average joins per weekday × IST hour (each weekday divided by how often it occurs in the range); `fromHour`/`toHour` frame the hours with any joins. |
+| Insights (INS-06) | At most 3, fixed order, each with a threshold so thin data says nothing: busiest 2-hour window (≥ 30 joins and ≥ 1.5× the average busy hour), waits shorter/longer (≥ 20 waits each side, ≥ 1 min and ≥ 10 %), no-shows up/down (≥ 30 outcomes each side, ≥ 20 % relative and ≥ 2 points), served more/fewer (≥ 30 each side, ≥ 15 %). |
+| Earnings list | Money **events** from the ledger, not payment rows: capture (+fee, split), refund (−amount, reversed split), forfeit (marker, 0). An event belongs to a payment by the deterministic ledger id prefix. The list of a range adds up exactly to its totals (a payment captured before the range and refunded in it shows only the refund). The Step 4 Payments screen stays the full payment history; Insights links to it. |
+| Forfeits | `forfeitedPaise` = fees of no-show payments (information; the capture split already counts them). |
+| Empty state (INS-08) | `hasData` / `firstDataAt` = any `analytics_hourly` (or ledger) row ever for the business. |
+| Demo data | `scripts/demo` + demo-key routes (§19.2). Demo auth on **dev too** (namespaced `demo:` uids, scoped deletes), so the simulator also works on dev; `wipeAll` only on `demo`. Seeded passes from the simulator have no payment row (no Razorpay), so they don't show in Earnings. |
+| Offline | The app keeps the last 6 Insights answers (analytics + first earnings page) per account/business/range/queue and shows them with "Saved … ago" when offline. |
 
 Recorded note, not a rule: **RT3** for a monopoly provider (the only hospital nearby), ratings don't move customers but remain public evidence for oversight.

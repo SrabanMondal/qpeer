@@ -13,3 +13,6 @@ ENVIRONMENT=dev
 # RAZORPAY_KEY_ID=rzp_test_…
 # RAZORPAY_KEY_SECRET=
 # RAZORPAY_WEBHOOK_SECRET=
+# Step 5 demo tools (scripts/demo): public JWK set of the demo key
+# (`npm run demo:gen-key` writes it). Honoured only in demo / dev / local.
+# DEMO_JWKS='{"keys":[…]}'

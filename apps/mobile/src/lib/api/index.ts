@@ -2,6 +2,7 @@ export * from "./businesses";
 export * from "./client";
 export * from "./console";
 export * from "./devices";
+export * from "./insights";
 export * from "./keys";
 export * from "./map";
 export * from "./me";

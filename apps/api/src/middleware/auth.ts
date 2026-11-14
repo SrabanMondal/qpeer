@@ -4,6 +4,7 @@ import { db } from "../db/client";
 import type { AppEnv, AuthSource, Bindings } from "../env";
 import { AppError } from "../lib/errors";
 import { upsertUser } from "../modules/identity/service";
+import { claimsDemoIssuer, demoEnabled, makeDemoVerifier } from "./demo-auth";
 import {
   claimsLoadtestIssuer,
   loadtestEnabled,
@@ -90,21 +91,32 @@ const unauthorized = () =>
 /**
  * The verifier for this environment: Firebase everywhere; in the `loadtest`
  * env only (with the `LOADTEST_JWKS` secret), tokens whose issuer is
- * `qpeer-loadtest` go to the load-test verifier instead. Everywhere else such
- * a token reaches the Firebase verifier and fails its issuer check (401).
+ * `qpeer-loadtest` go to the load-test verifier instead; in `demo`/`dev`/
+ * `local` (with the `DEMO_JWKS` secret), tokens whose issuer is `qpeer-demo`
+ * go to the demo verifier (Step 5). Everywhere else such a token reaches the
+ * Firebase verifier and fails its issuer check (401).
  */
 export function verifierForEnv(
-  env: Pick<Bindings, "FIREBASE_PROJECT_ID" | "ENVIRONMENT" | "LOADTEST_JWKS">,
+  env: Pick<
+    Bindings,
+    "FIREBASE_PROJECT_ID" | "ENVIRONMENT" | "LOADTEST_JWKS" | "DEMO_JWKS"
+  >,
   firebaseKeys?: KeySource,
 ): TokenVerifier {
   if (!env.FIREBASE_PROJECT_ID?.trim()) {
     throw new Error("FIREBASE_PROJECT_ID is not configured");
   }
   const firebase = makeFirebaseVerifier(env.FIREBASE_PROJECT_ID, firebaseKeys);
-  if (!loadtestEnabled(env)) return firebase;
-  const loadtest = makeLoadtestVerifier(env.LOADTEST_JWKS);
-  return (token) =>
-    claimsLoadtestIssuer(token) ? loadtest(token) : firebase(token);
+  const loadtest = loadtestEnabled(env)
+    ? makeLoadtestVerifier(env.LOADTEST_JWKS)
+    : null;
+  const demo = demoEnabled(env) ? makeDemoVerifier(env.DEMO_JWKS) : null;
+  if (!loadtest && !demo) return firebase;
+  return (token) => {
+    if (loadtest && claimsLoadtestIssuer(token)) return loadtest(token);
+    if (demo && claimsDemoIssuer(token)) return demo(token);
+    return firebase(token);
+  };
 }
 
 export interface AuthOptions {

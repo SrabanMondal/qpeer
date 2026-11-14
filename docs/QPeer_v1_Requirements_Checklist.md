@@ -225,12 +225,14 @@ M0 ──► M1 ──► M2 ─────────────┐
 
 ## M10 Demo data
 
-- [ ] **DEM-01** Seed: 8–15 businesses across Jammu (≈32.73 N, 74.86 E) in several categories, with queues and pins
-- [ ] **DEM-02** 4–8 weeks of synthetic `analytics_hourly` data with weekday peaks and a slow trend
-- [ ] **DEM-03** Past payments and refunds for the Earnings screen
-- [ ] **DEM-04** Simulator: drives one or more queues live (joins, Next, leaves, no-shows) at a configurable pace
-- [ ] **DEM-05** Reset command: wipes and re-seeds the `demo` environment
-- [ ] **DEM-06** Seed and simulator refuse to run against anything except `dev` / `demo`
+- [x] **DEM-01** Seed: 8–15 businesses across Jammu (≈32.73 N, 74.86 E) in several categories, with queues and pins
+- [x] **DEM-02** 4–8 weeks of synthetic `analytics_hourly` data with weekday peaks and a slow trend
+- [x] **DEM-03** Past payments and refunds for the Earnings screen
+- [x] **DEM-04** Simulator: drives one or more queues live (joins, Next, leaves, no-shows) at a configurable pace
+- [x] **DEM-05** Reset command: wipes and re-seeds the `demo` environment
+- [x] **DEM-06** Seed and simulator refuse to run against anything except `dev` / `demo`
+
+*Step 5 note (2026-11-14, `feat/step5-insights`):* DEM-01…06 ticked for server-side completion only: `scripts/demo` seed / simulate / reset with integration tests and a full run against a local `wrangler dev --env demo`; not yet run on the deployed `demo` Worker. INS-01…08: API and Insights tab built (API tests, typecheck, Android export); stay open until the phone check.
 
 ## M11 Extras (x)
 

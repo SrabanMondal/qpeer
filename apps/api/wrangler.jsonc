@@ -65,6 +65,9 @@
         "crons": ["*/15 * * * *"]
       }
     },
+    // Step 5 demo: Worker qpeer-api-demo (https://qpeer-api-demo.qpeer-api.workers.dev).
+    // Demo tools need the DEMO_JWKS secret (scripts/demo, architecture §19.2).
+    // Shares the account's cron limit: only the one */15 trigger (INC-056).
     "demo": {
       "d1_databases": [
         {

@@ -7,7 +7,7 @@
   ],
   "scripts": {
     "check": "npm run typecheck && npm run lint && npm run test",
-    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/loadtest && tsc -p scripts/ticket-keys",
+    "typecheck": "npm run typecheck --workspaces --if-present && tsc -p scripts/loadtest && tsc -p scripts/ticket-keys && tsc -p scripts/demo",
     "lint": "biome check .",
     "format": "biome format --write .",
     "test": "npm run test --workspaces --if-present",
@@ -16,6 +16,10 @@
     "loadtest:baseline": "node scripts/loadtest/run.ts --preset baseline --notes",
     "loadtest:full": "node scripts/loadtest/run.ts --preset full --notes",
     "loadtest:reset": "node scripts/loadtest/reset.ts",
+    "demo:gen-key": "node scripts/demo/gen-key.ts",
+    "demo:seed": "node scripts/demo/seed.ts",
+    "demo:simulate": "node scripts/demo/simulate.ts",
+    "demo:reset": "node scripts/demo/reset.ts",
     "loadtest:smoke:local": "node scripts/loadtest/run.ts --preset smoke --local --base-url http://127.0.0.1:8787"
   },
   "devDependencies": {

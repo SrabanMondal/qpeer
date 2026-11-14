@@ -42,24 +42,47 @@ export function claimsLoadtestIssuer(token: string): boolean {
 
 const verifierCache = new Map<string, TokenVerifier>();
 
-/** Verifier for tokens signed by the load-test key (cached per JWK set). */
-export function makeLoadtestVerifier(jwksJson: string): TokenVerifier {
-  const cached = verifierCache.get(jwksJson);
+/** True when the (unverified) token's issuer is `issuer`. Never throws. */
+export function claimsIssuer(token: string, issuer: string): boolean {
+  try {
+    return decodeJwt(token).iss === issuer;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Verifier for Firebase-shaped RS256 tokens signed by one of our own keys
+ * (load test, demo simulator), cached per (JWK set, issuer). `uidPrefix` is
+ * put in front of `sub`, so such a user can never take a real Firebase uid.
+ */
+export function makeSignedKeyVerifier(
+  jwksJson: string,
+  o: {
+    issuer: string;
+    audience: string;
+    source: VerifiedUser["source"];
+    secretName: string;
+    uidPrefix?: string;
+  },
+): TokenVerifier {
+  const cacheKey = `${o.issuer}|${jwksJson}`;
+  const cached = verifierCache.get(cacheKey);
   if (cached) return cached;
 
   const parsed = JSON.parse(jwksJson) as JSONWebKeySet;
   if (!Array.isArray(parsed?.keys) || parsed.keys.length === 0) {
-    throw new Error("LOADTEST_JWKS has no keys");
+    throw new Error(`${o.secretName} has no keys`);
   }
   for (const k of parsed.keys) {
-    if ("d" in k) throw new Error("LOADTEST_JWKS must hold public keys only");
+    if ("d" in k) throw new Error(`${o.secretName} must hold public keys only`);
   }
   const keys = createLocalJWKSet(parsed);
 
   const verifier: TokenVerifier = async (token): Promise<VerifiedUser> => {
     const { payload } = await jwtVerify(token, keys, {
-      issuer: LOADTEST_ISSUER,
-      audience: LOADTEST_AUDIENCE,
+      issuer: o.issuer,
+      audience: o.audience,
       algorithms: ["RS256"],
       requiredClaims: ["exp", "iat", "sub"],
     });
@@ -70,15 +93,25 @@ export function makeLoadtestVerifier(jwksJson: string): TokenVerifier {
       | { sign_in_provider?: string }
       | undefined;
     return {
-      uid: payload.sub,
+      uid: `${o.uidPrefix ?? ""}${payload.sub}`,
       isAnonymous: firebase?.sign_in_provider === "anonymous",
       email: null,
       phone:
         typeof payload.phone_number === "string" ? payload.phone_number : null,
       name: typeof payload.name === "string" ? payload.name : null,
-      source: "loadtest",
+      source: o.source,
     };
   };
-  verifierCache.set(jwksJson, verifier);
+  verifierCache.set(cacheKey, verifier);
   return verifier;
+}
+
+/** Verifier for tokens signed by the load-test key (cached per JWK set). */
+export function makeLoadtestVerifier(jwksJson: string): TokenVerifier {
+  return makeSignedKeyVerifier(jwksJson, {
+    issuer: LOADTEST_ISSUER,
+    audience: LOADTEST_AUDIENCE,
+    source: "loadtest",
+    secretName: "LOADTEST_JWKS",
+  });
 }
