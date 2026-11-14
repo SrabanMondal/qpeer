@@ -1,0 +1,6 @@
+{
+  "name": "@qpeer/demo-scripts",
+  "private": true,
+  "description": "Step 5 demo data tools: seed, simulate, reset (Node 24 type stripping; no dependencies)",
+  "type": "module"
+}
