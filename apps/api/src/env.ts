@@ -16,6 +16,11 @@ export interface Bindings {
    */
   LOADTEST_JWKS?: string;
   /**
+   * Step 5: public JWK set of the demo simulator key (secret, `demo`/`dev`).
+   * Ignored unless `ENVIRONMENT` is `demo`, `dev` or `local` (demo-auth.ts).
+   */
+  DEMO_JWKS?: string;
+  /**
    * C3: Ed25519 private JWK (secret) that signs offline tickets. Optional:
    * without it no ticket is signed (local, tests) and nothing breaks.
    */
@@ -32,7 +37,7 @@ export interface Bindings {
   RAZORPAY_WEBHOOK_SECRET?: string;
 }
 
-export type AuthSource = "firebase" | "loadtest";
+export type AuthSource = "firebase" | "loadtest" | "demo";
 
 /** Set by `requireBusinessRole` once the caller's membership is confirmed. */
 export interface Membership {
