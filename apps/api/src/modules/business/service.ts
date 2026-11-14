@@ -12,9 +12,9 @@ import {
   QueueSettings,
   type QueueView,
   queueJoinUrl,
-  STATS_MIN_SAMPLES,
   STATS_PUBLIC_AFTER_DAYS,
   STATS_WINDOW_DAYS,
+  statAverages,
   todayHours,
   type UpdateBusinessBody,
   type UpdateQueueBody,
@@ -195,9 +195,6 @@ export function statsVisible(
   );
 }
 
-const avgOrNull = (sum: number, n: number) =>
-  n >= STATS_MIN_SAMPLES ? Math.round(sum / n) : null;
-
 /**
  * MAP-05: public stats from `analytics_hourly` over the last 28 days, one
  * aggregate query on idx(business_id, hour_start).
@@ -235,13 +232,11 @@ export async function businessStats(
     etaHits: 0,
     etaTotal: 0,
   };
-  const eta = avgOrNull(r.etaHits * 100, r.etaTotal);
+  // Same math as the owner's Insights (shared `statAverages`).
   return {
     windowDays: STATS_WINDOW_DAYS,
     servedCount: r.served,
-    avgWaitMs: avgOrNull(r.sumWaitMs, r.waits),
-    avgServiceMs: avgOrNull(r.sumIntervalMs, r.intervals),
-    etaAccuracyPct: eta,
+    ...statAverages(r),
   };
 }
 
