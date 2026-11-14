@@ -440,8 +440,11 @@ describe("GET /v1/businesses/:id/earnings (INS-07)", () => {
     );
 
     for (const range of [7, 28] as const) {
+      // How many events fall in the last 7 days depends on the time of day the
+      // test runs, so the 7-day case pages by 1 to always cover paging (INC-074).
+      const limit = range === 7 ? 1 : 25;
       const first = await expectOk(
-        await earnings(biz.id, owner, `?range=${range}&limit=25`),
+        await earnings(biz.id, owner, `?range=${range}&limit=${limit}`),
         200,
         EarningsResponse,
       );
@@ -488,7 +491,7 @@ describe("GET /v1/businesses/:id/earnings (INS-07)", () => {
           await earnings(
             biz.id,
             owner,
-            `?range=${range}&limit=25&cursor=${cursor}`,
+            `?range=${range}&limit=${limit}&cursor=${cursor}`,
           ),
           200,
           EarningsResponse,
