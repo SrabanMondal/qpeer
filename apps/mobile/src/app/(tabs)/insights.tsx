@@ -1,20 +1,11 @@
 import { Redirect } from "expo-router";
 
-import { EmptyState, Screen } from "@/components/ui";
 import { useAppMode } from "@/lib/mode";
+import { InsightsScreen } from "@/screens/insights/insights-screen";
 
-/** Business insights: analytics and earnings arrive in Step 5. */
+/** Business mode → Insights: analytics and earnings (Step 5, INS-01…08). */
 export default function InsightsTab() {
   const { mode } = useAppMode();
   if (mode !== "business") return <Redirect href="/" />;
-
-  return (
-    <Screen bottomInset={false}>
-      <EmptyState
-        icon="insights"
-        title="Insights"
-        message="Wait times, busy hours and earnings (reservations, Priority Pass and your share, in ₹) arrive in Step 5."
-      />
-    </Screen>
-  );
+  return <InsightsScreen />;
 }

@@ -27,6 +27,16 @@ export const queryKeys = {
   /** Step 4: an owner's business payments with the net split. */
   businessPayments: (uid: string | null, businessId: string) =>
     ["payments", uid, "business", businessId] as const,
+  /** Step 5: business analytics (INS-01…06). */
+  analytics: (
+    uid: string | null,
+    businessId: string,
+    range: number,
+    queueId: string | null,
+  ) => ["insights", uid, businessId, "analytics", range, queueId] as const,
+  /** Step 5: business earnings (INS-07), paged events. */
+  earnings: (uid: string | null, businessId: string, range: number) =>
+    ["insights", uid, businessId, "earnings", range] as const,
   /** Step 4: the honest Priority Pass preview (PRI-02). */
   priorityPreview: (uid: string | null, queueId: string) =>
     ["priority-preview", uid, queueId] as const,
