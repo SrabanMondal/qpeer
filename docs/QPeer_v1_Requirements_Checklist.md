@@ -267,7 +267,7 @@ Decided by the owner, 2026-11-14 (side chat). Built after Step 6, in Razorpay te
 - [ ] **VER-04** Free-only businesses: document photo upload, stored privately (for example Cloudflare R2)
 - [ ] **VER-05** Admin role and a small review screen to approve or reject documents and reported businesses
 - [ ] **VER-06** Rules by state: new/unverified → free walk-in works, payments off, hidden from the map (recommended; owner to confirm hidden vs an "Unverified" label). KYC activated + location verified → payments on, listed with a Verified badge. Free-only document approved + location verified → payments off, listed with a Verified badge. Suspended (Razorpay) or report threshold reached → free walk-in only if not suspended, payments off, hidden until reviewed.
-- [ ] **VER-07** Migration rule for businesses created before Step 7 (dev and demo); to be decided in the build (for example: demo seed verified, real dev businesses unverified)
+- [ ] **VER-07** Businesses created before Step 7 (dev and demo) stay unverified, no migration (owner, 2026-11-14); the database starts clean at the real release
 
 ---
 

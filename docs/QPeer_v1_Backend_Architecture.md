@@ -882,4 +882,4 @@ Decided by the owner, 2026-11-14 (side chat). Built after Step 6, in test mode. 
 | Free-only, document approved + location verified | Free walk-in works; payments off; listed with a Verified badge. |
 | Suspended (Razorpay) or report threshold reached | Free walk-in works only if not suspended; payments off; hidden until reviewed. |
 | Earnings | The Earnings screen shows real transfer and settlement status instead of ledger-only numbers. |
-| Existing data (build detail, not decided) | Businesses created before Step 7 (dev and demo) need a migration rule, for example: the demo seed counts as verified, real dev businesses start unverified. |
+| Existing data (owner, 2026-11-14) | Businesses created before Step 7 (dev and demo) stay unverified; no migration rule. The database starts clean at the real release. |

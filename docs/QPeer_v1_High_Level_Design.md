@@ -410,7 +410,7 @@ Built after Step 6, in Razorpay test mode.
 
 **Open question:** unverified businesses hidden from the map, or shown with an "Unverified" label? Recommendation: hidden.
 
-**Build detail (not decided):** businesses created before Step 7 (dev and demo data) need a migration rule. For example, the demo seed counts as verified and real dev businesses start unverified.
+**Existing data (decided by the owner, 2026-11-14):** businesses created before Step 7 (dev and demo data) stay unverified. There is no migration rule. The database starts clean at the real release.
 
 ---
 
