@@ -25,6 +25,7 @@ The working to-do list for v1 (the demo). Design details live in `QPeer_v1_High_
 | **M9 Insights** | Analytics and earnings | M3 (events), M8 (ledger) | 5 |
 | **M10 Demo data** | Seed (Jammu), simulator, demo reset | M2, M3, M8 schema | 5 |
 | **M11 Extras (x)** | Add person, ratings (Priority Pass moved to M8 on 2026-10-18) | M3, M8 | 6 |
+| **M12 Verification and payouts** | Razorpay Route payouts, KYC status, location check, reports, document review for free-only businesses (decided 2026-11-14) | M2, M7, M8, M9 | 7 |
 
 ### What can be built in parallel
 
@@ -247,6 +248,26 @@ M0 ──► M1 ──► M2 ─────────────┐
 - [ ] **RAT-03** One rating per served ticket (server-side)
 - [ ] **RAT-04** Decided 2026-10-18 (RT1): ratings split by lane ("Regular customers 2.1★ · Priority customers 4.8★") next to "Priority lane on · 1 in N"
 - [ ] **RAT-05** Decided 2026-10-18 (RT2): show ratings only after at least 5 ratings (per lane); stars only, no text; the business cannot delete ratings but can reply publicly
+
+## M12 Verification and payouts (Step 7)
+
+Decided by the owner, 2026-11-14 (side chat). Built after Step 6, in Razorpay test mode. HLD §6.8, architecture §10.3 and §23. The owner enables Route on the Razorpay test account first.
+
+**Payouts**
+- [ ] **PAYOUT-01** Each business gets a Razorpay Route linked account (test mode)
+- [ ] **PAYOUT-02** On each paid ticket, the business share is transferred to the linked account; Qpeer keeps the rest; Razorpay settles to the business's bank
+- [ ] **PAYOUT-03** A refund reverses the transfer
+- [ ] **PAYOUT-04** Razorpay account webhooks: linked account suspended or needing more KYC → payments off, Verified badge removed
+- [ ] **PAYOUT-05** Earnings shows real transfer and settlement status instead of ledger-only numbers
+
+**Verification**
+- [ ] **VER-01** An activated Route linked account (Razorpay KYC: PAN, bank, business proof) counts as identity-verified. No separate Qpeer document review for paying businesses.
+- [ ] **VER-02** "Verify location": the owner taps it at the pin; same GPS check as join; mocked locations rejected; the location is never stored
+- [ ] **VER-03** "Report this business" button. Several reports hide the business until reviewed. Step 6 ratings stay the other signal.
+- [ ] **VER-04** Free-only businesses: document photo upload, stored privately (for example Cloudflare R2)
+- [ ] **VER-05** Admin role and a small review screen to approve or reject documents and reported businesses
+- [ ] **VER-06** Rules by state: new/unverified → free walk-in works, payments off, hidden from the map (recommended; owner to confirm hidden vs an "Unverified" label). KYC activated + location verified → payments on, listed with a Verified badge. Free-only document approved + location verified → payments off, listed with a Verified badge. Suspended (Razorpay) or report threshold reached → free walk-in only if not suspended, payments off, hidden until reviewed.
+- [ ] **VER-07** Migration rule for businesses created before Step 7 (dev and demo); to be decided in the build (for example: demo seed verified, real dev businesses unverified)
 
 ---
 

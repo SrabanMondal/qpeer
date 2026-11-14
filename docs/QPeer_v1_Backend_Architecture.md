@@ -405,6 +405,7 @@ created ──(captured, verified)──► captured ──► allocated
 - **Refund:** `refund −amount`, plus negative `business_share` and `platform_share` entries reversing the capture split.
 - **Forfeit:** a `forfeit` marker entry (amount 0); the capture split stands — the business keeps its share.
 - Business earnings = sum of its `business_share` entries in the period.
+- **Ledger only for now:** every payment lands in Qpeer's Razorpay account, and the business share (demo 70%) is never paid out. Step 7 moves it to Razorpay Route transfers to the business's linked account (decided 2026-11-14, §23).
 - Never update or delete ledger rows. Corrections are new rows.
 
 ### 10.4 Reconciliation (cron, daily)
@@ -688,6 +689,7 @@ Check current numbers on Cloudflare's pricing pages; these are the constraints t
 | Razorpay Route availability in test mode (split in ledger only if not) | 4 |
 | Priority Pass rules — decided by the owner 2026-10-18 (below), built in Step 4. | done |
 | R2 staff "Rejoin for customer" with a ticket check code — decided by the owner 2026-10-18 (below), built in Step 4. | done |
+| Unverified businesses: hidden from the map, or shown with an "Unverified" label? Recommendation: hidden (Step 7 table below). | 7 |
 
 ### Decided in Step 2
 
@@ -859,3 +861,25 @@ Replaces the older `reviews` idea (one per served token within 7 days, stars + t
 | Offline | The app keeps the last 6 Insights answers (analytics + first earnings page) per account/business/range/queue and shows them with "Saved … ago" when offline. |
 
 Recorded note, not a rule: **RT3** for a monopoly provider (the only hospital nearby), ratings don't move customers but remain public evidence for oversight.
+
+### Decided 2026-11-14 (owner): Step 7 verification and payouts
+
+Decided by the owner, 2026-11-14 (side chat). Built after Step 6, in test mode. HLD §6.8 has the full text.
+
+| Question | Decision |
+|---|---|
+| Problem | Anyone can create a fake business and pin. Every payment lands in Qpeer's Razorpay account; the business share (demo 70%) is only a ledger number, never paid out (§10.3). |
+| Payouts | Razorpay Route. Each business gets a linked account. On each paid ticket the business share is transferred to it; Qpeer keeps the rest; Razorpay settles to the business's bank. A refund reverses the transfer. |
+| Why Route | Qpeer must not hold or pay out funds itself (payment-aggregator rules). Have the legal side checked before a real launch. |
+| Before the build | The owner enables Route on the Razorpay test account. |
+| Identity | Delegated to Razorpay KYC (PAN, bank, business proof). An activated linked account counts as identity-verified. No separate Qpeer document review for paying businesses. |
+| Location check | The owner taps "Verify location" at the pin: the walk-in GPS check, mocked locations rejected, the location never stored. |
+| Reports | "Report this business" button, plus the Step 6 ratings. Several reports hide the business until Qpeer reviews it. |
+| Free-only businesses | For a business that never takes payments (for example a government hospital): a document photo stored privately (for example Cloudflare R2) and a manual Qpeer admin review. Needs an admin role and a small review screen. |
+| Account webhooks | Listen to Razorpay account webhooks. Linked account suspended or needing more KYC → payments off, Verified badge removed. |
+| Unverified / new | Free walk-in via QR works; payments off; hidden from the map (recommended; open question above). |
+| KYC activated + location verified | Free walk-in works; payments on; listed with a Verified badge. |
+| Free-only, document approved + location verified | Free walk-in works; payments off; listed with a Verified badge. |
+| Suspended (Razorpay) or report threshold reached | Free walk-in works only if not suspended; payments off; hidden until reviewed. |
+| Earnings | The Earnings screen shows real transfer and settlement status instead of ledger-only numbers. |
+| Existing data (build detail, not decided) | Businesses created before Step 7 (dev and demo) need a migration rule, for example: the demo seed counts as verified, real dev businesses start unverified. |

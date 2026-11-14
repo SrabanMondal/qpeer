@@ -30,7 +30,8 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
    - **B. Priority Pass + upgrade (decided 2026-10-18):** BOOKED state, GPS check-in, priority lane by check-in time (P series), "Skip ahead" upgrade, Next credit rule (1 in N, C1), estimate ranges (C3) + load-test people-ahead invariant, refunds (C6), device hash on purchases. Checklist PRI-01…12; HLD §5.2, architecture §9.3/§9.4/§10.5/§23.
 3. **Step 5 insights + demo data:** analytics + earnings screens, Jammu seed with 4–8 weeks of history, live demo simulator, deploy the `demo` Worker, reset command.
 4. **Step 6 extras** (if time): Add person + claim code, verified ratings (decided 2026-10-18; HLD §6.7, RAT-01…05).
-5. **Finish:** NFR-11 rate limits; leave-home-by; full demo rehearsal on `demo` with the phone. (QR image, storage and signed ticket moved into the fix batch.)
+5. **Step 7: Business verification and payouts** (decided by the owner, 2026-11-14 (side chat); build after Step 6). Razorpay Route linked account per business; the business share is transferred on each paid ticket (test mode). Razorpay KYC counts as identity check; Qpeer adds "Verify location" at the pin, "Report this business" and an admin document review for free-only businesses. Unverified businesses take no payments. The owner must enable Route on the Razorpay test account first. Design: HLD §6.8, architecture §23 "Decided 2026-11-14", checklist VER-01…, PAYOUT-01….
+6. **Finish:** NFR-11 rate limits; leave-home-by; full demo rehearsal on `demo` with the phone. (QR image, storage and signed ticket moved into the fix batch.)
 - Later latency win: fold `checkJoin` into `allocate` (one less Worker↔DO round trip per join).
 
 ## Decisions
@@ -41,6 +42,7 @@ Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), 
 ## Open questions
 - Does the professor want a say on defaults for public hospitals / government offices? Owner decided: business-set, no platform cap, ratings as the check.
 - Real fees and revenue split.
+- Step 7: unverified businesses hidden from the map, or shown with an "Unverified" label? Recommendation: hidden. Owner to confirm.
 - B11 (watch, INC-016): process killed once during fast taps; not reproduced.
 - B12 (INC-017): dev-build "Tools" gear overlaps the header pill and the map's Scan QR button (dev only).
 

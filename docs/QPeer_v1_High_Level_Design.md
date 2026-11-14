@@ -26,7 +26,8 @@ The demo is finished when this script runs from start to end on real Android pho
 |---|---|
 | **Must have** | Business account, profile, pin, queue, QR · customer map + business detail with public stats · walk-in join with GPS check · remote reservation with Razorpay test mode, deposits, refunds, split ledger · Priority Pass and upgrade behind a per-business setting (decided 2026-10-18, §5.2) · queue console (Next, Skip, Pause/Resume, No-show, Grace, Admit late, Close) · live position, wait range, alerts · business analytics and earnings · demo data generator |
 | **Extras if time allows** | Staff "Add person" with claim code · verified ratings (decided 2026-10-18, §6.7) |
-| **Not in v1** | Live payments, iOS, billing-software integrations, TV display, admin tools, comparison with nearby businesses, languages other than English, Bluetooth |
+| **Step 7 (after Step 6)** | Business verification and payouts through Razorpay Route, test mode (decided 2026-11-14, §6.8) |
+| **Not in v1** | Live payments, iOS, billing-software integrations, TV display, admin tools (except the Step 7 document review screen, §6.8), comparison with nearby businesses, languages other than English, Bluetooth |
 
 ---
 
@@ -42,7 +43,7 @@ The demo is finished when this script runs from start to end on real Android pho
 | Login | **Firebase Auth**: Anonymous (walk-ins), Google Sign-In and Phone OTP (paying customers and businesses). **Test phone numbers** for the demo. |
 | Push alerts | **Expo Notifications** through Firebase Cloud Messaging, sent from the Worker through the Expo Push API |
 | Map | **Mapbox** via `@rnmapbox/maps` (Expo config plugin, Mapbox Maps SDK v11). The demo uses Mapbox's **no-card trial** with a public token. A card is added before any real launch (free tier: 25,000 monthly active users). |
-| Payments | **Razorpay test mode**: Orders API + Checkout SDK + Refunds API + signed webhooks. The revenue split is recorded in our ledger (Razorpay Route if available in test mode). |
+| Payments | **Razorpay test mode**: Orders API + Checkout SDK + Refunds API + signed webhooks. The revenue split is recorded in our ledger (Razorpay Route if available in test mode). Step 7 pays the business share out through Razorpay Route (§6.8). |
 | Walk-in check | Static QR + **forgiving GPS check** (150 m default radius) + Android mock-location rejection |
 | Repo | One **npm workspaces** monorepo, TypeScript everywhere, shared types and validation (zod) |
 
@@ -376,6 +377,41 @@ Recorded note (not a rule):
 ### 6.6 Map
 `GET /map?bbox` → one D1 query on `queue_snapshots` joined with `businesses` (an index on lat/lng with a bounding box) → markers with waiting count and wait range, at most about 30 s old.
 
+### 6.8 Business verification and payouts (decided by the owner, 2026-11-14 (side chat); Step 7)
+Built after Step 6, in Razorpay test mode.
+
+**Problem.** Anyone can create a fake business and pin on the map. Every payment lands in Qpeer's Razorpay account. The business share (70% in the demo) is only a ledger number and is never paid out.
+
+**Payouts through Razorpay Route.**
+- Each business gets a Route linked account.
+- On each paid ticket, the business share is transferred to that linked account. Qpeer keeps the rest. Razorpay settles the transfer to the business's bank.
+- A refund reverses the transfer.
+- Reason: Qpeer must not hold or pay out funds itself (payment-aggregator rules). Have the legal side checked before a real launch.
+- Before the build, the owner enables Route on the Razorpay test account.
+
+**Identity check through Razorpay KYC.** Razorpay checks PAN, bank and business proof for the linked account. A business whose linked account is activated counts as identity-verified. Qpeer does no separate document review for paying businesses.
+
+**Qpeer's own checks.**
+1. **Location check:** the owner taps "Verify location" at the pin. Same GPS check as a walk-in join; mocked locations are rejected; the location is never stored.
+2. **Reports:** a "Report this business" button, plus the Step 6 ratings (§6.7). Several reports hide the business until Qpeer reviews it.
+
+**Free-only businesses** (for example a government hospital that never takes payments): the owner uploads a document photo, stored privately (for example Cloudflare R2). A Qpeer admin reviews it by hand. This needs an admin role and a small review screen.
+
+**Razorpay account webhooks.** If a linked account is suspended or needs more KYC, payments turn off and the Verified badge is removed.
+
+| State | Free walk-in via QR | Payments | Map |
+|---|---|---|---|
+| New / unverified | works | off | hidden (recommended; the owner still to confirm hidden vs an "Unverified" label) |
+| Razorpay KYC activated + location verified | works | on | listed, Verified badge |
+| Free-only: document approved by an admin + location verified | works | off | listed, Verified badge |
+| Suspended (Razorpay) or report threshold reached | works only if not suspended | off | hidden until reviewed |
+
+**Earnings.** The Earnings screen shows the real transfer and settlement status instead of ledger-only numbers.
+
+**Open question:** unverified businesses hidden from the map, or shown with an "Unverified" label? Recommendation: hidden.
+
+**Build detail (not decided):** businesses created before Step 7 (dev and demo data) need a migration rule. For example, the demo seed counts as verified and real dev businesses start unverified.
+
 ---
 
 ## 7. Security Model
@@ -453,6 +489,7 @@ qpeer/
 | **4. Payments** | Accounts upgrade, orders, Checkout, verify + webhook, refunds, ledger, missed-turn rules, Priority Pass + check-in + upgrade + Next credit rule (§5.2, decided 2026-10-18) | Test payment → token. No-show → forfeit recorded. Cancel → refund recorded. Pass → check-in → called by the 1-in-N rule. |
 | **5. Insights + demo data** | Analytics and earnings screens, seed and simulate scripts | The full demo script runs end to end on the `demo` environment |
 | **6. Extras** | Add person + claim code, verified ratings (§6.7). Priority Pass moved to Step 4 (2026-10-18). | Only if time allows |
+| **7. Verification and payouts** | Razorpay Route linked accounts and transfers, KYC status from account webhooks, "Verify location", "Report this business", document upload + admin review for free-only businesses, real payout status in Earnings (§6.8, decided 2026-11-14) | A paid test ticket transfers the business share to its linked account, a refund reverses it, and an unverified business takes no payments |
 
 ---
 
