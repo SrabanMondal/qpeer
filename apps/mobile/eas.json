@@ -25,6 +25,12 @@
         "EXPO_PUBLIC_API_URL": "https://qpeer-api-dev.qpeer-api.workers.dev"
       }
     },
+    "demo": {
+      "extends": "preview",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "https://qpeer-api-demo.qpeer-api.workers.dev"
+      }
+    },
     "production": {
       "environment": "production"
     }
