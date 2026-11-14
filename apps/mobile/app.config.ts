@@ -52,8 +52,12 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       "expo-build-properties",
       {
-        // Android: RNFB 26 needs minSdk 23; Expo SDK 57 defaults are higher,
-        // so nothing to override.
+        // Android: RNFB 26 needs minSdk 23; Expo SDK 57 defaults are higher.
+        // Real phones only: dropping the x86/x86_64 (emulator) native libs
+        // roughly halves the APK (INC-073).
+        android: {
+          buildArchs: ["armeabi-v7a", "arm64-v8a"],
+        },
         ios: {
           useFrameworks: "static",
           forceStaticLinking: RNFB_IOS_PODS,
