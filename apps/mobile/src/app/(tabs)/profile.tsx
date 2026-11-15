@@ -1,7 +1,13 @@
 import { DisplayName } from "@qpeer/shared";
 import { type Href, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import {
@@ -9,6 +15,7 @@ import {
   Card,
   ConfirmDialog,
   ErrorState,
+  Icon,
   InfoRow,
   ListItem,
   LoadingState,
@@ -17,12 +24,14 @@ import {
   SectionHeader,
   TextField,
 } from "@/components/ui";
-import { Spacing } from "@/constants/theme";
+import { Radius, RIPPLE_ALPHA, Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 import { useDevMapSeed, useUpdateMe } from "@/lib/api";
 import { authErrorMessage, providerOf, useAuth } from "@/lib/auth";
 import { errorText } from "@/lib/error-messages";
 import { type FieldErrors, useFieldErrors } from "@/lib/form";
 import { goHome, useAppMode, useModeToggle } from "@/lib/mode";
+import { openBatterySettings } from "@/lib/push";
 import { showErrorToast, showToast } from "@/lib/toast";
 import { useBackPressGuard } from "@/lib/unsaved-changes";
 
@@ -45,13 +54,18 @@ function signInMethod(provider: string): string {
     .join(", ");
 }
 
-/** IDN-06 profile, IDN-08 mode switch, sign in/out, developer tools. */
+/**
+ * IDN-06 profile, IDN-08 mode switch, sign in/out. Job: switch mode, check
+ * or change the name, reach payments, sign in or out. Developer tools only
+ * in dev builds.
+ */
 export default function ProfileTab() {
   const router = useRouter();
   const { user, signOut } = useAuth();
   const { me } = useAppMode();
   const { mode, registered, switching, change } = useModeToggle();
   const updateMe = useUpdateMe();
+  const theme = useTheme();
 
   const [editingName, setEditingName] = useState(false);
   const [name, setName] = useState("");
@@ -93,7 +107,11 @@ export default function ProfileTab() {
       await signOut();
       goHome("customer");
     } catch (e) {
-      Alert.alert("Sign out failed", authErrorMessage(e));
+      showToast({
+        title: "Sign out failed",
+        message: authErrorMessage(e),
+        tone: "danger",
+      });
     } finally {
       setSigningOut(false);
     }
@@ -109,19 +127,27 @@ export default function ProfileTab() {
     >
       <SectionHeader title="Mode" />
       <Card>
-        <ModeSwitch
-          mode={mode}
-          onChange={(m) => {
-            void change(m);
-          }}
-          disabled={switching}
-        />
-        <ThemedText type="small" themeColor="inkMuted">
-          {registered
-            ? "Business mode is for owners: businesses, queues and QR codes. Customer mode is for joining queues."
-            : "Business mode needs an account. Turning it on asks you to sign in first."}
-        </ThemedText>
-        {switching ? <LoadingState label="Switching…" /> : null}
+        <View style={styles.switchRow}>
+          <ModeSwitch
+            mode={mode}
+            onChange={(m) => {
+              void change(m);
+            }}
+            disabled={switching}
+          />
+          {switching ? (
+            <ActivityIndicator
+              color={theme.primary}
+              accessibilityLabel="Switching mode"
+            />
+          ) : null}
+        </View>
+        {registered ? null : (
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+            Business mode needs an account. Turning it on asks you to sign in
+            first.
+          </ThemedText>
+        )}
       </Card>
 
       <SectionHeader title="You" />
@@ -152,36 +178,47 @@ export default function ProfileTab() {
                 returnKeyType="done"
                 onSubmitEditing={saveName}
               />
-              <Button
-                title="Save name"
-                onPress={saveName}
-                loading={updateMe.isPending}
-              />
-              <Button
-                title="Cancel"
-                variant="outline"
-                onPress={() => setEditingName(false)}
-                disabled={updateMe.isPending}
-              />
+              <View style={styles.editActions}>
+                <Button
+                  title="Cancel"
+                  variant="text"
+                  onPress={() => setEditingName(false)}
+                  disabled={updateMe.isPending}
+                />
+                <Button
+                  title="Save name"
+                  onPress={saveName}
+                  loading={updateMe.isPending}
+                />
+              </View>
             </View>
           ) : (
-            <>
-              <InfoRow label="Name" value={profile.displayName ?? "Not set"} />
-              <Button
-                title="Edit name"
-                icon="edit"
-                variant="secondary"
-                onPress={startEditName}
-              />
-            </>
+            <Pressable
+              onPress={startEditName}
+              accessibilityRole="button"
+              accessibilityLabel={`Name: ${profile.displayName ?? "not set"}. Edit name`}
+              android_ripple={{ color: theme.onSurface, alpha: RIPPLE_ALPHA }}
+              style={styles.nameRow}
+            >
+              <View style={styles.flex}>
+                <InfoRow
+                  label="Name"
+                  value={profile.displayName ?? "Not set"}
+                />
+              </View>
+              <Icon name="edit" color="onSurfaceVariant" />
+            </Pressable>
           )}
-          <InfoRow label="Email" value={profile.email ?? "—"} />
-          <InfoRow label="Phone" value={profile.phone ?? "—"} />
+          {profile.email ? (
+            <InfoRow label="Email" value={profile.email} />
+          ) : null}
+          {profile.phone ? (
+            <InfoRow label="Phone" value={profile.phone} />
+          ) : null}
           <InfoRow
             label="Signed in with"
             value={signInMethod(providerOf(user))}
           />
-          <InfoRow label="User ID" value={profile.id} selectable />
         </Card>
       )}
 
@@ -197,6 +234,18 @@ export default function ProfileTab() {
         onPress={() => router.push("/payments" as Href)}
       />
 
+      {Platform.OS === "android" ? (
+        <>
+          <SectionHeader title="Alerts" />
+          <ListItem
+            icon="battery_saver"
+            title="Alerts and battery"
+            subtitle="Let Qpeer run in the background so alerts arrive on time"
+            onPress={() => void openBatterySettings()}
+          />
+        </>
+      ) : null}
+
       <SectionHeader title="Account" />
       {user?.isAnonymous ? (
         <Button
@@ -208,20 +257,33 @@ export default function ProfileTab() {
         <Button
           title="Sign out"
           icon="logout"
-          variant="danger-soft"
+          variant="danger-tonal"
           onPress={onSignOut}
           loading={signingOut}
         />
       ) : null}
 
-      <SectionHeader title="Developer" />
-      <ListItem
-        icon="map"
-        title="Map check"
-        subtitle="Mapbox test map on Jammu"
-        onPress={() => router.push("/map-check")}
-      />
-      {__DEV__ ? <DemoMapTools /> : null}
+      {profile ? (
+        <>
+          <SectionHeader title="About this account" />
+          <Card tone="surfaceContainerLow">
+            <InfoRow label="User ID" value={profile.id} selectable />
+          </Card>
+        </>
+      ) : null}
+
+      {__DEV__ ? (
+        <>
+          <SectionHeader title="Developer" />
+          <ListItem
+            icon="map"
+            title="Map check"
+            subtitle="Mapbox test map on Jammu"
+            onPress={() => router.push("/map-check")}
+          />
+          <DemoMapTools />
+        </>
+      ) : null}
     </Screen>
   );
 }
@@ -295,4 +357,21 @@ function DemoMapTools() {
 
 const styles = StyleSheet.create({
   gap: { gap: Spacing.two },
+  switchRow: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
+  editActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: Spacing.two,
+  },
+  nameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.two,
+    minHeight: 48,
+    marginHorizontal: -Spacing.two,
+    paddingHorizontal: Spacing.two,
+    borderRadius: Radius.sm,
+    overflow: "hidden",
+  },
+  flex: { flex: 1 },
 });
