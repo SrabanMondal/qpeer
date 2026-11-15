@@ -32,9 +32,6 @@ import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
  * - `danger`: a text button in `error` ("Leave queue").
  * - `danger-tonal`: errorContainer fill, for a destructive action in a row
  *   of tonal ones ("No-show").
- *
- * Old names still work: `primary` and `brand` = filled, `secondary` =
- * tonal, `outline` = outlined, `danger-soft` = danger-tonal.
  */
 export type ButtonVariant =
   | "filled"
@@ -42,17 +39,7 @@ export type ButtonVariant =
   | "outlined"
   | "text"
   | "danger"
-  | "danger-tonal"
-  /** @deprecated use `filled`. */
-  | "primary"
-  /** @deprecated use `filled`. */
-  | "brand"
-  /** @deprecated use `tonal`. */
-  | "secondary"
-  /** @deprecated use `outlined`. */
-  | "outline"
-  /** @deprecated use `danger-tonal`. */
-  | "danger-soft";
+  | "danger-tonal";
 
 type Look = {
   fill: ThemeColor | null;
@@ -67,11 +54,6 @@ const LOOK: Record<ButtonVariant, Look> = {
   text: { fill: null, content: "primary" },
   danger: { fill: null, content: "error" },
   "danger-tonal": { fill: "errorContainer", content: "onErrorContainer" },
-  primary: { fill: "primary", content: "onPrimary" },
-  brand: { fill: "primary", content: "onPrimary" },
-  secondary: { fill: "secondaryContainer", content: "onSecondaryContainer" },
-  outline: { fill: null, content: "primary", border: "outline" },
-  "danger-soft": { fill: "errorContainer", content: "onErrorContainer" },
 };
 
 /**
