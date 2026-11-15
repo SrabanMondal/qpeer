@@ -7,7 +7,7 @@ import {
 } from "@qpeer/shared";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useRef, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { normalizeTime, TimeInput } from "@/components/time-input";
@@ -20,19 +20,13 @@ import {
   LoadingState,
   Screen,
   type ScreenHandle,
-  StatusBanner,
   ThemedSwitch,
 } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { useBusiness, useUpdateBusiness } from "@/lib/api";
-import { errorText } from "@/lib/error-messages";
 import { type FieldErrors, useFieldErrors, zodFieldErrors } from "@/lib/form";
-import {
-  formatDay,
-  todayInIndia,
-  todayText,
-  WEEKDAY_LABELS,
-} from "@/lib/format";
+import { formatDay, todayInIndia, WEEKDAY_LABELS } from "@/lib/format";
+import { showErrorToast } from "@/lib/toast";
 import { useUnsavedChangesGuard } from "@/lib/unsaved-changes";
 
 const MAX_RANGES = 3;
@@ -162,10 +156,6 @@ function HoursEditor({
       );
       const y = firstBad ? dayTop.current[firstBad] : undefined;
       if (y !== undefined) screen.current?.scrollTo(y - Spacing.three);
-      Alert.alert(
-        "Check the hours",
-        "Some times are not valid. They are marked in red.",
-      );
       return;
     }
     const cleaned = cleanHours(hours);
@@ -175,18 +165,24 @@ function HoursEditor({
       allowLeave();
       router.back();
     } catch (e) {
-      Alert.alert("Could not save hours", errorText(e));
+      showErrorToast("Could not save hours", e);
     }
   };
 
   return (
-    <Screen ref={screen}>
-      <StatusBanner
-        tone={hours[today].length > 0 ? "active" : "closed"}
-        title={todayText(hours)}
-        detail="Type times as HH:MM on the 24-hour clock (17:30 = 5:30 PM), or use − and +. Tap Save hours when done."
-      />
-
+    <Screen
+      ref={screen}
+      // Save stays in reach while editing any of the seven days.
+      bottomBar={
+        <Button
+          title="Save hours"
+          size="large"
+          onPress={save}
+          loading={update.isPending}
+          needsNetwork
+        />
+      }
+    >
       {WEEKDAYS.map((day) => (
         <View
           key={day}
@@ -203,13 +199,6 @@ function HoursEditor({
           />
         </View>
       ))}
-
-      <Button
-        title="Save hours"
-        onPress={save}
-        loading={update.isPending}
-        needsNetwork
-      />
     </Screen>
   );
 }
@@ -237,20 +226,12 @@ function DayEditor({
     <Card>
       <View style={styles.dayHeader}>
         <View style={styles.dayTitle}>
-          <ThemedText type="heading">{label}</ThemedText>
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="titleMedium">{label}</ThemedText>
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {open ? formatDay(ranges) : "Closed"}
           </ThemedText>
-          {isToday ? (
-            <Badge
-              label={open ? "Today" : "Closed today"}
-              tone={open ? "success" : "warning"}
-            />
-          ) : null}
+          {isToday ? <Badge label="Today" tone="neutral" /> : null}
         </View>
-        <ThemedText type="label" themeColor={open ? "brand" : "inkMuted"}>
-          {open ? "Open" : "Closed"}
-        </ThemedText>
         <ThemedSwitch
           value={open}
           onValueChange={(v) => onChange(v ? [DEFAULT_RANGE] : [])}
@@ -279,15 +260,19 @@ function DayEditor({
               />
             </View>
             {fromError || toError ? (
-              <ThemedText type="small" themeColor="danger">
+              <ThemedText type="bodySmall" themeColor="error">
                 {fromError ?? toError}
               </ThemedText>
-            ) : null}
+            ) : (
+              <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
+                HH:MM on the 24-hour clock (17:30 = 5:30 PM), or use − and +.
+              </ThemedText>
+            )}
             {ranges.length > 1 ? (
               <View style={styles.remove}>
                 <HeaderButton
                   title="Remove range"
-                  color="danger"
+                  color="error"
                   accessibilityLabel={`Remove ${label} range ${i + 1}`}
                   onPress={() => onChange(ranges.filter((_, j) => j !== i))}
                 />
@@ -300,7 +285,8 @@ function DayEditor({
       {open && ranges.length < MAX_RANGES ? (
         <Button
           title="Add time range"
-          variant="secondary"
+          variant="tonal"
+          icon="add"
           accessibilityLabel={`Add a time range on ${label}`}
           onPress={() => onChange([...ranges, nextRange(ranges)])}
         />
