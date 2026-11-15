@@ -19,7 +19,7 @@ export function HeaderModeSwitch() {
           void change(m);
         }}
         disabled={switching}
-        onDark
+        compact
       />
     </View>
   );
