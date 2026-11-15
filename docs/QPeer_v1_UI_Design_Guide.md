@@ -4,6 +4,7 @@ The visual system is **"B · Token board"**, chosen by the owner on **2026-11-15
 
 *Updated 2026-10-18: ratings (§5) and the Priority Pass, missed-turn and check-code screens (§5a) follow the decided v1 design (HLD §5.2, §6.7).*
 *Updated 2026-11-15: direction B "Token board" chosen; §1–§3 rewritten, visual words in §4–§6 updated.*
+*Updated 2026-11-15 (phase 2): every screen on the system; aliases removed; board map pills; sheet, menu, FAB, pinned bar and expandable section added to §3; the console's status banner only for exceptions (§5).*
 
 | Reference | Shows | Used for |
 |---|---|---|
@@ -19,7 +20,7 @@ The visual system is **"B · Token board"**, chosen by the owner on **2026-11-15
 **Thesis.** The amber LED token display over every Indian clinic counter: "Token 14 → Counter 2". It is what people stare at while they wait, and it is the app's one signature. Everything else is calm Material 3.
 
 - **One committed region, a restrained shell.** The **token board** (black face, amber dot-matrix LEDs) is the only black, high-chroma region. Screens around it are quiet tonal Material 3 surfaces with one brass accent. Never make a whole screen black or amber.
-- **The board is the hero** wherever a number matters: the customer's ticket and the staff console's "Now serving". Map pills borrow its face (Doto on black) in a later phase.
+- **The board is the hero** wherever a number matters: the customer's ticket and the staff console's "Now serving". Map pills borrow its face (Doto on black, §3 `MapPill`).
 - **Red LEDs mean "come now".** The board turns red only when it is the customer's turn ("YOUR TURN · NOW", "COME NOW · 4:12"). That switch is the app's one orchestrated animation.
 - **Hierarchy from type and space, not boxes.** Not every group is a card. Tonal surfaces give depth; shadows only on things that float.
 - **One primary action per state**, in the lower half, as a full-round brass button. NEXT is the biggest button in the app.
@@ -44,7 +45,7 @@ The visual system is **"B · Token board"**, chosen by the owner on **2026-11-15
 
 ## 2. Design tokens
 
-All values live in `apps/mobile/src/constants/theme.ts`. Components use tokens only. The one exception is the QR code's white quiet zone.
+All values live in `apps/mobile/src/constants/theme.ts`. Components use tokens only: no hex value appears anywhere else. The QR print colours (black ink on white paper, both themes) are tokens too: `PrintColors`. `app.config.ts` repeats three values for native config it cannot import: the splash background is `surface` (light `#F7F9FF`, dark `#10131A`) and the adaptive icon background is `boardBg` (needs a rebuild to show).
 
 ### Colour roles
 
@@ -67,7 +68,7 @@ Material 3 roles generated with the app-ui skill's `palette.mjs --seed "#E89A00"
 
 The full set (secondary, tertiary, dim/bright surfaces, scrim) is in `theme.ts`.
 
-**Old names** (`brand`, `brandSoft`, `primarySoft`, `danger`, `dangerSoft`, `warning`, `warningSoft`, `ink`, `inkMuted`, `header`, `bg`, `card`, `border`) still work as **deprecated aliases** mapped onto these roles (`brand` → `primary`, `ink` → `onSurface`, `card` → `surfaceContainer`, `warning` → `primary`, …), so screens not yet migrated pick up the new look. New code uses role names; phase 2 migrates screens one by one.
+The old alias names (`brand`, `ink`, `card`, `bg`, `warning`, …) were **removed in phase 2**; only the role names exist.
 
 ### Board tokens
 
@@ -89,12 +90,12 @@ Only these faces and weights are bundled (`@expo-google-fonts/*` + the expo-font
 
 | Face | Roles | Use |
 |---|---|---|
-| **Doto 900** (dot-matrix) | `boardDisplay` 104/112, `boardLabel` 17/24 (min 15) | Only on the board and map pills. Never sentences |
-| **Archivo 800** | `nextLabel` 22/28, `boardDisplaySolid`, `boardLabelSolid` | The NEXT label; the board at font scale ≥ 1.3 |
+| **Doto 900** (dot-matrix) | `boardDisplay` 104/112, `boardLabel` 17/24, `boardPill` 15/20 (the minimum) | Only on the board and map pills. Never sentences |
+| **Archivo 800** | `nextLabel` 22/28, `boardDisplaySolid`, `boardLabelSolid`, `boardPillSolid` | The NEXT label; the board and map pills at font scale ≥ 1.3 |
 | **Archivo 700** | `figure` 22/28 tabular, `appTitle` 22/28 | Figures beside the board, stat numbers, screen titles |
 | **Roboto** (system) | M3 roles: `displayLarge…Small`, `headlineLarge…Small`, `titleLarge` 22, `titleMedium` 16/500, `titleSmall` 14/500, `bodyLarge` 16, `bodyMedium` 14, `bodySmall` 12, `labelLarge` 14/500, `labelMedium` 12/500, `labelSmall` 11/500 | Everything people read in sentences, buttons, lists, forms |
 
-Numbers use `fontVariant: ["tabular-nums"]`. Old type names stay as aliases: `display` → Archivo 800 57, `title` → headline small, `heading` → title medium (bold), `body` → body large, `label` → label large, `small` → body medium.
+Numbers use `fontVariant: ["tabular-nums"]`. The old type names (`display`, `title`, `heading`, `body`, `label`, `small`) were removed in phase 2. Chart axis text uses `labelSmall`.
 
 ### Shape
 
@@ -110,7 +111,7 @@ Radius scale **xs 4 / sm 8 / md 12 / lg 16 / xl 28 / full**.
 
 ### Surfaces and elevation
 
-Depth comes from the tonal `surfaceContainer*` steps. **No shadows** except things that float: snackbar (toast), the floating Undo bar, FABs and sheets, which use `Elevation.level3` (`boxShadow`). The old soft card shadow and dark-mode card borders are gone.
+Depth comes from the tonal `surfaceContainer*` steps. **No shadows** except things that float: snackbar (toast), the floating Undo bar, FABs, and the Discover top bar and business card over the map, which use `Elevation.level3` (`boxShadow`). Sheets, menus and dialogs are drawn by Material (Compose) with its own elevation. The old soft card shadow and dark-mode card borders are gone.
 
 ### Icons
 
@@ -129,7 +130,7 @@ All in `apps/mobile/src/components/ui/`.
 | Component | Look |
 |---|---|
 | `TokenBoard` | The signature (replaces `NumberBadge`). Black face, 3 dp edge ring, radius 16, faint LED dot grid. A top row (label left, value right), the big padded number ("014"), a rule, a bottom row. Tones `led` / `dim` / `alert`. One accessibility stop; `relightKey` drives the re-light; access rule built in. `boardNumber()` pads labels ("6" → "006", "P3" → "P03") |
-| `Button` | Full-round M3 buttons with ripple (`android_ripple`, content colour at 10 %): `filled` (primary), `tonal` (secondaryContainer), `outlined` (outline border, primary text), `text`, `danger` (error text button), `danger-tonal` (errorContainer). Sizes `medium` 48 / `large` 56 / `hero` 72 (Archivo 800 label). Busy = spinner on the button; disabled = onSurface at 10 % / 38 %. Old variant names still work |
+| `Button` | Full-round M3 buttons with ripple (`android_ripple`, content colour at 10 %): `filled` (primary), `tonal` (secondaryContainer), `outlined` (outline border, primary text), `text`, `danger` (error text button), `danger-tonal` (errorContainer). Sizes `medium` 48 / `large` 56 / `hero` 72 (Archivo 800 label). Busy = spinner on the button; disabled = onSurface at 10 % / 38 %. (The old variant names were removed in phase 2.) |
 | `Card` | Tonal container (default `surfaceContainer`, `tone` prop), radius 16, padding 16, no shadow, no border |
 | `ListItem` | Tonal row, min 56 dp, radius 16, ripple, leading icon on a `secondaryContainer` circle, chevron when it navigates |
 | `ChoiceChips` | M3 filter chips: 32 dp chip inside a 48 dp target, radius 8, check + secondaryContainer when selected, outline when not |
@@ -141,6 +142,14 @@ All in `apps/mobile/src/components/ui/`.
 | `HeaderButton` | Small text button, label large, a real 48 × 48 dp target with ripple (no hitSlop) |
 | `ToastHost` | M3 snackbar look: inverseSurface, radius 4, level 3 shadow, under the status bar; the icon names the tone |
 | `ConfirmDialog` | The native Android dialog (`Alert.alert`), only for decisions that cannot be undone |
+| `Sheet` | M3 modal bottom sheet: `@expo/ui` Jetpack Compose `ModalBottomSheet` (stable API) holding React Native content. `surfaceContainerLow`, drag handle, top corners 28, scrim at 32 %; swipe down, Back or the scrim closes it. Optional title (title large), padding 16. For detail or actions tied to the screen: "Reserve or skip the line" (business page), "Your ticket code" (ticket), "Rejoin for customer" (console), the one-time battery tip. Never for a decision that cannot be undone |
+| `OverflowMenu` | M3 menu anchored to a ⋮ `IconButton` (Compose `DropdownMenu`, stable API): `surfaceContainer`, label large items, destructive items in `error`, a check on the current choice. `ref.open()` opens it from a row's long-press; `trigger` swaps the anchor (the list's "Sort: Distance ▾"). Rare actions live here: Close for the day (console app bar), Archive queue, Deactivate business, "Move back a few places" on a waiting row |
+| `IconButton` | M3 standard icon button: 24 dp icon, real 48 dp target, 40 dp borderless ripple, `accessibilityLabel` required |
+| `Fab` / `ExtendedFab` | M3 FAB 56 dp, radius 16, level 3 shadow. `Fab` (icon only, labelled; `surfaceContainerHigh` with a `primary` icon) for map controls ("Show my location", "Use my location"); `ExtendedFab` (`primaryContainer`, icon + label) for "Scan QR" on My tokens |
+| Pinned bottom bar (`Screen` `bottomBar`) | The state's one primary action stays under the thumb at any scroll position and rises above the keyboard: `surfaceContainer`, padding 12 / 16, a status line above or below the button. Used by: ticket ("I'm here", "Check in", "Back to home"), join ("Join queue"), public page with one queue ("Join"), pay ("Pay ₹X"), verify, hours ("Save hours"), queue page ("Save" while anything is unsaved), console (NEXT / Resume / Open queue, above the tab bar; the Undo snackbar floats above it) |
+| `ExpandableSection` | A group that starts collapsed: title small `primary`, its current values in one line, an expand chevron; one 56 dp target. Queue settings (Reservations, Priority Pass; opened by itself when a field in it is wrong) and "Archived (N)" queues |
+| `MapPill` (discover) | The board face in small, drawn by Mapbox as an image from a React Native view: open = `boardBg` pill, `boardEdge` ring, Doto `boardPill` in `boardLed` with glow; paused = the same in `boardLedDim`; closed = a quiet `surfaceContainerHigh` pill, Roboto label large in `onSurfaceVariant`; selected = the board face with a 3 dp brass (`primary`) ring and `boardLabel`-size LEDs, drawn on top. A tail points at the place. Archivo 800 at font scale ≥ 1.3; capped at 1.3× |
+| `ClockGuard` | M3 basic dialog (Compose `AlertDialog`) that Back and the scrim cannot dismiss while the phone's clock is off: icon, title, the skew sentence, "Check again" and "Open settings" |
 | `ConnectionBanner` | Slim tonal strip (surfaceContainerHighest), icon + "Offline — showing saved info", a 48 dp "Retry" text button |
 | `ModeSwitch` | Drawn like an M3 switch (primary track when Business), caption "Business / Customer", one 48 dp target |
 | `AppSwitch` | M3 switch colours: primary track on, outline track off |
@@ -159,12 +168,15 @@ All in `apps/mobile/src/components/ui/`.
 
 | Mockup shows | QPeer v1 does | Why |
 |---|---|---|
-| "BLE Proximity: ON" | **"Walk-in check: GPS · 150 m"** (or just "Service active") | We replaced BLE with the GPS check |
+| "BLE Proximity: ON" | **"Walk-in check: GPS · 150 m"** in the console's status banner, which shows **only for the exceptions**: paused, closed or reconnecting. While open and live, no banner: the board and NEXT already say it (owner decision 2026-11-15) | We replaced BLE with the GPS check; the normal state needs no text |
+| Status banner always on the console | Banner only when paused, closed or reconnecting (row above) | Calm by default |
 | £ amounts | **₹** (amounts in paise internally) | India |
 | "Discover queues in London" | **"Discover queues in Jammu"** (or the user's area) | Demo city |
 | "Update Position" button | **Pull to refresh** only; updates are live | Position updates automatically over the live connection |
 | Earnings split "Walk-ins / QPeer Users" | **"Reservations / Priority Pass"** and **business share** | QPeer only knows the money that went through QPeer; walk-ins pay the business directly, outside the app |
 | Photo in the map bottom card | **Category icon placeholder** in v1 | Business photos come after v1 (needs uploads) |
+| Wait-time pill markers in a brand colour | **Board map pills** (`MapPill`, §3): black LED face with Doto wait text; closed queues a quiet pill | The board is the app's one signature |
+| Search bar on the map | **A title bar** ("Discover queues near you") with Map/List and Scan QR; no search icon | There is no search in v1 (owner decision 2026-11-15) |
 | One rating with stars | **Two ratings**, experience and service quality, **split by lane**: "Regular customers 4.2★ · Priority customers 4.6★". A lane's stars stay hidden until it has 5 ratings ("New · not enough ratings yet"). Stars only, no review text (Step 6 extra) | Verified ratings from served tickets; the lane split shows whether priority is used fairly |
 | Blue number circle, teal/blue accents, dark header band | **The token board** and the brass Material 3 shell (§1–§3) | Direction B, chosen 2026-11-15 |
 
@@ -176,10 +188,10 @@ Same look as the rest of the app: the board as the hero, tonal surfaces, one str
 |---|---|---|
 | Priority lane label | Business page, join screen, ticket (when the lane is on) | Small chip, radius 8, `primaryContainer` fill, `onPrimaryContainer` text and bolt icon: **"Priority lane on · 1 in N"**. Next to it, the lane-split rating line. Never hidden while the lane is on. |
 | Buy pass preview | Before payment | `Card` with `InfoRow`s: "Priority wait ~X min", "Regular wait ~Y min", "You save ~Z min" (an Archivo figure in `primary`). Price on the filled button: "Buy Priority Pass · ₹X". "Sold out" replaces the button when the daily cap is reached. |
-| BOOKED pass | Ticket screen, My tokens | Board: "PRIORITY PASS · K7P2", dim "P--", "CHECK IN · ON ARRIVAL". Under it "Priority Pass · booked", "Valid until …", one large filled **"Check in"** (runs the GPS check). No number yet: the P number appears after check-in. Outlined "Cancel pass" with the refund shown before confirming. |
+| BOOKED pass | Ticket screen, My tokens | Board: "PRIORITY PASS · K7P2", dim "P--", "CHECK IN · ON ARRIVAL". Under it "Priority Pass · booked", "Valid until …", one large filled **"Check in"** in the pinned bottom bar (runs the GPS check). No number yet: the P number appears after check-in. Outlined "Cancel pass" with the refund shown before confirming. |
 | Skip-ahead row | Ticket screen, WAITING regular ticket | A tonal `primaryContainer` row: "Skip ahead · about N min faster" with the price in a filled **₹ chip**; the whole row is one button. **Hidden when the saving is under 5 min**; never show "save ~0 min". |
 | Grace countdown | Ticket screen, GRACE | The board re-lights red: **"COME NOW · m:ss"**, the number, "GO TO · COUNTER N", counting down every second on the server-corrected clock. Under it the Archivo figures "Your turn: Now · Time left: 4 min 12 s" and the instruction line. The board is the hero while in GRACE. |
-| MISSED screen | Ticket screen, MISSED | Board: "TURN MISSED", the number dimmed, "REJOIN BY · time". Title "You missed your turn". Body "When you're here, tap I'm here to rejoin." One large filled **"I'm here"** button (runs the location check; clear errors for too far / fake location). After the one rejoin the button is gone. If the late window has passed, add the line "You'll rejoin at the end of the line." |
+| MISSED screen | Ticket screen, MISSED | Board: "TURN MISSED", the number dimmed, "REJOIN BY · time". Title "You missed your turn". Body "When you're here, tap I'm here to rejoin." One large filled **"I'm here"** button in the pinned bottom bar (runs the location check; clear errors for too far / fake location). After the one rejoin the button is gone. If the late window has passed, add the line "You'll rejoin at the end of the line." |
 | Check code | Ticket board, top row (R2, decided 2026-10-18) | Right end of the board's top row in `boardLedDim`: "YOUR TOKEN · K7P2" (selectable). Spoken letter by letter. Staff ask for it at the counter when the phone is dead. |
 
 ## 6. Writing style in the UI
