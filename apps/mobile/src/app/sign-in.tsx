@@ -1,19 +1,16 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Alert } from "react-native";
+import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import {
-  Button,
-  Card,
-  Screen,
-  SectionHeader,
-  TextField,
-} from "@/components/ui";
+import { Button, Card, Screen, TextField } from "@/components/ui";
+import { Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 import { useUpdateMe } from "@/lib/api";
 import { authErrorMessage, googleSignInConfigured, useAuth } from "@/lib/auth";
 import { errorText } from "@/lib/error-messages";
 import { goHome } from "@/lib/mode";
+import { showToast } from "@/lib/toast";
 
 type Busy = "google" | "send" | "confirm" | null;
 
@@ -22,6 +19,7 @@ export default function SignInScreen() {
   // `mode=business`: the user picked Business mode while anonymous (IDN-08).
   const params = useLocalSearchParams<{ mode?: string }>();
   const toBusiness = params.mode === "business";
+  const theme = useTheme();
   const { signInWithGoogle, startPhoneSignIn, confirmPhoneCode } = useAuth();
   const updateMe = useUpdateMe();
 
@@ -38,10 +36,12 @@ export default function SignInScreen() {
         await updateMe.mutateAsync({ preferredMode: "business" });
         goHome("business");
       } catch (e) {
-        Alert.alert(
-          "Signed in, but still in Customer mode",
-          `${errorText(e)} Switch to Business mode again from Profile.`,
-        );
+        showToast({
+          title: "Signed in, but still in Customer mode",
+          message: `${errorText(e)} Switch to Business mode again from Profile.`,
+          tone: "warning",
+          durationMs: 8000,
+        });
         goHome("customer");
       }
       return;
@@ -98,37 +98,43 @@ export default function SignInScreen() {
       {toBusiness ? (
         <>
           <Stack.Screen options={{ title: "Sign in for Business mode" }} />
-          <ThemedText type="body">
+          <ThemedText type="bodyLarge">
             Business mode needs an account. Sign in with Google or your phone,
             and the app switches to Business mode for you.
           </ThemedText>
         </>
       ) : null}
 
-      <SectionHeader title="Google" />
+      {/* One surface, one choice: Google, or the phone code (the main way). */}
       <Card>
         {googleSignInConfigured ? (
-          <Button
-            title="Continue with Google"
-            icon="login"
-            onPress={onGoogle}
-            loading={busy === "google"}
-            disabled={busy !== null}
-          />
-        ) : (
-          <ThemedText type="small" themeColor="inkMuted">
-            Google sign-in is not set up in this build yet.
-          </ThemedText>
-        )}
-        {googleError ? (
-          <ThemedText type="small" themeColor="danger">
-            {googleError}
-          </ThemedText>
+          <>
+            <Button
+              title="Continue with Google"
+              variant="tonal"
+              icon="login"
+              onPress={onGoogle}
+              loading={busy === "google"}
+              disabled={busy !== null}
+            />
+            {googleError ? (
+              <ThemedText type="bodyMedium" themeColor="error">
+                {googleError}
+              </ThemedText>
+            ) : null}
+            <View style={styles.or} accessibilityElementsHidden>
+              <View
+                style={[styles.rule, { backgroundColor: theme.outlineVariant }]}
+              />
+              <ThemedText type="labelLarge" themeColor="onSurfaceVariant">
+                or
+              </ThemedText>
+              <View
+                style={[styles.rule, { backgroundColor: theme.outlineVariant }]}
+              />
+            </View>
+          </>
         ) : null}
-      </Card>
-
-      <SectionHeader title="Phone" />
-      <Card>
         <TextField
           label="Phone number"
           value={phone}
@@ -141,6 +147,7 @@ export default function SignInScreen() {
         {!codeSent ? (
           <Button
             title="Send code"
+            size="large"
             onPress={onSendCode}
             loading={busy === "send"}
             disabled={busy !== null}
@@ -157,32 +164,35 @@ export default function SignInScreen() {
               textContentType="oneTimeCode"
               maxLength={6}
             />
+            <View style={styles.textActions}>
+              <Button
+                title="Resend code"
+                variant="text"
+                onPress={onSendCode}
+                loading={busy === "send"}
+                disabled={busy !== null}
+              />
+              <Button
+                title="Change number"
+                variant="text"
+                onPress={() => {
+                  setCodeSent(false);
+                  setPhoneError(null);
+                }}
+                disabled={busy !== null}
+              />
+            </View>
             <Button
               title="Confirm code"
+              size="large"
               onPress={onConfirm}
               loading={busy === "confirm"}
-              disabled={busy !== null}
-            />
-            <Button
-              title="Resend code"
-              variant="secondary"
-              onPress={onSendCode}
-              loading={busy === "send"}
-              disabled={busy !== null}
-            />
-            <Button
-              title="Change number"
-              variant="outline"
-              onPress={() => {
-                setCodeSent(false);
-                setPhoneError(null);
-              }}
               disabled={busy !== null}
             />
           </>
         )}
         {phoneError ? (
-          <ThemedText type="small" themeColor="danger">
+          <ThemedText type="bodyMedium" themeColor="error">
             {phoneError}
           </ThemedText>
         ) : null}
@@ -190,3 +200,18 @@ export default function SignInScreen() {
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  or: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.twoHalf,
+    marginVertical: Spacing.one,
+  },
+  rule: { flex: 1, height: 1 },
+  textActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
+  },
+});
