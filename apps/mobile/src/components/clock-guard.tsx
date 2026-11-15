@@ -1,20 +1,15 @@
-import { useEffect } from "react";
 import {
-  AppState,
-  Linking,
-  Modal,
-  Platform,
-  ScrollView,
-  StyleSheet,
-  View,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+  AlertDialog,
+  Text as ComposeText,
+  Host,
+  RNHostView,
+} from "@expo/ui/jetpack-compose";
+import { useEffect } from "react";
+import { AppState, Linking, Platform, StyleSheet, View } from "react-native";
 
-import { ThemedText } from "@/components/themed-text";
 import { Button } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icon";
-import { MaxContentWidth, Radius, Spacing } from "@/constants/theme";
-import { useTheme } from "@/hooks/use-theme";
+import { useIsDark, useTheme } from "@/hooks/use-theme";
 import { checkClock, useClockStatus } from "@/lib/clock";
 
 /** "12 minutes", "3 hours", "2 days" for an absolute offset. */
@@ -53,12 +48,14 @@ async function openDateSettings() {
 
 /**
  * B9: measures the phone's clock against the server at startup and every
- * time the app comes back to the foreground. A skew over 2 min shows a
- * full-screen popup that cannot be dismissed until the time is fixed.
+ * time the app comes back to the foreground. A skew over 2 min shows an M3
+ * dialog (Jetpack Compose `AlertDialog` from `@expo/ui`) that Back and the
+ * scrim cannot dismiss until the time is fixed: it blocks the app, so it is
+ * a decision surface, not a screen.
  */
 export function ClockGuard() {
   const theme = useTheme();
-  const insets = useSafeAreaInsets();
+  const dark = useIsDark();
   const { status, offsetMs, checking } = useClockStatus();
 
   useEffect(() => {
@@ -69,93 +66,73 @@ export function ClockGuard() {
     return () => sub.remove();
   }, []);
 
-  const blocking = status === "blocking";
+  if (status !== "blocking") return null;
 
   return (
-    <Modal
-      visible={blocking}
-      animationType="fade"
-      statusBarTranslucent
-      navigationBarTranslucent
-      // Not dismissible: Android Back does nothing.
-      onRequestClose={() => undefined}
+    <Host
+      style={styles.host}
+      pointerEvents="none"
+      colorScheme={dark ? "dark" : "light"}
     >
-      <ScrollView
-        style={{ backgroundColor: theme.bg }}
-        contentContainerStyle={[
-          styles.content,
-          {
-            paddingTop: insets.top + Spacing.five,
-            paddingBottom: insets.bottom + Spacing.four,
-            paddingLeft: insets.left + Spacing.three,
-            paddingRight: insets.right + Spacing.three,
-          },
-        ]}
+      <AlertDialog
+        // Not dismissible: Back and taps outside do nothing.
+        onDismissRequest={() => undefined}
+        properties={{ dismissOnBackPress: false, dismissOnClickOutside: false }}
+        colors={{
+          containerColor: theme.surfaceContainerHigh,
+          iconContentColor: theme.primary,
+          titleContentColor: theme.onSurface,
+          textContentColor: theme.onSurfaceVariant,
+        }}
       >
-        <View style={styles.inner}>
-          <View
-            style={[styles.iconWrap, { backgroundColor: theme.warningSoft }]}
-          >
-            <Icon name="schedule" size={56} color="warning" />
-          </View>
-          <ThemedText
-            type="title"
-            style={styles.centred}
-            accessibilityRole="header"
+        <AlertDialog.Icon>
+          <RNHostView matchContents>
+            <View accessible={false}>
+              <Icon name="schedule" color="primary" />
+            </View>
+          </RNHostView>
+        </AlertDialog.Icon>
+        <AlertDialog.Title>
+          <ComposeText
+            color={theme.onSurface}
+            style={{ typography: "headlineSmall" }}
           >
             Your phone's time is wrong
-          </ThemedText>
-          <ThemedText
-            type="heading"
-            style={styles.centred}
-            accessibilityLiveRegion="polite"
+          </ComposeText>
+        </AlertDialog.Title>
+        <AlertDialog.Text>
+          <ComposeText
+            color={theme.onSurfaceVariant}
+            style={{ typography: "bodyMedium" }}
           >
-            {skewSentence(offsetMs)}
-          </ThemedText>
-          <ThemedText type="body" themeColor="inkMuted" style={styles.centred}>
-            Queue times and alerts depend on the correct time. Turn on automatic
-            date and time in your phone's Settings, then come back.
-          </ThemedText>
-          <View style={styles.actions}>
-            <Button
-              title="Open date & time settings"
-              icon="settings"
-              onPress={() => void openDateSettings()}
-            />
+            {`${skewSentence(offsetMs)} Queue times and alerts depend on the correct time. Turn on automatic date and time in your phone's Settings, then come back.`}
+          </ComposeText>
+        </AlertDialog.Text>
+        <AlertDialog.DismissButton>
+          <RNHostView matchContents>
             <Button
               title="Check again"
-              icon="refresh"
-              variant="secondary"
+              variant="text"
               loading={checking}
               onPress={() => void checkClock()}
             />
-          </View>
-        </View>
-      </ScrollView>
-    </Modal>
+          </RNHostView>
+        </AlertDialog.DismissButton>
+        <AlertDialog.ConfirmButton>
+          <RNHostView matchContents>
+            <Button
+              title="Open settings"
+              variant="text"
+              accessibilityLabel="Open date and time settings"
+              onPress={() => void openDateSettings()}
+            />
+          </RNHostView>
+        </AlertDialog.ConfirmButton>
+      </AlertDialog>
+    </Host>
   );
 }
 
 const styles = StyleSheet.create({
-  content: { flexGrow: 1, justifyContent: "center" },
-  inner: {
-    width: "100%",
-    maxWidth: MaxContentWidth,
-    alignSelf: "center",
-    alignItems: "center",
-    gap: Spacing.three,
-  },
-  iconWrap: {
-    width: 104,
-    height: 104,
-    borderRadius: Radius.pill,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  centred: { textAlign: "center" },
-  actions: {
-    alignSelf: "stretch",
-    gap: Spacing.twoHalf,
-    marginTop: Spacing.two,
-  },
+  host: { position: "absolute" },
 });

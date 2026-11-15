@@ -17,8 +17,8 @@ export default function MapCheckScreen() {
     return (
       <Screen>
         <Card>
-          <ThemedText type="heading">Mapbox token missing</ThemedText>
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="titleMedium">Mapbox token missing</ThemedText>
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             Set EXPO_PUBLIC_MAPBOX_TOKEN in apps/mobile/.env.local (or the EAS
             environment) and restart Metro.
           </ThemedText>
@@ -34,7 +34,7 @@ export default function MapCheckScreen() {
         <View
           style={[
             styles.pin,
-            { backgroundColor: theme.brand, borderColor: theme.card },
+            { backgroundColor: theme.primary, borderColor: theme.onPrimary },
           ]}
         />
       </PointAnnotation>
@@ -47,7 +47,7 @@ const styles = StyleSheet.create({
   pin: {
     width: 24,
     height: 24,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.full,
     borderWidth: 3,
   },
 });
