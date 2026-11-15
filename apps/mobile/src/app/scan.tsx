@@ -82,7 +82,6 @@ export default function ScanScreen() {
             permission.canAskAgain ? (
               <Button
                 title="Allow camera"
-                variant="brand"
                 icon="camera"
                 onPress={() => {
                   void requestPermission();
@@ -91,7 +90,6 @@ export default function ScanScreen() {
             ) : (
               <Button
                 title="Open settings"
-                variant="brand"
                 icon="settings"
                 onPress={() => {
                   void Linking.openSettings();
@@ -100,7 +98,7 @@ export default function ScanScreen() {
             )
           }
         />
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           You can also scan the code with your phone's camera app: it opens
           Qpeer on the join screen.
         </ThemedText>
@@ -110,7 +108,7 @@ export default function ScanScreen() {
 
   return (
     <Screen scroll={false}>
-      <View style={[styles.cameraWrap, { backgroundColor: theme.header }]}>
+      <View style={[styles.cameraWrap, { backgroundColor: theme.scrim }]}>
         {focused ? (
           <CameraView
             style={StyleSheet.absoluteFill}
@@ -127,11 +125,9 @@ export default function ScanScreen() {
           detail="Scan the QR code shown at the business counter."
         />
       ) : (
-        <StatusBanner
-          tone="active"
-          title="Point the camera at the queue's QR code"
-          detail="It is shown at the business counter."
-        />
+        <ThemedText type="bodyLarge" style={styles.hint}>
+          Point the camera at the queue's QR code at the business counter.
+        </ThemedText>
       )}
     </Screen>
   );
@@ -145,4 +141,5 @@ const styles = StyleSheet.create({
     minHeight: 280,
     marginBottom: Spacing.one,
   },
+  hint: { textAlign: "center", paddingVertical: Spacing.two },
 });
