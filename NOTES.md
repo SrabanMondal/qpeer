@@ -1,50 +1,49 @@
 # QPeer Build Progress Notes
 
 ## Status
-<!-- updated 2026-10-16 -->
-Current task: fix batch + native rebuild on branch `feat/fix-batch-rebuild` (B13–B20 = INC-040…047, INC-048/049 from the phone, C1 storage, C2 device hash, C3 signed ticket, C4 ticket validity + carry-over). Code done, `npm run check` green; not merged, not deployed, not on a phone.
-Next step: review + merge; D1 migration 0005 on `dev` (then `demo`/`loadtest`), `TICKET_SIGNING_KEY` secret, deploy `dev`, `--app` public key commit, one `eas build --profile development`, then the device checklist in the branch report. Then Step 4 (owner creates the Razorpay test account).
+<!-- updated 2026-11-15 -->
+Current task: **UI redesign of the app** (owner's request, 2026-11-15), plus the Step 5 Insights phone check. State: not started; the session was compacted right before it.
+Next step: load the `app-ui` skill (`C:\Users\HP\temp\.claude\skills\app-ui`, Expo/RN Android UI: Material 3, plan each screen's job first, verify on the phone) and agree the redesign scope with the owner before any code. Then a brief in `.orch/briefs/` and an Opus subagent on a branch, as usual.
 
-**Done and merged on `main`:** Step 0 foundations · Step 1 business (profile, pin, hours, queues, QR) · Step 2 live queue (QueueDO engine, walk-in GPS join, console, ticket, live WebSocket, push alerts) · Step 1/2 fix passes · Step 3 map (`/v1/map`, public stats, list view, public business page, dev seed) · Step 3.5 load test (3 fix rounds, final runs green) · runbook incident log.
-- Per-step build detail lives in git history and `docs/QPeer_v1_Backend_Architecture.md` (§23 holds the decisions per step). Every bug and its fix lives in `docs/runbook/` (INC-001 to INC-047; standing rules in `docs/runbook/lessons.md`). Record new incidents there, not here.
-- Tests: API 154, shared 104 (`npm run check`) on `main`; the fix-batch branch has API 178, shared 135.
+**Done, merged, pushed** (GitHub private repo `https://github.com/SrabanMondal/qpeer`, `main`; push after every merge, chain with `&&` so a failed check stops the push — INC-074):
+- Steps 0–3, Step 3.5 load test, fix batch (offline, storage, device hash, signed ticket, validity), Step 4 (payments, reservations, Priority Pass + upgrade, missed-turn rules, payment edge cases INC-057…066, device fixes INC-067…072), Step 5 (Insights tab: analytics owner+staff, earnings owner only; `scripts/demo` seed/simulate/reset with `DEMO_JWKS`), README.
+- Tests on `main`: API 273, shared 178. Every bug and fix: `docs/runbook/` (INC-001…074, lessons in `lessons.md`). Decisions per step: architecture §23.
+- APK size: `buildArchs: ["armeabi-v7a","arm64-v8a"]` in `apps/mobile/app.config.ts` → preview APK 109 MB (was 213 MB), INC-073. R8 shrinking not done (needs a full phone test).
 
-**Device-verified on the Samsung A9 (Android 10):** Steps 0–2 (QR join, alerts background + cold start, leave, offline/reconnect), B9 clock popup and B10 console layout (2026-10-16), Step 3 map script steps 1, 3 (partial), 5–9, 13, 14 (2026-10-16). Full customer journey from the map (2026-10-16, before the fix batch): map → card → View details → Join → GPS check → ticket #3; owner then paused (push `queue_paused` sent 19:36:33 IST), NEXT (push `called` 19:36:52), Served (#3 `SERVED` 19:37:00), ticket showed served (owner-tested).
-**Fix batch merged 2026-10-16 (`38e8c15`):** migration 0005 applied to dev/loadtest/demo, `TICKET_SIGNING_KEY` set on dev (kid `ticket-4b2a73ff`), dev + loadtest deployed, baseline load test green on the new code (395 requests). EAS builds started: development `720a5c7d-…`, preview APK `35f3efbb-…` (preview env now has `EXPO_PUBLIC_MAPBOX_TOKEN`, `EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID`, `GOOGLE_SERVICES_JSON`). On-device checklist for the new build: runbook INC-040…049 follow-ups.
-**Step 4 device check (2026-10-30, A9, preview APK EAS `43cd96c6`, dev Worker):** passed — priority lane settings, business page chip + Reserve + Buy Priority Pass, honest "not much faster" preview, rules before paying, ₹100 pass via test netbanking (ledger 10000 / 7000 / 3000), BOOKED + check code, check-in (B5 location-off card, then P1 in priority lane), NEXT with no regular waiting, No-show → grace push + countdown → MISSED + push, GPS rejoin, ₹20 reservation fail-then-succeed on one order (one ticket, one ledger set), manual close refund ₹20 + push, My payments states. Open: the ₹100 pass refund after close is `refund_due` because Razorpay test mode answers 400 `BAD_REQUEST_ERROR` to every refund on that payment (cause unknown; owner may check the dashboard; our retries and `refund_stuck` worked). Fixes on `fix/step4-device-findings`: INC-067…072.
-**Not yet verified on a phone:** Step 3 script steps 2, 4, 10, 12, 15 (denied-permission path, zoom-out hint, offline, light theme, large font: these need phone setting changes, ask the owner first); B1 offline cold start; Google link name fill; H1 app-side `rev` merge; B5 "turn on location" path.
+**Step 5 cloud state (2026-11-14):** demo Worker deployed with all secrets (DEMO_JWKS, TICKET_SIGNING_KEY, RAZORPAY_*); `DEMO_JWKS` also set on dev; seeded demo: 12 businesses, 15 queues, 6 weeks (5,256 analytics rows), 932 payments. New EAS profile `demo` (extends preview, API = demo Worker).
 
-**Step 5 (2026-11-14, branch `feat/step5-insights`, not merged):** `GET /v1/businesses/:id/analytics` (owner+staff) and `/earnings` (owner), Insights tab (KPIs, insights, trend charts, busy-hours strip, earnings, offline last view), `scripts/demo` seed/simulate/reset with `DEMO_JWKS` demo-key auth (demo/dev/local only, `demo:` uids). `npm run check` green (API 273, shared 178 tests). Cloud steps (demo key, secrets, migrations, deploy demo, seed) and the on-device Insights check are open. Design: architecture §19.2 and §23 "Decided in Step 5".
-- Demo tools: `npm run demo:gen-key` once (writes `secrets/demo-key.json`), then from Git Bash `npm run demo:seed -- --env demo --owner-phone +91…`, `npm run demo:simulate -- --env demo --queues 3 --minutes 20`, `npm run demo:reset -- --env demo [--wipe-all]`. `--help` on each.
+**Phone check still to do (Step 5):** install `G:\dev\qpeer\.orch\apk\qpeer-demo.apk` (EAS `0a8ed8b6`, 110 MB; replaces the preview app), sign in with the Firebase test number on the demo server, then rerun `npm run demo:seed -- --env demo --owner-phone +91…` (Git Bash) so the account owns the demo businesses, then the Insights checklist (architecture §19.2 / Step 5 report: 7/28 days, queue chips, busy-hours strip, insight cards, Earnings + "All payments", empty state, staff view, offline "Saved … ago", light/dark, large font). The slim preview APK (`qpeer-preview-slim.apk`, EAS `00388aa6`) is also not yet tried on a phone.
+
+**Device-verified (Samsung A9, Android 10):** Steps 0–2, B9/B10, most of Step 3, fix batch basics, Step 4 payments flow (2026-10-30) and the 25 km list (INC-072). **Not yet verified:** Step 3 script steps 2, 4, 10, 12, 15 (need phone setting changes: ask the owner); B1 offline cold start; Google link name fill; INC-069…071 (one alert per phone, Undo label, close-dialog refund line); Skip ahead, staff rejoin by check code, owner Payments screen (better in a group test).
 
 ## Environments
-- `dev` Worker `https://qpeer-api-dev.qpeer-api.workers.dev`, D1 `qpeer-dev` (`a9adedc6-…`). Redeployed 2026-10-16 with all Step 3.5 fixes. Migrations 0000–0004 applied.
-- `demo` D1 `qpeer-demo` (`59f9618a-…`) migrated to 0004; demo Worker not deployed yet (Step 5).
-- `loadtest` Worker `https://qpeer-api-loadtest.qpeer-api.workers.dev`, D1 `qpeer-loadtest` (`12cf4f5a-…0579`), secret `LOADTEST_JWKS` set; private key in gitignored `secrets/loadtest-key.json`. Kept up for reruns.
-- EAS project `e7efb464-…` (account `sraban`); dev build installed on the phone. JS-only changes need only a Metro reload.
+- `dev` Worker `https://qpeer-api-dev.qpeer-api.workers.dev`, D1 `qpeer-dev`; migrations 0000–0007. Secrets: TICKET_SIGNING_KEY, RAZORPAY_* (3), DEMO_JWKS.
+- `demo` Worker `https://qpeer-api-demo.qpeer-api.workers.dev`, D1 `qpeer-demo`; migrations 0000–0007; seeded (above). Razorpay webhook NOT pointed at demo (only dev has one).
+- `loadtest` Worker `https://qpeer-api-loadtest.qpeer-api.workers.dev`, D1 `qpeer-loadtest`; `LOADTEST_JWKS`.
+- Free plan: max 5 cron triggers per account; each env has only `*/15` (INC-056). A 6-week demo seed ≈ 10k D1 rows written (free plan 100k/day): about one reset+seed per day.
+- EAS profiles: development, preview (dev API), demo (demo API), production. APKs in `G:\dev\qpeer\.orch\apk\` (gitignored).
+- Secrets live only in gitignored `secrets/` (razorpay-test.env, ticket-signing-key.json, loadtest/demo keys). Upload with `wrangler secret put … < file`; never print values.
 
 ## Plan
-1. **Fix batch + rebuild** (`feat/fix-batch-rebuild`): merge, migrate, secret, deploy, rebuild, device check (see Status). Design in architecture doc §9.1, §23 "Decided in the fix batch".
-2. **Step 4 payments** (Razorpay test mode). Scope: payments + remote reservations + Priority Pass + upgrade + missed-turn rules. Also: refunds for paid tokens ended by auto-close (TODO in `queue-do.ts`). Owner must first create a Razorpay test account (key id, key secret, webhook secret; no KYC). Reservations, verify + webhook, refunds, forfeits, ledger, payment history, reconciliation cron. `react-native-razorpay` is in the dev build (check whether it needs a config plugin → possible rebuild). Design the business-set reservation validity (owner's idea, 2026-10-16) here.
-   - **A. Missed turn (decided 2026-10-18):** engine state MISSED (GRACE end → MISSED, not EXPIRED), `POST /v1/tokens/:id/rejoin` with the walk-in GPS check, once per ticket, placed by `rejoinDelayMin` ÷ service time within `lateWindowMin`, else the end (R1), second miss → EXPIRED + strike (free walk-ins only, C5), no carry-over (R4), fee kept/refund rules, `missed` alert + big grace countdown (R3), check code + staff "Rejoin for customer" (R2), Skip uses the same K (QUE-06). Checklist QUE-06, QUE-22…29, TOK-09, ALR-08. Rules: HLD §5.2, architecture §9.3 + §23.
-   - **B. Priority Pass + upgrade (decided 2026-10-18):** BOOKED state, GPS check-in, priority lane by check-in time (P series), "Skip ahead" upgrade, Next credit rule (1 in N, C1), estimate ranges (C3) + load-test people-ahead invariant, refunds (C6), device hash on purchases. Checklist PRI-01…12; HLD §5.2, architecture §9.3/§9.4/§10.5/§23.
-3. **Step 5 insights + demo data:** analytics + earnings screens, Jammu seed with 4–8 weeks of history, live demo simulator, deploy the `demo` Worker, reset command.
-4. **Step 6 extras** (if time): Add person + claim code, verified ratings (decided 2026-10-18; HLD §6.7, RAT-01…05).
-5. **Step 7: Business verification and payouts** (decided by the owner, 2026-11-14 (side chat); build after Step 6). Razorpay Route linked account per business; the business share is transferred on each paid ticket (test mode). Razorpay KYC counts as identity check; Qpeer adds "Verify location" at the pin, "Report this business" and an admin document review for free-only businesses. Unverified businesses take no payments. The owner must enable Route on the Razorpay test account first. Design: HLD §6.8, architecture §23 "Decided 2026-11-14", checklist VER-01…, PAYOUT-01….
-6. **Finish:** NFR-11 rate limits; leave-home-by; full demo rehearsal on `demo` with the phone. (QR image, storage and signed ticket moved into the fix batch.)
-- Later latency win: fold `checkJoin` into `allocate` (one less Worker↔DO round trip per join).
+1. **UI redesign** (next; scope to agree with the owner) + Step 5 phone check.
+2. **Step 6 extras:** Add person + claim code, verified ratings (decided 2026-10-18; HLD §6.7, RAT-01…05).
+3. **Step 7: Business verification and payouts** (decided by the owner, 2026-11-14, side chat; build after Step 6): Razorpay Route linked account per business, business share transferred per paid ticket, Razorpay KYC = identity check, "Verify location" at the pin, "Report this business", admin document review for free-only businesses. Owner must enable Route on the Razorpay test account first. HLD §6.8, architecture §23, checklist VER-01…07, PAYOUT-01…05.
+4. **Finish:** NFR-11 rate limits; leave-home-by; optional R8 shrinking; full demo rehearsal on `demo` with the phone.
+- Later latency win: fold `checkJoin` into `allocate`.
 
 ## Decisions
-- Owner agreed 2026-10-16: offline degrades, never blocks (B13); queue state decides "open", hours inform (B16); auto-close 30 min after the last hours range with a Keep open warning (B20); device hash per walk-in (C2); signed offline ticket (C3); ticket validity set per queue, still-valid tickets carry over to the front of the next session (C4, owner's request). Details: architecture doc §23 "Decided in the fix batch".
-- Owner decided 2026-10-18: R1, R2, R3, R4, RT1, RT2 all decided. Skip uses the same rejoin delay K (own class range, G1 stays) instead of "behind 3". R2: 4-character check code per ticket ("#14 · K7P2") + staff "Rejoin for customer" after MISSED. Details: architecture §9.4 + §23.
-- Decided in the batch (owner may revisit): opened outside hours → auto-close at 23:59 IST; carried tickets keep their number and session (no reissue); "Now serving" = last called still at a counter, else last served.
+- Owner agreed 2026-10-16: offline degrades, never blocks (B13); queue state decides "open", hours inform (B16); auto-close 30 min after the last hours range with Keep open (B20); device hash per walk-in (C2); signed offline ticket (C3); per-queue ticket validity with carry-over (C4). Architecture §23.
+- Owner decided 2026-10-18: missed-turn rules A + R1–R4, Priority Pass + upgrade + C1–C6, ratings RT1/RT2, Skip uses the rejoin delay, R2 check code. 2026-10-30: when no regular waits, the priority head is called at once.
+- Owner decided 2026-11-14: businesses created before Step 7 (dev/demo) stay unverified, no migration; the database starts clean at the real release (VER-07).
+- My calls in Step 5 (owner may revisit): earnings owner-only (staff see analytics only); demo key accepted on dev too; Earnings lists money events, Payments screen stays per-payment.
 
 ## Open questions
-- Does the professor want a say on defaults for public hospitals / government offices? Owner decided: business-set, no platform cap, ratings as the check.
-- Real fees and revenue split.
 - Step 7: unverified businesses hidden from the map, or shown with an "Unverified" label? Recommendation: hidden. Owner to confirm.
+- ₹100 Priority Pass refund (dev, paid 2026-10-30 19:23) stuck `refund_due`: Razorpay test mode answers 400 `BAD_REQUEST_ERROR` "invalid request sent" to every refund on that payment (₹20 one worked). Owner can issue it from the Razorpay dashboard; since INC-067 our server adopts dashboard refunds. Cause unknown.
+- Does the professor want a say on priority defaults for public hospitals / government offices? Owner decided: business-set, no platform cap, ratings as the check.
+- Real fees and revenue split.
 - B11 (watch, INC-016): process killed once during fast taps; not reproduced.
-- B12 (INC-017): dev-build "Tools" gear overlaps the header pill and the map's Scan QR button (dev only).
+- B12 (INC-017): dev-build "Tools" gear overlaps the header pill (dev only).
 
 ## Working rules
 - Real work → Opus subagents with a brief in `.orch/briefs/`, one branch per task; I review, run `npm run check`, merge `--no-ff`. agy/opencode only for mechanical tasks. Subagents can leave the checkout on their branch: run `git checkout main` before merging.
