@@ -1,4 +1,10 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 
 import { Icon, type IconName } from "@/components/ui/icon";
 import {
@@ -58,8 +64,63 @@ export function ExtendedFab({
   );
 }
 
+/**
+ * M3 FAB (56 dp, radius 16, level 3 shadow) with an icon only, so it needs
+ * an `accessibilityLabel`. `surface` tone (surfaceContainerHigh, primary
+ * icon) for map controls such as "Show my location"; busy shows a spinner.
+ */
+export function Fab({
+  icon,
+  onPress,
+  accessibilityLabel,
+  loading = false,
+  tone = "surface",
+}: {
+  icon: IconName;
+  onPress: () => void;
+  accessibilityLabel: string;
+  loading?: boolean;
+  tone?: "surface" | "primary";
+}) {
+  const theme = useTheme();
+  const fill =
+    tone === "primary" ? theme.primaryContainer : theme.surfaceContainerHigh;
+  const content = tone === "primary" ? theme.onPrimaryContainer : theme.primary;
+  return (
+    <View
+      style={[
+        styles.shadow,
+        { backgroundColor: fill, boxShadow: Elevation.level3 },
+      ]}
+    >
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={accessibilityLabel}
+        accessibilityState={{ busy: loading }}
+        onPress={onPress}
+        android_ripple={{ color: content, alpha: RIPPLE_ALPHA }}
+        style={styles.square}
+      >
+        {loading ? (
+          <ActivityIndicator color={content} />
+        ) : (
+          <Icon name={icon} colorValue={content} />
+        )}
+      </Pressable>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   shadow: { borderRadius: Radius.lg },
+  square: {
+    width: 56,
+    height: 56,
+    borderRadius: Radius.lg,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   fab: {
     minHeight: 56,
     flexDirection: "row",
