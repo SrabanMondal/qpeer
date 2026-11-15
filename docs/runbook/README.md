@@ -122,6 +122,7 @@ We number the incidents in the order that we found them. INC-035 to INC-039 are 
 | INC-072 | 2026-10-30 | The List view missed businesses outside the map's box | S2 | mobile, shared | fixed | Step 4 device check | [file](incidents/INC-072-list-misses-far-businesses.md) |
 | INC-073 | 2026-11-14 | The APK carried native libraries for emulators | S3 | mobile | fixed-unverified-on-device | none | [file](incidents/INC-073-apk-ships-emulator-libs.md) |
 | INC-074 | 2026-11-14 | The earnings paging test failed at some times of day | S4 | api | fixed | none | [file](incidents/INC-074-earnings-paging-test-time-of-day.md) |
+| INC-075 | 2026-11-15 | The earnings test expected a refund in every 7-day window | S4 | api | fixed | none | [file](incidents/INC-075-earnings-refund-test-time-of-day.md) |
 
 ## Load-test runs
 

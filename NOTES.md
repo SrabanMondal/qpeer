@@ -2,8 +2,11 @@
 
 ## Status
 <!-- updated 2026-11-15 -->
-Current task: **UI redesign of the app** (owner's request, 2026-11-15), plus the Step 5 Insights phone check. State: not started; the session was compacted right before it.
-Next step: load the `app-ui` skill (`C:\Users\HP\temp\.claude\skills\app-ui`, Expo/RN Android UI: Material 3, plan each screen's job first, verify on the phone) and agree the redesign scope with the owner before any code. Then a brief in `.orch/briefs/` and an Opus subagent on a branch, as usual.
+Current task: **UI redesign** (owner's request, 2026-11-15). State: code done and merged (phase 1 ab95840, phase 2 merged 2026-11-16), **not yet seen on a phone**.
+- Owner chose direction **B · Token board** (2026-11-15): black LED board with amber Doto digits as the one signature (ticket, console, map pills), brass M3 primary from seed `#E89A00`, Archivo for figures, Roboto text. System is in `docs/QPeer_v1_UI_Design_Guide.md`. Mock-up: artifact https://claude.ai/artifact/149pjXDNQwXN4ZQfaULYbH.
+- Cut list `.orch/ui-cuts.md` (94 items): owner approved all unmarked items + my answers on the 16 decisions (2026-11-15). One deviation from the list: "Rejoin by number" kept as a text button (dead-phone path). Skipped: token/[id] 13 (Leave/Cancel into ⋮), not decided.
+- Briefs: `.orch/briefs/ui-redesign-phase1.md`, `ui-redesign-phase2.md`.
+Next step: new APK (fonts via expo-font plugin + splash colour need a rebuild), then the device check list: map pills (RN-view images, riskiest), Compose sheets + keyboard in the console rejoin sheet, menus, clock-guard dialog, pinned bars, queue page combined Save, "Run this queue", light/dark/1.3× text with the app-ui `check-device.mjs`. Then the Step 5 Insights phone check below.
 
 **Done, merged, pushed** (GitHub private repo `https://github.com/SrabanMondal/qpeer`, `main`; push after every merge, chain with `&&` so a failed check stops the push — INC-074):
 - Steps 0–3, Step 3.5 load test, fix batch (offline, storage, device hash, signed ticket, validity), Step 4 (payments, reservations, Priority Pass + upgrade, missed-turn rules, payment edge cases INC-057…066, device fixes INC-067…072), Step 5 (Insights tab: analytics owner+staff, earnings owner only; `scripts/demo` seed/simulate/reset with `DEMO_JWKS`), README.

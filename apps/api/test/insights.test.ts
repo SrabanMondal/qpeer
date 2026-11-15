@@ -477,7 +477,8 @@ describe("GET /v1/businesses/:id/earnings (INS-07)", () => {
         forfeits: sql?.ff,
       });
       expect(first.totals.capturedPaise).toBeGreaterThan(0);
-      expect(first.totals.refunds).toBeGreaterThan(0);
+      // A 7-day window can hold no refund at some times of day (INC-075).
+      if (range === 28) expect(first.totals.refunds).toBeGreaterThan(0);
       expect(first.totals.netPaise).toBe(
         first.totals.businessSharePaise + first.totals.platformSharePaise,
       );
