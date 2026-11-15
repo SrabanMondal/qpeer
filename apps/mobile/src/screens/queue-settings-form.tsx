@@ -8,24 +8,22 @@ import {
   TICKET_VALIDITY_PRESETS_MIN,
   ticketValidityLabel,
 } from "@qpeer/shared";
-import { useEffect, useState } from "react";
-import { Alert, View } from "react-native";
+import { type Ref, useEffect, useImperativeHandle, useState } from "react";
+import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import {
   AppSwitch,
-  Button,
   Card,
   ChoiceChips,
+  ExpandableSection,
   SectionHeader,
   TextField,
 } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { ApiError } from "@/lib/api";
-import { errorText } from "@/lib/error-messages";
 import { apiFieldErrors, type FieldErrors, useFieldErrors } from "@/lib/form";
 import { formatRupees, paiseToRupeesText } from "@/lib/format";
-import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
 
 /** Plain number settings (the Step 4 switch/nullable ones need their own inputs). */
 type SettingKey = {
@@ -41,9 +39,12 @@ type FieldSpec = {
   help?: string;
 };
 
+type GroupId = "joining" | "reservations" | "timing";
+
 /** The fields owners edit in v1 (BIZ-12), grouped as on the design. */
-const GROUPS: { title: string; fields: FieldSpec[] }[] = [
+const GROUPS: { id: GroupId; title: string; fields: FieldSpec[] }[] = [
   {
+    id: "joining",
     title: "Joining",
     fields: [
       {
@@ -69,6 +70,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     ],
   },
   {
+    id: "reservations",
     title: "Reservations",
     fields: [
       {
@@ -88,6 +90,7 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
     ],
   },
   {
+    id: "timing",
     title: "Timing",
     fields: [
       {
@@ -111,11 +114,6 @@ const GROUPS: { title: string; fields: FieldSpec[] }[] = [
         unit: "min",
         help: "Used for wait estimates until real data exists.",
       },
-    ],
-  },
-  {
-    title: "Counters",
-    fields: [
       {
         key: "counters",
         label: "Counters serving this queue",
@@ -158,6 +156,13 @@ const PRIORITY_FIELDS: FieldSpec[] = [
 ];
 
 const FIELDS = GROUPS.flatMap((g) => g.fields);
+const RESERVATION_KEYS = new Set<string>(
+  GROUPS.find((g) => g.id === "reservations")?.fields.map((f) => f.key),
+);
+const PRIORITY_KEYS = new Set<string>([
+  ...PRIORITY_FIELDS.map((f) => f.key),
+  "priorityDailyCap",
+]);
 
 function bounds(key: SettingKey): { min: number; max: number } {
   const num = QueueSettingsPatch.shape[key].unwrap();
@@ -296,7 +301,7 @@ function readValues(v: Values): {
   return { patch, errors };
 }
 
-/** One numeric setting with its default and allowed range in the hint. */
+/** One numeric setting with its help and default; the range shows only in the error. */
 function SettingField({
   spec: f,
   value,
@@ -318,31 +323,52 @@ function SettingField({
       keyboardType={f.kind === "rupees" ? "decimal-pad" : "number-pad"}
       editable={!disabled}
       error={error}
-      hint={[
-        f.help,
-        `Default ${show(f, QUEUE_SETTINGS_DEFAULTS[f.key])}. Allowed ${rangeText(f)}.`,
-      ]
+      hint={[f.help, `Default ${show(f, QUEUE_SETTINGS_DEFAULTS[f.key])}.`]
         .filter(Boolean)
         .join(" ")}
     />
   );
 }
 
+/** "₹20" from the typed text, or the text itself while it isn't a number. */
+function typedRupees(text: string | undefined): string {
+  const t = (text ?? "").trim();
+  return /^\d+(\.\d{1,2})?$/.test(t)
+    ? formatRupees(Math.round(Number(t) * 100))
+    : t || "—";
+}
+
+export type QueueSettingsFormHandle = {
+  /**
+   * Validates every field. Returns the settings to send, or null when a
+   * field is wrong: the errors are shown and their sections opened.
+   */
+  read: () => QueueSettingsPatch | null;
+  /**
+   * Shows the API's field errors (paths "settings.x"). Returns true when at
+   * least one belonged to this form.
+   */
+  showApiErrors: (e: unknown) => boolean;
+};
+
 /**
- * BIZ-12: queue settings with defaults; saved with PATCH /v1/queues/:id.
- * Errors clear as soon as a field becomes valid (B4); `onDirtyChange`
- * reports unsaved edits so the screen can guard leaving (B8).
+ * BIZ-12: queue settings with defaults. The screen saves them (one Save in
+ * its pinned bar, together with the name) through `ref`. Errors clear as
+ * soon as a field becomes valid (B4); `onDirtyChange` reports unsaved edits
+ * so the screen can guard leaving (B8) and show its Save. Reservations and
+ * the Priority Pass start collapsed, with their current values in the
+ * header.
  */
 export function QueueSettingsForm({
   settings,
   disabled,
-  onSave,
   onDirtyChange,
+  ref,
 }: {
   settings: QueueSettings;
   disabled: boolean;
-  onSave: (patch: QueueSettingsPatch) => Promise<void>;
   onDirtyChange?: (dirty: boolean) => void;
+  ref?: Ref<QueueSettingsFormHandle>;
 }) {
   const [values, setValues] = useState<Values>(() => ({
     text: textsOf(settings),
@@ -357,8 +383,8 @@ export function QueueSettingsForm({
   const [passValidity, setPassValidity] = useState<number>(savedPassValidity);
   const form = useFieldErrors((v: Values) => readValues(v).errors);
   const { errors } = form;
-  const [saving, setSaving] = useState(false);
-  const offline = useOffline();
+  const [openReservations, setOpenReservations] = useState(false);
+  const [openPriority, setOpenPriority] = useState(false);
   const validityOptions = [
     ...new Set<number>([...TICKET_VALIDITY_PRESETS_MIN, savedValidity]),
   ]
@@ -397,6 +423,43 @@ export function QueueSettingsForm({
     form.revalidate(next, "lateWindowMin");
   };
 
+  /** Opens the collapsed sections that hold one of these errors. */
+  const openSectionsFor = (errs: FieldErrors) => {
+    const keys = Object.keys(errs);
+    if (keys.some((k) => RESERVATION_KEYS.has(k))) setOpenReservations(true);
+    if (keys.some((k) => PRIORITY_KEYS.has(k))) setOpenPriority(true);
+  };
+
+  useImperativeHandle(ref, () => ({
+    read: () => {
+      const { errors: errs } = readValues(values);
+      if (!form.validateAll(values)) {
+        openSectionsFor(errs);
+        return null;
+      }
+      const parsed = QueueSettingsPatch.safeParse({
+        ...readValues(values).patch,
+        ticketValidityMin: validity,
+        ...(values.priorityOn ? { priorityValidityMin: passValidity } : {}),
+      });
+      return parsed.success ? parsed.data : null;
+    },
+    showApiErrors: (e: unknown) => {
+      if (!(e instanceof ApiError) || e.issues.length === 0) return false;
+      // API paths look like "settings.joinRadiusM".
+      const byField: FieldErrors = {};
+      for (const [path, msg] of Object.entries(apiFieldErrors(e.issues))) {
+        if (path.startsWith("settings.")) {
+          byField[path.replace(/^settings\./, "")] = msg;
+        }
+      }
+      if (Object.keys(byField).length === 0) return false;
+      form.showErrors(byField);
+      openSectionsFor(byField);
+      return true;
+    },
+  }));
+
   // Compared by value with the saved settings ("20" = "20.00"), so after a
   // successful save the form is clean again.
   const capText = (text.priorityDailyCap ?? "").trim();
@@ -419,155 +482,147 @@ export function QueueSettingsForm({
     onDirtyChange?.(dirty);
   }, [dirty, onDirtyChange]);
 
-  const save = async () => {
-    if (!form.validateAll(values)) return;
-    const parsed = QueueSettingsPatch.safeParse({
-      ...readValues(values).patch,
-      ticketValidityMin: validity,
-      ...(values.priorityOn ? { priorityValidityMin: passValidity } : {}),
-    });
-    if (!parsed.success) return;
-    setSaving(true);
-    try {
-      await onSave(parsed.data);
-      Alert.alert("Settings saved", "Changes apply to new tokens.");
-    } catch (e) {
-      if (e instanceof ApiError && e.issues.length > 0) {
-        // API paths look like "settings.joinRadiusM".
-        const byField: FieldErrors = {};
-        for (const [path, msg] of Object.entries(apiFieldErrors(e.issues))) {
-          byField[path.replace(/^settings\./, "")] = msg;
-        }
-        form.showErrors(byField);
-      } else {
-        Alert.alert("Could not save settings", errorText(e));
-      }
-    } finally {
-      setSaving(false);
-    }
-  };
+  const fields = (group: (typeof GROUPS)[number]) =>
+    group.fields.map((f) => (
+      <SettingField
+        key={f.key}
+        spec={f}
+        value={text[f.key] ?? ""}
+        onChange={(v) => setText(f.key, v)}
+        disabled={disabled}
+        error={errors[f.key]}
+      />
+    ));
+  const [joining, reservations, timing] = GROUPS;
+
+  const reservationSummary = `Fee ${typedRupees(text.reservationFeePaise)} · cancel window ${(text.cancelWindowMin ?? "").trim() || "—"} min`;
+  const prioritySummary = values.priorityOn
+    ? `On · ${typedRupees(text.priorityFeePaise)} · 1 in ${(text.priorityPerRegular ?? "").trim() || "—"}${capText ? ` · ${capText} a day` : ""}`
+    : "Off";
 
   return (
     <>
-      <ThemedText type="small" themeColor="inkMuted">
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         Changes apply to new tokens. People already in the queue keep the rules
         they joined with.
       </ThemedText>
-      {GROUPS.map((group) => (
-        <View key={group.title} style={{ gap: Spacing.three }}>
-          <SectionHeader title={group.title} />
-          <Card>
-            {group.fields.map((f) => (
-              <SettingField
-                key={f.key}
-                spec={f}
-                value={text[f.key] ?? ""}
-                onChange={(v) => setText(f.key, v)}
-                disabled={disabled}
-                error={errors[f.key]}
-              />
-            ))}
-            {group.title === "Timing" ? (
-              <>
-                <AppSwitch
-                  label="No limit for coming back late"
-                  description="On: after a missed turn, I'm here always puts the person back behind the rejoin delay, however late. Off: only within the late window below; after it they go to the end of the line."
-                  value={values.noLateLimit}
-                  onValueChange={setNoLateLimit}
-                  disabled={disabled}
-                />
-                {!values.noLateLimit ? (
-                  <TextField
-                    label="Late window (min)"
-                    value={text.lateWindowMin ?? ""}
-                    onChangeText={(v) => setText("lateWindowMin", v)}
-                    keyboardType="number-pad"
-                    editable={!disabled}
-                    error={errors.lateWindowMin}
-                    hint={`How long after a missed turn I'm here still keeps a place near the front. Default ${QUEUE_SETTINGS_DEFAULTS.lateWindowMin} min. Allowed ${LATE_BOUNDS.minValue} to ${LATE_BOUNDS.maxValue} min.`}
-                  />
-                ) : null}
-              </>
-            ) : null}
-          </Card>
-        </View>
-      ))}
 
-      <SectionHeader title="Priority Pass" />
-      <Card>
-        <AppSwitch
-          label="Priority lane"
-          description="Customers can buy a Priority Pass (and waiting customers can Skip ahead). Everyone sees “Priority lane on · 1 in N”."
-          value={values.priorityOn}
-          onValueChange={setPriorityOn}
-          disabled={disabled}
-        />
-        {values.priorityOn ? (
-          <>
-            {PRIORITY_FIELDS.map((f) => (
-              <SettingField
-                key={f.key}
-                spec={f}
-                value={text[f.key] ?? ""}
-                onChange={(v) => setText(f.key, v)}
-                disabled={disabled}
-                error={errors[f.key]}
-              />
-            ))}
+      <View style={styles.group}>
+        <SectionHeader title={joining.title} />
+        <Card>{fields(joining)}</Card>
+      </View>
+
+      <ExpandableSection
+        title={reservations.title}
+        summary={reservationSummary}
+        expanded={openReservations}
+        onToggle={() => setOpenReservations((o) => !o)}
+      >
+        <Card>{fields(reservations)}</Card>
+      </ExpandableSection>
+
+      <View style={styles.group}>
+        <SectionHeader title={timing.title} />
+        <Card>
+          {fields(timing)}
+          <AppSwitch
+            label="No limit for coming back late"
+            description="On: after a missed turn, I'm here always puts the person back behind the rejoin delay, however late. Off: only within the late window below; after it they go to the end of the line."
+            value={values.noLateLimit}
+            onValueChange={setNoLateLimit}
+            disabled={disabled}
+          />
+          {!values.noLateLimit ? (
             <TextField
-              label="Daily sales cap (passes)"
-              value={text.priorityDailyCap ?? ""}
-              onChangeText={(v) => setText("priorityDailyCap", v)}
+              label="Late window (min)"
+              value={text.lateWindowMin ?? ""}
+              onChangeText={(v) => setText("lateWindowMin", v)}
               keyboardType="number-pad"
-              placeholder="No cap"
               editable={!disabled}
-              error={errors.priorityDailyCap}
-              hint="Passes and Skip ahead sold per day. When reached, customers see “Sold out”. Leave empty for no cap."
+              error={errors.lateWindowMin}
+              hint={`How long after a missed turn I'm here still keeps a place near the front. Default ${QUEUE_SETTINGS_DEFAULTS.lateWindowMin} min.`}
             />
-            <ChoiceChips
-              label="A pass must be checked in"
-              options={passValidityOptions}
-              value={String(passValidity)}
-              onChange={(v) => setPassValidity(Number(v))}
-              disabled={disabled}
-            />
-            <ThemedText type="small" themeColor="inkMuted">
-              {`${passValidity === 0 ? "Until the end of the day it was bought" : `Within ${passValidityLabel(passValidity)} of buying`}. A pass not checked in by then ends without a refund. After check-in the holder stays until served or the queue closes (then refunded in full).`}
+          ) : null}
+        </Card>
+      </View>
+
+      <ExpandableSection
+        title="Priority Pass"
+        summary={prioritySummary}
+        expanded={openPriority}
+        onToggle={() => setOpenPriority((o) => !o)}
+      >
+        <Card>
+          <AppSwitch
+            label="Priority lane"
+            description="Customers can buy a Priority Pass (and waiting customers can Skip ahead). Everyone sees “Priority lane on · 1 in N”."
+            value={values.priorityOn}
+            onValueChange={setPriorityOn}
+            disabled={disabled}
+          />
+          {values.priorityOn ? (
+            <>
+              {PRIORITY_FIELDS.map((f) => (
+                <SettingField
+                  key={f.key}
+                  spec={f}
+                  value={text[f.key] ?? ""}
+                  onChange={(v) => setText(f.key, v)}
+                  disabled={disabled}
+                  error={errors[f.key]}
+                />
+              ))}
+              <TextField
+                label="Daily sales cap (passes)"
+                value={text.priorityDailyCap ?? ""}
+                onChangeText={(v) => setText("priorityDailyCap", v)}
+                keyboardType="number-pad"
+                placeholder="No cap"
+                editable={!disabled}
+                error={errors.priorityDailyCap}
+                hint="Passes and Skip ahead sold per day. When reached, customers see “Sold out”. Leave empty for no cap."
+              />
+              <ChoiceChips
+                label="A pass must be checked in"
+                options={passValidityOptions}
+                value={String(passValidity)}
+                onChange={(v) => setPassValidity(Number(v))}
+                disabled={disabled}
+              />
+              <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+                {`${passValidity === 0 ? "Until the end of the day it was bought" : `Within ${passValidityLabel(passValidity)} of buying`}. A pass not checked in by then ends without a refund. After check-in the holder stays until served or the queue closes (then refunded in full).`}
+              </ThemedText>
+            </>
+          ) : (
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+              Off: everyone waits in one line (plus your triage tokens). Your
+              priority settings are kept for when you switch it on.
             </ThemedText>
-          </>
-        ) : (
-          <ThemedText type="small" themeColor="inkMuted">
-            Off: everyone waits in one line (plus your triage tokens). Your
-            priority settings are kept for when you switch it on.
+          )}
+        </Card>
+      </ExpandableSection>
+
+      <View style={styles.group}>
+        <SectionHeader title="Ticket validity" />
+        <Card>
+          <ChoiceChips
+            label="A ticket stays valid"
+            options={validityOptions}
+            value={String(validity)}
+            onChange={(v) => setValidity(Number(v))}
+            disabled={disabled}
+          />
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+            {validity === 0
+              ? "Tickets end when you close the queue (the default)."
+              : `Tickets end ${ticketValidityLabel(validity)} after joining. If the queue closes earlier, waiting tickets that are still valid are kept and served first, with their number, when you open again.`}
           </ThemedText>
-        )}
-      </Card>
-      <SectionHeader title="Ticket validity" />
-      <Card>
-        <ChoiceChips
-          label="A ticket stays valid"
-          options={validityOptions}
-          value={String(validity)}
-          onChange={(v) => setValidity(Number(v))}
-          disabled={disabled}
-        />
-        <ThemedText type="small" themeColor="inkMuted">
-          {validity === 0
-            ? "Tickets end when you close the queue (the default)."
-            : `Tickets end ${ticketValidityLabel(validity)} after joining. If the queue closes earlier, waiting tickets that are still valid are kept and served first, with their number, when you open again.`}
-        </ThemedText>
-      </Card>
-      <Button
-        title="Save settings"
-        onPress={save}
-        loading={saving}
-        disabled={disabled || offline}
-      />
-      {offline ? (
-        <ThemedText type="small" themeColor="inkMuted">
-          {OFFLINE_ACTION_TEXT}
-        </ThemedText>
-      ) : null}
+        </Card>
+      </View>
     </>
   );
 }
+
+const styles = StyleSheet.create({
+  group: { gap: Spacing.three },
+});

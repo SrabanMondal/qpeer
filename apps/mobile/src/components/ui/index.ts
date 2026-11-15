@@ -5,6 +5,7 @@ export { Card } from "./card";
 export { type Choice, ChoiceChips } from "./choice-chips";
 export { ConfirmDialog } from "./confirm-dialog";
 export { ConnectionBanner } from "./connection-banner";
+export { ExpandableSection } from "./expandable-section";
 export { ExtendedFab } from "./fab";
 export { HeaderButton } from "./header-button";
 export { Icon, type IconName } from "./icon";
