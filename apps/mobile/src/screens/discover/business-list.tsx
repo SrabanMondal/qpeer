@@ -16,9 +16,9 @@ import {
 } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Icon } from "@/components/ui";
-import { Radius, Spacing, Type } from "@/constants/theme";
-import { useIsDark, useTheme } from "@/hooks/use-theme";
+import { Icon, OverflowMenu } from "@/components/ui";
+import { Radius, RIPPLE_ALPHA, Spacing, Type } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 import { categoryIcon, categoryLabel } from "@/lib/format";
 import { formatDistance, useNow } from "@/lib/queue-format";
 import { StatusPill } from "@/screens/discover/status-pill";
@@ -64,6 +64,7 @@ export function BusinessList({
   const sorts = SORTS.filter(
     (s) => s.value !== "distance" || canSortByDistance,
   );
+  const current = SORTS.find((s) => s.value === sort);
 
   return (
     <FlatList
@@ -74,7 +75,7 @@ export function BusinessList({
         styles.content,
         { paddingTop: topInset, paddingBottom: bottomPadding },
       ]}
-      style={{ backgroundColor: theme.bg }}
+      style={{ backgroundColor: theme.surface }}
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
@@ -82,43 +83,23 @@ export function BusinessList({
           progressViewOffset={topInset}
           colors={[theme.primary]}
           tintColor={theme.primary}
-          progressBackgroundColor={theme.card}
+          progressBackgroundColor={theme.surfaceContainerHigh}
         />
       }
       ListHeaderComponent={
         <View style={styles.header}>
-          <View style={styles.sortRow} accessibilityRole="radiogroup">
-            <ThemedText type="label" themeColor="inkMuted">
-              Sort
-            </ThemedText>
-            {sorts.map((s) => {
-              const selected = s.value === sort;
-              return (
-                <Pressable
-                  key={s.value}
-                  onPress={() => onSort(s.value)}
-                  accessibilityRole="radio"
-                  accessibilityState={{ selected }}
-                  style={[
-                    styles.sortChip,
-                    {
-                      backgroundColor: selected ? theme.primary : theme.card,
-                      borderColor: selected ? theme.primary : theme.border,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.sortText,
-                      { color: selected ? theme.onPrimary : theme.ink },
-                    ]}
-                  >
-                    {s.label}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+          {/* A rare setting: one compact button with a menu of the sorts. */}
+          <OverflowMenu
+            accessibilityLabel="Sort"
+            items={sorts.map((s) => ({
+              label: s.label,
+              selected: s.value === sort,
+              onPress: () => onSort(s.value),
+            }))}
+            trigger={(open) => (
+              <SortButton label={current?.label ?? ""} onPress={open} />
+            )}
+          />
           {header}
         </View>
       }
@@ -134,6 +115,32 @@ export function BusinessList({
   );
 }
 
+/** "Sort: Distance ▾": a 48 dp text button that opens the sort menu. */
+function SortButton({
+  label,
+  onPress,
+}: {
+  label: string;
+  onPress: () => void;
+}) {
+  const theme = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Sort: ${label}. Change the order`}
+      android_ripple={{ color: theme.primary, alpha: RIPPLE_ALPHA }}
+      style={styles.sortButton}
+    >
+      <Icon name="sort" size={18} color="primary" />
+      <Text style={[Type.labelLarge, { color: theme.primary }]}>
+        {`Sort: ${label}`}
+      </Text>
+      <Icon name="arrow_drop_down" size={20} color="primary" />
+    </Pressable>
+  );
+}
+
 function BusinessRow({
   business: b,
   onPress,
@@ -145,7 +152,6 @@ function BusinessRow({
   now: number;
 }) {
   const theme = useTheme();
-  const dark = useIsDark();
   const status = markerStatus(b);
   const sub = [
     categoryLabel(b.category),
@@ -161,59 +167,60 @@ function BusinessRow({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={`${b.name}. ${sub}. ${queueLine ?? "Closed"}`}
-      style={({ pressed }) => [
-        styles.row,
-        {
-          backgroundColor: pressed ? theme.primarySoft : theme.card,
-          borderColor: theme.border,
-          borderWidth: dark ? 1 : 0,
-        },
-      ]}
+      android_ripple={{ color: theme.onSurface, alpha: RIPPLE_ALPHA }}
+      style={[styles.row, { backgroundColor: theme.surfaceContainer }]}
     >
-      <View style={[styles.iconWrap, { backgroundColor: theme.brandSoft }]}>
-        <Icon name={categoryIcon(b.category)} size={22} color="brand" />
+      <View
+        style={[styles.iconWrap, { backgroundColor: theme.secondaryContainer }]}
+      >
+        <Icon
+          name={categoryIcon(b.category)}
+          size={22}
+          color="onSecondaryContainer"
+        />
       </View>
       <View style={styles.body}>
-        <ThemedText type="body" numberOfLines={2}>
+        <ThemedText type="bodyLarge" numberOfLines={2}>
           {b.name}
         </ThemedText>
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           {sub}
         </ThemedText>
         <View style={styles.statusRow}>
           <StatusPill status={status} isOpenNow={b.isOpenNow} />
           {queueLine ? (
-            <ThemedText type="small" style={styles.flex}>
+            <ThemedText type="bodyMedium" style={styles.flex}>
               {queueLine}
             </ThemedText>
           ) : null}
         </View>
       </View>
-      <Icon name="chevron_right" color="inkMuted" />
+      <Icon name="chevron_right" color="onSurfaceVariant" />
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   content: { paddingHorizontal: Spacing.three, gap: Spacing.twoHalf },
-  header: { gap: Spacing.twoHalf, paddingTop: Spacing.two },
-  sortRow: {
+  header: {
+    gap: Spacing.twoHalf,
+    paddingTop: Spacing.two,
+    alignItems: "flex-start",
+  },
+  sortButton: {
+    minHeight: 48,
     flexDirection: "row",
-    flexWrap: "wrap",
     alignItems: "center",
-    gap: Spacing.two,
-  },
-  sortChip: {
-    minHeight: 44,
+    gap: Spacing.one,
     paddingHorizontal: Spacing.twoHalf,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    justifyContent: "center",
+    marginLeft: -Spacing.twoHalf,
+    borderRadius: Radius.full,
+    overflow: "hidden",
   },
-  sortText: { ...Type.small, fontWeight: "600" },
   row: {
     minHeight: 72,
     borderRadius: Radius.card,
+    overflow: "hidden",
     paddingHorizontal: Spacing.three,
     paddingVertical: Spacing.twoHalf,
     flexDirection: "row",
@@ -223,7 +230,7 @@ const styles = StyleSheet.create({
   iconWrap: {
     width: 40,
     height: 40,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.full,
     alignItems: "center",
     justifyContent: "center",
   },

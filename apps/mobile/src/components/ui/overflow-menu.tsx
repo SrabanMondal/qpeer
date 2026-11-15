@@ -5,8 +5,14 @@ import {
   Host,
   RNHostView,
 } from "@expo/ui/jetpack-compose";
-import { type Ref, useImperativeHandle, useState } from "react";
+import {
+  type ReactElement,
+  type Ref,
+  useImperativeHandle,
+  useState,
+} from "react";
 
+import { Icon } from "@/components/ui/icon";
 import { IconButton } from "@/components/ui/icon-button";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
 
@@ -16,6 +22,8 @@ export type MenuItem = {
   /** Destructive actions ("Close for the day") are drawn in `error`. */
   destructive?: boolean;
   disabled?: boolean;
+  /** The current choice in a single-choice menu (drawn with a check). */
+  selected?: boolean;
 };
 
 export type OverflowMenuHandle = {
@@ -33,12 +41,18 @@ export function OverflowMenu({
   items,
   accessibilityLabel,
   disabled = false,
+  trigger,
   ref,
 }: {
   items: readonly MenuItem[];
   /** Spoken label of the ⋮ button, e.g. "More actions for #14". */
   accessibilityLabel: string;
   disabled?: boolean;
+  /**
+   * A different anchor than the ⋮ icon button (e.g. "Sort: Distance"); it
+   * must call `open` when pressed and carry its own label.
+   */
+  trigger?: (open: () => void) => ReactElement;
   ref?: Ref<OverflowMenuHandle>;
 }) {
   const theme = useTheme();
@@ -67,12 +81,18 @@ export function OverflowMenu({
       >
         <DropdownMenu.Trigger>
           <RNHostView matchContents>
-            <IconButton
-              icon="more_vert"
-              accessibilityLabel={accessibilityLabel}
-              disabled={disabled}
-              onPress={() => setOpen(true)}
-            />
+            {trigger ? (
+              trigger(() => {
+                if (!disabled) setOpen(true);
+              })
+            ) : (
+              <IconButton
+                icon="more_vert"
+                accessibilityLabel={accessibilityLabel}
+                disabled={disabled}
+                onPress={() => setOpen(true)}
+              />
+            )}
           </RNHostView>
         </DropdownMenu.Trigger>
         <DropdownMenu.Items>
@@ -96,6 +116,13 @@ export function OverflowMenu({
                     {item.label}
                   </ComposeText>
                 </DropdownMenuItem.Text>
+                {item.selected ? (
+                  <DropdownMenuItem.TrailingIcon>
+                    <RNHostView matchContents>
+                      <Icon name="check" color="onSurfaceVariant" />
+                    </RNHostView>
+                  </DropdownMenuItem.TrailingIcon>
+                ) : null}
               </DropdownMenuItem>
             );
           })}
