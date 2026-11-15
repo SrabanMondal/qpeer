@@ -57,12 +57,12 @@ export function PriorityBuyCard({
   return (
     <Card>
       <View style={styles.head}>
-        <Icon name="bolt" color="brand" />
-        <ThemedText type="heading" style={styles.flex}>
+        <Icon name="bolt" color="primary" />
+        <ThemedText type="titleMedium" style={styles.flex}>
           Priority Pass
         </ThemedText>
       </View>
-      <ThemedText type="small" themeColor="inkMuted">
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         {range
           ? `Priority holders wait ${aboutText(range.lowMs, range.highMs)} right now. Buy from anywhere; check in when you arrive.`
           : "Buy from anywhere; check in when you arrive to join the priority lane."}
@@ -70,7 +70,7 @@ export function PriorityBuyCard({
       {soldOut ? (
         <Button
           title="Sold out for today"
-          variant="outline"
+          variant="outlined"
           icon="block"
           disabled
           onPress={() => undefined}
@@ -79,11 +79,11 @@ export function PriorityBuyCard({
         <>
           <Button
             title="Sign in to buy a pass"
-            variant="secondary"
+            variant="tonal"
             icon="login"
             onPress={() => router.push("/sign-in")}
           />
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             A pass is tied to your account, so it needs a phone or Google
             sign-in.
           </ThemedText>
@@ -91,7 +91,6 @@ export function PriorityBuyCard({
       ) : (
         <Button
           title={`Buy Priority Pass · ${formatRupees(feePaise)}`}
-          variant="brand"
           icon="bolt"
           onPress={() => router.push(payHref({ kind: "priority", queueId }))}
           needsNetwork
