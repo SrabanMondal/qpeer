@@ -4,13 +4,21 @@ import { type ThemeColor, Type, type TypeToken } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 
 export type ThemedTextProps = TextProps & {
-  /** Type token from the design guide; default `body`. */
+  /** Type role from the design guide; default `bodyLarge` (alias `body`). */
   type?: TypeToken;
-  /** Colour token; default `ink`. */
+  /** Colour token; default `onSurface`. */
   themeColor?: ThemeColor;
 };
 
-/** Text in a type-scale token and a colour token. Scales with the phone's font size. */
+/** Huge numbers may grow only so far, to stay on screen (design guide §2). */
+const CAPPED: ReadonlySet<TypeToken> = new Set<TypeToken>([
+  "display",
+  "displayLarge",
+  "displayMedium",
+  "boardDisplay",
+]);
+
+/** Text in a type role and a colour token. Scales with the phone's font size. */
 export function ThemedText({
   style,
   type = "body",
@@ -20,9 +28,8 @@ export function ThemedText({
   const theme = useTheme();
   return (
     <Text
-      // The huge display numbers may grow only so far, to stay on screen.
-      maxFontSizeMultiplier={type === "display" ? 1.3 : undefined}
-      style={[{ color: theme[themeColor ?? "ink"] }, Type[type], style]}
+      maxFontSizeMultiplier={CAPPED.has(type) ? 1.3 : undefined}
+      style={[{ color: theme[themeColor ?? "onSurface"] }, Type[type], style]}
       {...rest}
     />
   );

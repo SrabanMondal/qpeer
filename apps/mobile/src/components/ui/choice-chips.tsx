@@ -1,12 +1,28 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Radius, Spacing, Type } from "@/constants/theme";
+import { Icon } from "@/components/ui/icon";
+import {
+  DISABLED_CONTENT_ALPHA,
+  Radius,
+  RIPPLE_ALPHA,
+  Spacing,
+  Type,
+  withAlpha,
+} from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 
 export type Choice<T extends string> = { value: T; label: string };
 
-/** Single-choice picker shown as wrapping pill chips (no native picker needed). */
+/** Visible chip height (M3 filter chip); the tap area is 48. */
+const CHIP_HEIGHT = 32;
+const TARGET = 48;
+
+/**
+ * Single choice shown as wrapping M3 filter chips: radius 8, a check and
+ * secondaryContainer when selected, an outline when not. Each chip is a
+ * 48 dp tap target around the 32 dp chip.
+ */
 export function ChoiceChips<T extends string>({
   label,
   options,
@@ -25,12 +41,17 @@ export function ChoiceChips<T extends string>({
   const theme = useTheme();
   return (
     <View style={styles.wrap} accessibilityRole="radiogroup">
-      <ThemedText type="label" themeColor="inkMuted">
+      <ThemedText type="labelLarge" themeColor="onSurfaceVariant">
         {label}
       </ThemedText>
       <View style={styles.row}>
         {options.map((o) => {
           const selected = o.value === value;
+          const content = disabled
+            ? withAlpha(theme.onSurface, DISABLED_CONTENT_ALPHA)
+            : selected
+              ? theme.onSecondaryContainer
+              : theme.onSurfaceVariant;
           return (
             <Pressable
               key={o.value}
@@ -39,29 +60,39 @@ export function ChoiceChips<T extends string>({
               accessibilityRole="radio"
               accessibilityState={{ selected, disabled }}
               accessibilityLabel={o.label}
-              style={({ pressed }) => [
-                styles.chip,
-                {
-                  borderColor: selected ? theme.primary : theme.border,
-                  backgroundColor: selected ? theme.primary : theme.card,
-                },
-                (pressed || disabled) && styles.dim,
-              ]}
+              style={styles.target}
             >
-              <Text
+              <View
                 style={[
-                  styles.text,
-                  { color: selected ? theme.onPrimary : theme.ink },
+                  styles.chip,
+                  selected
+                    ? { backgroundColor: theme.secondaryContainer }
+                    : { borderWidth: 1, borderColor: theme.outline },
                 ]}
               >
-                {o.label}
-              </Text>
+                {/* The ripple sits on the visible chip, not the 48 dp area. */}
+                <Pressable
+                  onPress={() => onChange(o.value)}
+                  disabled={disabled}
+                  accessible={false}
+                  importantForAccessibility="no-hide-descendants"
+                  android_ripple={{ color: content, alpha: RIPPLE_ALPHA }}
+                  style={styles.inner}
+                >
+                  {selected ? (
+                    <Icon name="check" size={18} colorValue={content} />
+                  ) : null}
+                  <Text style={[Type.labelLarge, { color: content }]}>
+                    {o.label}
+                  </Text>
+                </Pressable>
+              </View>
             </Pressable>
           );
         })}
       </View>
       {error ? (
-        <ThemedText type="small" themeColor="danger">
+        <ThemedText type="bodyMedium" themeColor="error">
           {error}
         </ThemedText>
       ) : null}
@@ -71,14 +102,18 @@ export function ChoiceChips<T extends string>({
 
 const styles = StyleSheet.create({
   wrap: { gap: Spacing.one },
-  row: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.two },
+  row: { flexDirection: "row", flexWrap: "wrap", columnGap: Spacing.two },
+  target: { minHeight: TARGET, justifyContent: "center" },
   chip: {
-    minHeight: 44,
-    paddingHorizontal: Spacing.three,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
-    justifyContent: "center",
+    minHeight: CHIP_HEIGHT,
+    borderRadius: Radius.chip,
+    overflow: "hidden",
   },
-  dim: { opacity: 0.6 },
-  text: { ...Type.body, fontWeight: "600" },
+  inner: {
+    minHeight: CHIP_HEIGHT,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.twoHalf,
+  },
 });

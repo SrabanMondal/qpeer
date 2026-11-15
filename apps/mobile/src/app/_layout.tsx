@@ -1,6 +1,7 @@
 import { Archivo_700Bold } from "@expo-google-fonts/archivo/700Bold";
 import { Archivo_800ExtraBold } from "@expo-google-fonts/archivo/800ExtraBold";
 import { Doto_900Black } from "@expo-google-fonts/doto/900Black";
+import { MaterialSymbols_400Regular_Filled } from "@expo-google-fonts/material-symbols/400Regular_Filled";
 import Mapbox from "@rnmapbox/maps";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { useFonts } from "expo-font";
@@ -16,6 +17,7 @@ import { useEffect, useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ClockGuard } from "@/components/clock-guard";
 import { ToastHost } from "@/components/ui";
+import { FILLED_SYMBOLS_FONT } from "@/components/ui/icon";
 import { config } from "@/config";
 import { FontFamily, Type } from "@/constants/theme";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
@@ -45,6 +47,8 @@ const APP_FONTS = {
   [FontFamily.board]: Doto_900Black,
   [FontFamily.figure]: Archivo_700Bold,
   [FontFamily.figureHeavy]: Archivo_800ExtraBold,
+  // Filled Material Symbols, for the selected tab (no blank first frame).
+  [FILLED_SYMBOLS_FONT]: MaterialSymbols_400Regular_Filled,
 };
 
 /**

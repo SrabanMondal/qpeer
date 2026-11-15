@@ -5,8 +5,8 @@ import { Spacing } from "@/constants/theme";
 import { useModeToggle } from "@/lib/mode";
 
 /**
- * The mode toggle on the dark header band of the Business tab
- * (business-interface.jpg): a compact pill on the right of the header, so it
+ * The mode toggle in the Business tab's top app bar
+ * (business-interface.jpg): compact, on the right of the header, so it
  * never runs into the title (B3).
  */
 export function HeaderModeSwitch() {
@@ -26,5 +26,5 @@ export function HeaderModeSwitch() {
 }
 
 const styles = StyleSheet.create({
-  wrap: { paddingLeft: Spacing.two, paddingRight: Spacing.three },
+  wrap: { paddingLeft: Spacing.two, paddingRight: Spacing.two },
 });

@@ -1,5 +1,4 @@
-import { Redirect, useIsFocused, useRouter } from "expo-router";
-import { StatusBar } from "expo-status-bar";
+import { Redirect, useRouter } from "expo-router";
 
 import {
   Badge,
@@ -15,12 +14,11 @@ import { categoryLabel, listingBadge } from "@/lib/format";
 import { useAppMode } from "@/lib/mode";
 
 /**
- * Business mode home: the owner's businesses (BIZ-09, BIZ-15). The dark
- * header band with the mode switch is set in `(tabs)/_layout.tsx`.
+ * Business mode home: the owner's businesses (BIZ-09, BIZ-15). The top
+ * app bar with the mode switch is set in `(tabs)/_layout.tsx`.
  */
 export default function BusinessTab() {
   const router = useRouter();
-  const focused = useIsFocused();
   const { mode } = useAppMode();
   const list = useMyBusinesses(mode === "business");
 
@@ -36,8 +34,6 @@ export default function BusinessTab() {
         void list.refetch();
       }}
     >
-      {/* Light status-bar icons over the dark header band. */}
-      {focused ? <StatusBar style="light" /> : null}
       {list.isPending ? (
         <LoadingState label="Loading your businesses…" />
       ) : list.isError ? (

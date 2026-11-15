@@ -338,6 +338,16 @@ export const Spring = {
   slowEffects: { mass: 1, stiffness: 800, damping: 56.6 },
 } as const;
 
+/**
+ * Shadows only for things that float (snackbar, the floating Undo bar,
+ * FAB, sheets): M3 elevation level 3 as a `boxShadow`. Everything else gets
+ * depth from the tonal surface containers.
+ */
+export const Elevation = {
+  level3:
+    "0px 1px 3px 0px rgba(0, 0, 0, 0.3), 0px 4px 8px 3px rgba(0, 0, 0, 0.15)",
+} as const;
+
 /** Pressed state layer: the content colour at 10 % (M3), via `android_ripple`. */
 export const RIPPLE_ALPHA = 0.1;
 

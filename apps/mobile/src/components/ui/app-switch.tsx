@@ -2,8 +2,8 @@ import type { ReactNode } from "react";
 import { Pressable, StyleSheet, Switch, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Spacing } from "@/constants/theme";
-import { useIsDark, useTheme } from "@/hooks/use-theme";
+import { RIPPLE_ALPHA, Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 
 /**
  * A labelled switch row (B17, INC-044). The text takes the free width and
@@ -26,6 +26,7 @@ export function AppSwitch({
   /** Optional extra content under the description. */
   right?: ReactNode;
 }) {
+  const theme = useTheme();
   return (
     <Pressable
       onPress={() => {
@@ -35,12 +36,13 @@ export function AppSwitch({
       accessibilityState={{ checked: value, disabled }}
       accessibilityLabel={label}
       accessibilityHint={description}
+      android_ripple={{ color: theme.onSurface, alpha: RIPPLE_ALPHA }}
       style={styles.row}
     >
       <View style={styles.text}>
-        <ThemedText type="body">{label}</ThemedText>
+        <ThemedText type="bodyLarge">{label}</ThemedText>
         {description ? (
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {description}
           </ThemedText>
         ) : null}
@@ -75,7 +77,6 @@ export function ThemedSwitch({
   accessibilityLabel?: string;
 }) {
   const theme = useTheme();
-  const dark = useIsDark();
   return (
     <View style={styles.switch}>
       <Switch
@@ -85,11 +86,11 @@ export function ThemedSwitch({
         accessible={accessible}
         accessibilityLabel={accessibilityLabel}
         importantForAccessibility={accessible ? "auto" : "no-hide-descendants"}
-        // The old off track (`border`) was almost the card colour in dark
-        // mode; `inkMuted` reads as "off" in both themes.
-        trackColor={{ true: theme.brand, false: theme.inkMuted }}
-        thumbColor={value ? theme.onPrimary : dark ? theme.ink : theme.card}
-        ios_backgroundColor={theme.inkMuted}
+        // M3 switch colours. The off track is `outline` (not a surface
+        // container) so "off" stays visible on every surface (INC-044).
+        trackColor={{ true: theme.primary, false: theme.outline }}
+        thumbColor={value ? theme.onPrimary : theme.surfaceContainerHighest}
+        ios_backgroundColor={theme.outline}
       />
     </View>
   );
