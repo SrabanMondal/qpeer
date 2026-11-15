@@ -325,11 +325,10 @@ function ConsoleBody({
         </View>
       ),
     });
+    // A layout cleanup runs before the next body's layout effect (another
+    // queue), so the actions never vanish on a switch.
+    return () => navigation.setOptions({ headerRight: undefined });
   }, [navigation, onVerify, canClose, offlineOrBusy]);
-  useEffect(
-    () => () => navigation.setOptions({ headerRight: undefined }),
-    [navigation],
-  );
 
   if (!state) {
     return (
