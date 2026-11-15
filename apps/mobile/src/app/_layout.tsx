@@ -1,5 +1,9 @@
+import { Archivo_700Bold } from "@expo-google-fonts/archivo/700Bold";
+import { Archivo_800ExtraBold } from "@expo-google-fonts/archivo/800ExtraBold";
+import { Doto_900Black } from "@expo-google-fonts/doto/900Black";
 import Mapbox from "@rnmapbox/maps";
 import { QueryClientProvider } from "@tanstack/react-query";
+import { useFonts } from "expo-font";
 import {
   DarkTheme,
   DefaultTheme,
@@ -7,12 +11,13 @@ import {
   type Theme,
   ThemeProvider,
 } from "expo-router";
-import { useState } from "react";
+import * as SplashScreen from "expo-splash-screen";
+import { useEffect, useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ClockGuard } from "@/components/clock-guard";
 import { ToastHost } from "@/components/ui";
 import { config } from "@/config";
-import { Type } from "@/constants/theme";
+import { FontFamily, Type } from "@/constants/theme";
 import { useIsDark, useTheme } from "@/hooks/use-theme";
 import { AuthProvider } from "@/lib/auth";
 import { createQueryClient, useAppFocusRefetch } from "@/lib/network";
@@ -26,6 +31,21 @@ if (config.mapboxToken) {
 // C1: saved tickets, map choices and keys are read before the first screens
 // need them (each read is also safe on its own).
 void preloadStorage();
+
+// The splash stays up until the board and figure fonts are ready, so no
+// text ever renders in the wrong face first.
+void SplashScreen.preventAutoHideAsync();
+
+/**
+ * Token board type (design guide §2). Release builds embed these files with
+ * the expo-font config plugin (app.config.ts); loading them here as well
+ * covers builds made before the plugin was added. Same family names.
+ */
+const APP_FONTS = {
+  [FontFamily.board]: Doto_900Black,
+  [FontFamily.figure]: Archivo_700Bold,
+  [FontFamily.figureHeavy]: Archivo_800ExtraBold,
+};
 
 /**
  * A deep link (`qpeer://q/<id>`) or an alert tap on a cold start opens its
@@ -49,6 +69,16 @@ export default function RootLayout() {
   // Retries back off 1 s → 30 s on network errors (B1); see lib/network.ts.
   const [queryClient] = useState(createQueryClient);
   useAppFocusRefetch(queryClient);
+  // A failed font load (should not happen: the files are bundled) must not
+  // keep the splash up for ever; text then falls back to Roboto.
+  const [fontsLoaded, fontError] = useFonts(APP_FONTS);
+  const fontsReady = fontsLoaded || fontError !== null;
+
+  useEffect(() => {
+    if (fontsReady) SplashScreen.hide();
+  }, [fontsReady]);
+
+  if (!fontsReady) return null;
 
   const base = dark ? DarkTheme : DefaultTheme;
   const navTheme: Theme = {
@@ -56,11 +86,11 @@ export default function RootLayout() {
     colors: {
       ...base.colors,
       primary: colors.primary,
-      background: colors.bg,
-      card: colors.card,
-      text: colors.ink,
-      border: colors.border,
-      notification: colors.danger,
+      background: colors.surface,
+      card: colors.surface,
+      text: colors.onSurface,
+      border: colors.outlineVariant,
+      notification: colors.error,
     },
   };
 
@@ -71,10 +101,13 @@ export default function RootLayout() {
           <ThemeProvider value={navTheme}>
             <Stack
               screenOptions={{
-                headerStyle: { backgroundColor: colors.card },
-                headerTintColor: colors.ink,
-                headerTitleStyle: { ...Type.heading },
-                contentStyle: { backgroundColor: colors.bg },
+                // M3 top app bar: surface, no shadow line, title large in
+                // Archivo (screen titles are figures of the brand).
+                headerStyle: { backgroundColor: colors.surface },
+                headerShadowVisible: false,
+                headerTintColor: colors.onSurface,
+                headerTitleStyle: { ...Type.appTitle },
+                contentStyle: { backgroundColor: colors.surface },
               }}
             >
               <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -124,7 +157,7 @@ export default function RootLayout() {
               <Stack.Screen name="q/[id]" options={{ title: "Join queue" }} />
               <Stack.Screen
                 name="token/[id]"
-                options={{ title: "Your Ticket" }}
+                options={{ title: "Your ticket" }}
               />
               <Stack.Screen name="pay" options={{ title: "Payment" }} />
               <Stack.Screen

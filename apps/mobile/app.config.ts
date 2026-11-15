@@ -92,6 +92,19 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
       },
     ],
     "expo-dev-client",
+    // Token board type (design guide §2): only the weights in use. On
+    // Android the file name is the family name (`Doto_900Black`, …), the
+    // same keys `useFonts` uses in the root layout.
+    [
+      "expo-font",
+      {
+        fonts: [
+          "@expo-google-fonts/doto/900Black/Doto_900Black.ttf",
+          "@expo-google-fonts/archivo/700Bold/Archivo_700Bold.ttf",
+          "@expo-google-fonts/archivo/800ExtraBold/Archivo_800ExtraBold.ttf",
+        ],
+      },
+    ],
   ],
   experiments: {
     typedRoutes: true,
