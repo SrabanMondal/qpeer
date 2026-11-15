@@ -7,11 +7,18 @@ export { ConfirmDialog } from "./confirm-dialog";
 export { ConnectionBanner } from "./connection-banner";
 export { HeaderButton } from "./header-button";
 export { Icon, type IconName } from "./icon";
+export { IconButton } from "./icon-button";
 export { InfoRow } from "./info-row";
 export { ListItem } from "./list-item";
 export { ModeSwitch } from "./mode-switch";
+export {
+  type MenuItem,
+  OverflowMenu,
+  type OverflowMenuHandle,
+} from "./overflow-menu";
 export { Screen, type ScreenHandle } from "./screen";
 export { SectionHeader } from "./section-header";
+export { Sheet } from "./sheet";
 export { type Stat, StatRow } from "./stat-row";
 export { EmptyState, ErrorState, LoadingState } from "./states";
 export { StatusBanner, type StatusTone } from "./status-banner";
