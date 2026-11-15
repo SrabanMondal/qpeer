@@ -4,7 +4,7 @@ import { StyleSheet, useWindowDimensions, View } from "react-native";
 import { BarChart, LineChart } from "react-native-gifted-charts";
 import { ThemedText } from "@/components/themed-text";
 import { Card } from "@/components/ui";
-import { Spacing, Type } from "@/constants/theme";
+import { Radius, Spacing, Type, withAlpha } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { dayLabel, peakRowLabel } from "@/lib/insights-format";
 
@@ -26,12 +26,13 @@ export function TrendCharts({ days }: { days: AnalyticsDay[] }) {
   const n = days.length;
   const slot = width / n;
   const barWidth = Math.max(4, Math.floor(slot * 0.6));
+  // Axis text in the label small role; lines in the outline roles.
   const axis = {
-    yAxisTextStyle: { color: theme.inkMuted, fontSize: 11 },
-    xAxisLabelTextStyle: { color: theme.inkMuted, fontSize: 10 },
-    xAxisColor: theme.border,
-    yAxisColor: theme.border,
-    rulesColor: theme.border,
+    yAxisTextStyle: { ...Type.labelSmall, color: theme.onSurfaceVariant },
+    xAxisLabelTextStyle: { ...Type.labelSmall, color: theme.onSurfaceVariant },
+    xAxisColor: theme.outline,
+    yAxisColor: theme.outline,
+    rulesColor: theme.outlineVariant,
     noOfSections: 4,
     height: 150,
   };
@@ -53,7 +54,7 @@ export function TrendCharts({ days }: { days: AnalyticsDay[] }) {
   return (
     <>
       <Card>
-        <ThemedText type="heading">People served per day</ThemedText>
+        <ThemedText type="titleMedium">People served per day</ThemedText>
         <View
           accessible
           accessibilityLabel={`People served per day: ${total} in ${n} days, most on one day ${Math.max(0, ...days.map((d) => d.served))}`}
@@ -65,16 +66,16 @@ export function TrendCharts({ days }: { days: AnalyticsDay[] }) {
             spacing={Math.max(2, slot - barWidth)}
             initialSpacing={Math.max(2, (slot - barWidth) / 2)}
             frontColor={theme.primary}
-            barBorderRadius={3}
+            barBorderRadius={Radius.xs}
             disableScroll
             {...axis}
           />
         </View>
       </Card>
       <Card>
-        <ThemedText type="heading">Average wait per day (min)</ThemedText>
+        <ThemedText type="titleMedium">Average wait per day (min)</ThemedText>
         {waits.length < 2 ? (
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             Not enough visits yet to draw a trend.
           </ThemedText>
         ) : (
@@ -87,8 +88,8 @@ export function TrendCharts({ days }: { days: AnalyticsDay[] }) {
               width={width}
               spacing={Math.max(6, width / Math.max(1, waits.length))}
               initialSpacing={8}
-              color={theme.brand}
-              dataPointsColor={theme.brand}
+              color={theme.primary}
+              dataPointsColor={theme.primary}
               thickness={3}
               curved
               disableScroll
@@ -109,8 +110,8 @@ export function PeakStrip({ peak }: { peak: PeakHours }) {
   const hours = Array.from({ length: to - from }, (_, i) => from + i);
   return (
     <Card>
-      <ThemedText type="heading">Busy hours</ThemedText>
-      <ThemedText type="small" themeColor="inkMuted">
+      <ThemedText type="titleMedium">Busy hours</ThemedText>
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         Average people joining per hour. Darker is busier.
       </ThemedText>
       <View style={styles.grid}>
@@ -121,7 +122,11 @@ export function PeakStrip({ peak }: { peak: PeakHours }) {
             accessible
             accessibilityLabel={peakRowLabel(row, from, to)}
           >
-            <ThemedText type="label" themeColor="inkMuted" style={styles.day}>
+            <ThemedText
+              type="labelMedium"
+              themeColor="onSurfaceVariant"
+              style={styles.day}
+            >
               {WEEKDAY_SHORT[row.weekday]}
             </ThemedText>
             {hours.map((h) => {
@@ -133,8 +138,12 @@ export function PeakStrip({ peak }: { peak: PeakHours }) {
                   style={[
                     styles.cell,
                     {
-                      backgroundColor: v > 0 ? theme.primary : theme.bg,
-                      opacity: v > 0 ? 0.15 + 0.85 * share : 1,
+                      // Primary at 15–100 % strength; empty hours stay a
+                      // quiet surface step.
+                      backgroundColor:
+                        v > 0
+                          ? withAlpha(theme.primary, 0.15 + 0.85 * share)
+                          : theme.surfaceContainerHighest,
                     },
                   ]}
                 />
@@ -151,11 +160,9 @@ export function PeakStrip({ peak }: { peak: PeakHours }) {
             <View key={h} style={styles.tick}>
               {(h - from) % 3 === 0 ? (
                 <ThemedText
-                  style={[
-                    Type.label,
-                    styles.tickText,
-                    { color: theme.inkMuted },
-                  ]}
+                  type="labelSmall"
+                  themeColor="onSurfaceVariant"
+                  style={styles.tickText}
                   numberOfLines={1}
                 >
                   {hourLabel(h).replace(" ", "")}
@@ -173,7 +180,7 @@ const styles = StyleSheet.create({
   grid: { gap: 3 },
   row: { flexDirection: "row", alignItems: "center", gap: 3 },
   day: { width: 34 },
-  cell: { flex: 1, height: 18, borderRadius: 3 },
+  cell: { flex: 1, height: 18, borderRadius: Radius.xs },
   tick: { flex: 1, overflow: "visible" },
-  tickText: { fontSize: 10, width: 40 },
+  tickText: { width: 40 },
 });
