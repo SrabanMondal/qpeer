@@ -167,7 +167,6 @@ export default function VerifyTicketScreen() {
           action={
             <Button
               title={permission.canAskAgain ? "Allow camera" : "Open settings"}
-              variant="brand"
               icon={permission.canAskAgain ? "camera" : "settings"}
               onPress={() => {
                 if (permission.canAskAgain) void requestPermission();
@@ -184,8 +183,38 @@ export default function VerifyTicketScreen() {
     const look = RESULT[check.status];
     const p = "payload" in check ? check.payload : null;
     const badge = live.kind === "ok" ? tokenStatusBadge(live.token) : null;
+    const canRejoin =
+      live.kind === "ok" &&
+      live.token.state === "MISSED" &&
+      live.token.rejoinAvailable !== false &&
+      check.status === "valid";
+    const scanAgain = (
+      <Button
+        title="Scan another ticket"
+        variant={canRejoin ? "tonal" : "filled"}
+        size={canRejoin ? "medium" : "large"}
+        icon="qr_code_scanner"
+        onPress={again}
+      />
+    );
     return (
-      <Screen>
+      <Screen
+        // The state's one action stays under the thumb.
+        bottomBar={
+          canRejoin ? (
+            <Button
+              title="Rejoin for customer"
+              size="large"
+              icon="restart_alt"
+              loading={rejoin.isPending}
+              onPress={() => void onRejoin()}
+              needsNetwork
+            />
+          ) : (
+            scanAgain
+          )
+        }
+      >
         <Stack.Screen options={{ title: "Verify ticket" }} />
         <StatusBanner
           tone={look.tone}
@@ -194,14 +223,15 @@ export default function VerifyTicketScreen() {
         />
         {p ? (
           <Card>
-            <ThemedText type="title">#{tokenLabel(p.s, p.n)}</ThemedText>
-            <InfoRow label="Issued" value={formatDateTime(p.iat)} />
+            <ThemedText type="headlineSmall">
+              #{tokenLabel(p.s, p.n)}
+            </ThemedText>
             <InfoRow label="Valid until" value={formatDateTime(p.exp)} />
             {live.kind === "ok" ? (
               <>
                 <InfoRow label="Queue" value={live.token.queueName} />
                 <View style={styles.row}>
-                  <ThemedText type="body" themeColor="inkMuted">
+                  <ThemedText type="bodyLarge" themeColor="onSurfaceVariant">
                     Status now
                   </ThemedText>
                   {badge ? (
@@ -209,30 +239,19 @@ export default function VerifyTicketScreen() {
                   ) : null}
                 </View>
                 {live.token.carriedOver ? (
-                  <ThemedText type="small" themeColor="inkMuted">
+                  <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
                     Kept from an earlier session.
                   </ThemedText>
                 ) : null}
                 {live.token.state === "MISSED" ? (
                   <>
-                    <ThemedText type="small" themeColor="inkMuted">
+                    <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
                       {live.token.rejoinAvailable === false
                         ? "This ticket missed its turn and can't rejoin again."
                         : "This ticket missed its turn. It can rejoin once, by the same rule as I'm here."}
                     </ThemedText>
-                    {live.token.rejoinAvailable !== false &&
-                    check.status === "valid" ? (
-                      <Button
-                        title="Rejoin for customer"
-                        icon="restart_alt"
-                        variant="brand"
-                        loading={rejoin.isPending}
-                        onPress={() => void onRejoin()}
-                        needsNetwork
-                      />
-                    ) : null}
                     {rejoinError ? (
-                      <ThemedText type="small" themeColor="danger">
+                      <ThemedText type="bodyMedium" themeColor="error">
                         {rejoinError}
                       </ThemedText>
                     ) : null}
@@ -240,7 +259,7 @@ export default function VerifyTicketScreen() {
                 ) : null}
               </>
             ) : (
-              <ThemedText type="small" themeColor="inkMuted">
+              <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
                 {live.kind === "loading"
                   ? "Checking the live status…"
                   : live.kind === "offline"
@@ -252,12 +271,7 @@ export default function VerifyTicketScreen() {
             )}
           </Card>
         ) : null}
-        <Button
-          title="Scan another ticket"
-          variant="brand"
-          icon="qr_code_scanner"
-          onPress={again}
-        />
+        {canRejoin ? scanAgain : null}
       </Screen>
     );
   }
@@ -265,7 +279,7 @@ export default function VerifyTicketScreen() {
   return (
     <Screen scroll={false}>
       <Stack.Screen options={{ title: "Verify ticket" }} />
-      <View style={[styles.cameraWrap, { backgroundColor: theme.header }]}>
+      <View style={[styles.cameraWrap, { backgroundColor: theme.scrim }]}>
         {focused ? (
           <CameraView
             style={StyleSheet.absoluteFill}
@@ -275,11 +289,10 @@ export default function VerifyTicketScreen() {
           />
         ) : null}
       </View>
-      <StatusBanner
-        tone="active"
-        title="Scan the customer's ticket code"
-        detail="It is on their ticket screen in the Qpeer app. Works without internet."
-      />
+      <ThemedText type="bodyLarge" style={styles.hint}>
+        Scan the customer's ticket code. It is on their ticket screen in the
+        Qpeer app. Works without internet.
+      </ThemedText>
     </Screen>
   );
 }
@@ -298,4 +311,5 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: Spacing.one,
   },
+  hint: { textAlign: "center", paddingVertical: Spacing.two },
 });
