@@ -68,6 +68,10 @@ export default function MyPaymentsScreen() {
   } else {
     body = (
       <>
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+          Test mode: no real money moves in this version. Refunds take 5–7 days
+          to reach a real account.
+        </ThemedText>
         {items.map((p) => (
           <PaymentRow
             key={p.id}
@@ -86,16 +90,12 @@ export default function MyPaymentsScreen() {
         {payments.hasNextPage ? (
           <Button
             title="Show older payments"
-            variant="secondary"
+            variant="tonal"
             loading={payments.isFetchingNextPage}
             onPress={() => void payments.fetchNextPage()}
             needsNetwork
           />
         ) : null}
-        <ThemedText type="small" themeColor="inkMuted">
-          Test mode: no real money moves in this version. Refunds take 5–7 days
-          to reach a real account.
-        </ThemedText>
       </>
     );
   }
