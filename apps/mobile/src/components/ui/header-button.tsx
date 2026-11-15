@@ -1,8 +1,19 @@
 import { Pressable, StyleSheet, Text } from "react-native";
-import { Spacing, type ThemeColor, Type } from "@/constants/theme";
+import {
+  DISABLED_CONTENT_ALPHA,
+  Radius,
+  RIPPLE_ALPHA,
+  Spacing,
+  type ThemeColor,
+  Type,
+  withAlpha,
+} from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 
-/** A small text button (headers, inline actions), 44 dp touch target. */
+/**
+ * A small M3 text button (headers, inline actions): label large, a real
+ * 48 × 48 dp target (no hitSlop), a ripple inside its full-round shape.
+ */
 export function HeaderButton({
   title,
   onPress,
@@ -17,6 +28,9 @@ export function HeaderButton({
   disabled?: boolean;
 }) {
   const theme = useTheme();
+  const content = disabled
+    ? withAlpha(theme.onSurface, DISABLED_CONTENT_ALPHA)
+    : theme[color];
   return (
     <Pressable
       onPress={onPress}
@@ -24,25 +38,22 @@ export function HeaderButton({
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel ?? title}
       accessibilityState={{ disabled }}
-      hitSlop={8}
-      style={({ pressed }) => [
-        styles.button,
-        (pressed || disabled) && styles.pressed,
-      ]}
+      android_ripple={{ color: theme[color], alpha: RIPPLE_ALPHA }}
+      style={styles.button}
     >
-      <Text style={[styles.text, { color: theme[color] }]}>{title}</Text>
+      <Text style={[Type.labelLarge, { color: content }]}>{title}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   button: {
-    minHeight: 44,
-    minWidth: 44,
-    paddingHorizontal: Spacing.two,
+    minHeight: 48,
+    minWidth: 48,
+    paddingHorizontal: Spacing.twoHalf,
     alignItems: "center",
     justifyContent: "center",
+    borderRadius: Radius.full,
+    overflow: "hidden",
   },
-  pressed: { opacity: 0.6 },
-  text: { ...Type.body, fontWeight: "700" },
 });

@@ -54,8 +54,9 @@ type ScreenProps = {
 };
 
 /**
- * Screen body under the header: `bg` background, padding 16, 16 between
- * cards, optional scroll and pull-to-refresh, and the connection banner.
+ * Screen body under the header: `surface` background, padding 16, 16
+ * between groups, optional scroll and pull-to-refresh, and the connection
+ * banner.
  *
  * Scroll screens are keyboard-aware (B2): the content shrinks above the
  * keyboard, and the focused field plus a button's height below it is
@@ -144,7 +145,7 @@ export function Screen({
           styles.fill,
           styles.content,
           padding,
-          { backgroundColor: theme.bg },
+          { backgroundColor: theme.surface },
           contentStyle,
         ]}
       >
@@ -156,7 +157,7 @@ export function Screen({
 
   return (
     <KeyboardAvoidingView
-      style={[styles.fill, { backgroundColor: theme.bg }]}
+      style={[styles.fill, { backgroundColor: theme.surface }]}
       behavior={Platform.OS === "web" ? undefined : "padding"}
       keyboardVerticalOffset={headerHeight}
     >
@@ -178,7 +179,7 @@ export function Screen({
               onRefresh={onRefresh}
               colors={[theme.primary]}
               tintColor={theme.primary}
-              progressBackgroundColor={theme.card}
+              progressBackgroundColor={theme.surfaceContainerHigh}
             />
           ) : undefined
         }

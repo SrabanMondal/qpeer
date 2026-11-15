@@ -1,11 +1,11 @@
 import type { TokenView } from "@qpeer/shared";
 import { useState } from "react";
-import { Linking, StyleSheet, View } from "react-native";
+import { Linking, Pressable, StyleSheet, View } from "react-native";
 
 import { ProblemCard } from "@/components/problem-card";
 import { ThemedText } from "@/components/themed-text";
-import { Button, Card, Icon } from "@/components/ui";
-import { Spacing } from "@/constants/theme";
+import { Button, Icon } from "@/components/ui";
+import { Radius, RIPPLE_ALPHA, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useLocationCheck } from "@/lib/api";
 import { formatRupees } from "@/lib/format";
@@ -16,12 +16,7 @@ import {
 } from "@/lib/join-errors";
 import { readJoinLocation, turnOnLocation } from "@/lib/join-location";
 import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
-import {
-  formatClock,
-  formatCountdown,
-  formatDateTime,
-  ticketTitle,
-} from "@/lib/queue-format";
+import { formatClock, formatDateTime, ticketTitle } from "@/lib/queue-format";
 
 type GpsPhase = "idle" | "locating" | "sending";
 
@@ -73,8 +68,8 @@ function GpsStatus({ phase, idleText }: { phase: GpsPhase; idleText: string }) {
   const offline = useOffline();
   return (
     <ThemedText
-      type="small"
-      themeColor="inkMuted"
+      type="bodySmall"
+      themeColor="onSurfaceVariant"
       accessibilityLiveRegion="polite"
     >
       {phase === "locating"
@@ -88,44 +83,29 @@ function GpsStatus({ phase, idleText }: { phase: GpsPhase; idleText: string }) {
   );
 }
 
-/**
- * GRACE hero (R3, design guide §5a): "Come now — m:ss left" in display size,
- * ticking every second on the server-corrected clock, "Counter N" under it.
- */
-export function GraceCard({ t, now }: { t: TokenView; now: number }) {
-  const theme = useTheme();
-  const ends = t.graceEndsAt ?? t.graceUntil;
-  const left = ends !== null ? ends - now : 0;
+/** Title line of a ticket state block: an icon and a title large. */
+function StateTitle({
+  icon,
+  title,
+}: {
+  icon: "schedule" | "bolt";
+  title: string;
+}) {
   return (
-    <Card style={[styles.hero, { backgroundColor: theme.warningSoft }]}>
-      <View style={styles.headline}>
-        <Icon name="directions_run" size={28} color="warning" />
-        <ThemedText type="heading">You were called — come now</ThemedText>
-      </View>
-      <ThemedText
-        type="display"
-        numberOfLines={2}
-        adjustsFontSizeToFit
-        accessibilityLiveRegion="polite"
-      >
-        {left > 0
-          ? `Come now — ${formatCountdown(left)} left`
-          : "Come to the counter now"}
+    <View style={styles.headline}>
+      <Icon name={icon} size={24} color="primary" />
+      <ThemedText type="titleLarge" accessibilityRole="header">
+        {title}
       </ThemedText>
-      {t.counter !== null ? (
-        <ThemedText type="heading">{`Counter ${t.counter}`}</ThemedText>
-      ) : null}
-      <ThemedText type="small" themeColor="inkMuted">
-        {`Tell the staff your number (#${t.label}${t.checkCode ? ` · ${t.checkCode}` : ""}). If the time runs out your turn is missed; you can then rejoin once with I'm here.`}
-      </ThemedText>
-    </Card>
+    </View>
   );
 }
 
 /**
  * MISSED (QUE-22/23, design guide §5a): "You missed your turn. When you're
  * here, tap I'm here to rejoin." One rejoin, with a GPS check; after the
- * late window the rejoin goes to the end of the line.
+ * late window the rejoin goes to the end of the line. "I'm here" is the
+ * state's one primary action.
  */
 export function MissedCard({
   t,
@@ -136,7 +116,6 @@ export function MissedCard({
   now: number;
   onRejoined: (t: TokenView) => void;
 }) {
-  const theme = useTheme();
   const offline = useOffline();
   const gps = useGpsAction(t.id, "rejoin", onRejoined);
   const canRejoin = t.rejoinAvailable !== false;
@@ -144,17 +123,14 @@ export function MissedCard({
   const late = until !== null && now > until;
   return (
     <>
-      <Card style={[styles.hero, { backgroundColor: theme.warningSoft }]}>
-        <View style={styles.headline}>
-          <Icon name="schedule" size={28} color="warning" />
-          <ThemedText type="title">You missed your turn</ThemedText>
-        </View>
+      <View style={styles.block}>
+        <StateTitle icon="schedule" title="You missed your turn" />
         {canRejoin ? (
           <>
-            <ThemedText type="body">
+            <ThemedText type="bodyLarge">
               When you're here, tap I'm here to rejoin.
             </ThemedText>
-            <ThemedText type="small" themeColor="inkMuted">
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
               {until === null
                 ? "You can rejoin once. You go back in a little behind the front."
                 : late
@@ -163,12 +139,11 @@ export function MissedCard({
             </ThemedText>
             <Button
               title="I'm here"
-              variant="brand"
+              size="large"
               icon="where_to_vote"
               loading={gps.phase !== "idle"}
               disabled={offline}
               onPress={() => void gps.run()}
-              style={styles.big}
               accessibilityLabel="I'm here: check my location and rejoin the queue"
             />
             <GpsStatus
@@ -177,13 +152,13 @@ export function MissedCard({
             />
           </>
         ) : (
-          <ThemedText type="body">
+          <ThemedText type="bodyLarge">
             {t.rejoined
               ? "This ticket already rejoined once, so it can't rejoin again. Ask the staff if you need help."
               : "The queue is closed, so this ticket can't rejoin. You can join again when it opens."}
           </ThemedText>
         )}
-      </Card>
+      </View>
       {gps.problem ? (
         <ProblemCard problem={gps.problem} onFix={(p) => void gps.fix(p)} />
       ) : null}
@@ -193,7 +168,8 @@ export function MissedCard({
 
 /**
  * BOOKED pass (PRI-03, design guide §5a): "Priority Pass · booked", valid
- * until, one big "Check in" (GPS), small outline Cancel with the refund.
+ * until, one big "Check in" (GPS, the primary action), an outlined Cancel
+ * with the refund.
  */
 export function BookedCard({
   t,
@@ -213,29 +189,22 @@ export function BookedCard({
   const pct = t.cancelRefundPct ?? null;
   return (
     <>
-      <Card>
-        <View style={styles.headline}>
-          <Icon name="bolt" size={28} color="brand" />
-          <ThemedText type="title">Priority Pass · booked</ThemedText>
-        </View>
-        <ThemedText type="heading" themeColor="inkMuted">
-          {`${t.businessName} · ${t.queueName}`}
-        </ThemedText>
+      <View style={styles.block}>
+        <StateTitle icon="bolt" title="Priority Pass · booked" />
         {t.validUntil ? (
-          <ThemedText type="body">{`Valid until ${formatDateTime(t.validUntil)}`}</ThemedText>
+          <ThemedText type="bodyLarge">{`Valid until ${formatDateTime(t.validUntil)}`}</ThemedText>
         ) : null}
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           You are not in the line yet. At the business, tap Check in: you then
           join the priority lane and get your P number.
         </ThemedText>
         <Button
           title="Check in"
-          variant="brand"
+          size="large"
           icon="where_to_vote"
           loading={gps.phase !== "idle"}
           disabled={offline || closed || paused}
           onPress={() => void gps.run()}
-          style={styles.big}
           accessibilityLabel="Check in: check my location and join the priority lane"
         />
         <GpsStatus
@@ -254,13 +223,13 @@ export function BookedCard({
               ? `Cancel pass · ${pct}% back`
               : "Cancel pass · no refund"
           }
-          variant="outline"
+          variant="outlined"
           icon="close"
           loading={cancelling}
           disabled={offline}
           onPress={onCancel}
         />
-      </Card>
+      </View>
       {gps.problem ? (
         <ProblemCard problem={gps.problem} onFix={(p) => void gps.fix(p)} />
       ) : null}
@@ -269,8 +238,10 @@ export function BookedCard({
 }
 
 /**
- * PRI-05 / C2: "Skip ahead for ₹X · about N min faster", only when the server
- * says `upgrade.show` (never "save ~0 min"; hidden under the threshold).
+ * PRI-05 / C2: "Skip ahead · about N min faster" as a tonal row with the
+ * price in a ₹ chip (the mock-up's row), only when the server says
+ * `upgrade.show` (never "save ~0 min"; hidden under the threshold). The
+ * whole row is one button.
  */
 export function SkipAheadCard({
   t,
@@ -279,33 +250,57 @@ export function SkipAheadCard({
   t: TokenView;
   onPress: () => void;
 }) {
+  const theme = useTheme();
   const u = t.upgrade;
   if (!u?.show || u.savingMin <= 0) return null;
+  const price = formatRupees(u.pricePaise);
+  // The ticket screen shows this row only while online (it needs the server).
   return (
-    <Card>
-      <View style={styles.headline}>
-        <Icon name="fast_forward" size={24} color="brand" />
-        <ThemedText type="heading" style={styles.flex}>
-          {`Skip ahead for ${formatRupees(u.pricePaise)} · about ${u.savingMin} min faster`}
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={`Skip ahead for ${price}, about ${u.savingMin} minutes faster`}
+      android_ripple={{ color: theme.onPrimaryContainer, alpha: RIPPLE_ALPHA }}
+      style={[styles.skip, { backgroundColor: theme.primaryContainer }]}
+    >
+      <View style={styles.flex}>
+        <ThemedText type="bodyLarge" themeColor="onPrimaryContainer">
+          {`Skip ahead · about ${u.savingMin} min faster`}
+        </ThemedText>
+        <ThemedText type="bodySmall" themeColor="onPrimaryContainer">
+          {`Your ticket ${ticketTitle(t)} moves to the priority lane and keeps its number.`}
         </ThemedText>
       </View>
-      <ThemedText type="small" themeColor="inkMuted">
-        {`Your ticket ${ticketTitle(t)} moves to the priority lane and keeps its number.`}
-      </ThemedText>
-      <Button
-        title={`Skip ahead · ${formatRupees(u.pricePaise)}`}
-        variant="brand"
-        icon="fast_forward"
-        onPress={onPress}
-        needsNetwork
-      />
-    </Card>
+      <View style={[styles.chip, { backgroundColor: theme.primary }]}>
+        <ThemedText type="labelLarge" themeColor="onPrimary">
+          {price}
+        </ThemedText>
+      </View>
+    </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  hero: { gap: Spacing.two },
+  block: { gap: Spacing.twoHalf },
   headline: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
-  big: { minHeight: 64 },
-  flex: { flex: 1 },
+  flex: { flex: 1, gap: Spacing.half },
+  skip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.twoHalf,
+    minHeight: 64,
+    paddingVertical: Spacing.twoHalf,
+    paddingLeft: Spacing.three,
+    paddingRight: Spacing.twoHalf,
+    borderRadius: Radius.card,
+    overflow: "hidden",
+  },
+  chip: {
+    minHeight: 36,
+    minWidth: 56,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });

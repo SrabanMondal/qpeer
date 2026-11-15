@@ -104,7 +104,7 @@ export function MyTokens() {
         action={
           <Button
             title="Scan QR to join"
-            variant="brand"
+            size="large"
             icon="qr_code_scanner"
             onPress={scan}
           />
@@ -178,7 +178,7 @@ export function MyTokens() {
       {activeItems.length > 0 || recentItems.length > 0 ? (
         <Button
           title="Scan QR to join"
-          variant="brand"
+          size="large"
           icon="qr_code_scanner"
           onPress={scan}
         />

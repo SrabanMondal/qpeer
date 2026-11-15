@@ -1,16 +1,24 @@
 import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Card } from "@/components/ui/card";
-import { Icon, type IconName } from "@/components/ui/icon";
+import type { IconName } from "@/components/ui/icon";
 import { Spacing } from "@/constants/theme";
 
-export type Stat = { label: string; value: number | string; icon: IconName };
+export type Stat = {
+  label: string;
+  value: number | string;
+  /** @deprecated no longer drawn: the figure and its caption carry it. */
+  icon?: IconName;
+};
 
-/** Equal columns: caption above, icon + big number below (§3, Waiting / In service / Total). */
+/**
+ * Figures in equal columns (§3, Waiting / In service / Total): caption in
+ * body medium above, the number in Archivo (`figure`, tabular) below. No
+ * card: space and type make the group.
+ */
 export function StatRow({ stats }: { stats: readonly Stat[] }) {
   return (
-    <Card style={styles.row}>
+    <View style={styles.row}>
       {stats.map((s) => (
         <View
           key={s.label}
@@ -18,21 +26,17 @@ export function StatRow({ stats }: { stats: readonly Stat[] }) {
           accessible
           accessibilityLabel={`${s.label}: ${s.value}`}
         >
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {s.label}
           </ThemedText>
-          <View style={styles.value}>
-            <Icon name={s.icon} size={22} color="primary" />
-            <ThemedText type="title">{String(s.value)}</ThemedText>
-          </View>
+          <ThemedText type="figure">{String(s.value)}</ThemedText>
         </View>
       ))}
-    </Card>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  row: { flexDirection: "row", justifyContent: "space-around" },
-  col: { flex: 1, alignItems: "center", gap: Spacing.one },
-  value: { flexDirection: "row", alignItems: "center", gap: Spacing.one },
+  row: { flexDirection: "row", gap: Spacing.three },
+  col: { flex: 1, gap: Spacing.half },
 });

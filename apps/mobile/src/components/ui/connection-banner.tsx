@@ -1,7 +1,8 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Pressable, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
+import { HeaderButton } from "@/components/ui/header-button";
 import { Icon } from "@/components/ui/icon";
 import { Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
@@ -14,6 +15,7 @@ import { retryNetworkFailures, useOffline } from "@/lib/network";
  * network errors, "Connecting…" while the automatic sign-in is retried.
  * Screens never block on it: they keep showing what they last had, and
  * actions that need the server are disabled with `OFFLINE_ACTION_TEXT`.
+ * A calm tonal strip: the icon and the words carry the meaning.
  */
 export function ConnectionBanner() {
   const { connecting, retry } = useAuth();
@@ -27,28 +29,23 @@ export function ConnectionBanner() {
 
   return (
     <View
-      style={[
-        styles.strip,
-        { backgroundColor: theme.warningSoft, borderColor: theme.border },
-      ]}
+      style={[styles.strip, { backgroundColor: theme.surfaceContainerHighest }]}
       accessibilityRole="summary"
       accessibilityLiveRegion="polite"
     >
-      <Icon name={offline ? "cloud_off" : "sync"} size={18} color="warning" />
-      <ThemedText type="small" style={styles.text} numberOfLines={1}>
+      <Icon
+        name={offline ? "cloud_off" : "sync"}
+        size={18}
+        color="onSurfaceVariant"
+      />
+      <ThemedText type="labelLarge" style={styles.text} numberOfLines={1}>
         {text}
       </ThemedText>
-      <Pressable
-        onPress={onRetry}
-        accessibilityRole="button"
+      <HeaderButton
+        title="Retry"
         accessibilityLabel="Retry now"
-        hitSlop={8}
-        style={styles.retry}
-      >
-        <ThemedText type="label" themeColor="primary">
-          Retry
-        </ThemedText>
-      </Pressable>
+        onPress={onRetry}
+      />
     </View>
   );
 }
@@ -58,17 +55,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.two,
-    minHeight: 36,
+    minHeight: 48,
     paddingLeft: Spacing.twoHalf,
-    borderRadius: Radius.input,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.md,
   },
-  text: { flex: 1, fontWeight: "600" },
-  retry: {
-    minHeight: 36,
-    minWidth: 56,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: Spacing.twoHalf,
-  },
+  text: { flex: 1 },
 });

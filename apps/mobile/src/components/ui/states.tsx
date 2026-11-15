@@ -15,14 +15,14 @@ export function LoadingState({ label = "Loading…" }: { label?: string }) {
   return (
     <View style={styles.centre} accessibilityLiveRegion="polite">
       <ActivityIndicator size="large" color={theme.primary} />
-      <ThemedText type="small" themeColor="inkMuted">
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         {label}
       </ThemedText>
     </View>
   );
 }
 
-/** Friendly card for "nothing here yet" and for tabs whose step is not built yet. */
+/** Friendly block for "nothing here yet" and for tabs whose step is not built yet. */
 export function EmptyState({
   title,
   message,
@@ -37,19 +37,24 @@ export function EmptyState({
 }) {
   const theme = useTheme();
   return (
-    <Card style={styles.emptyCard}>
+    <Card style={styles.emptyCard} tone="surfaceContainerLow">
       {icon ? (
-        <View style={[styles.iconWrap, { backgroundColor: theme.brandSoft }]}>
-          <Icon name={icon} size={32} color="brand" />
+        <View
+          style={[
+            styles.iconWrap,
+            { backgroundColor: theme.secondaryContainer },
+          ]}
+        >
+          <Icon name={icon} size={32} color="onSecondaryContainer" />
         </View>
       ) : null}
-      <ThemedText type="heading" style={styles.centredText}>
+      <ThemedText type="titleLarge" style={styles.centredText}>
         {title}
       </ThemedText>
       {message ? (
         <ThemedText
-          type="small"
-          themeColor="inkMuted"
+          type="bodyMedium"
+          themeColor="onSurfaceVariant"
           style={styles.centredText}
         >
           {message}
@@ -78,12 +83,15 @@ export function ErrorState({
   const api = error instanceof ApiError ? error : null;
   return (
     <Card>
-      <ThemedText type="heading" themeColor="danger">
-        {title}
-      </ThemedText>
-      <ThemedText type="body">{errorText(error)}</ThemedText>
+      <View style={styles.errorHead}>
+        <Icon name="error" color="error" />
+        <ThemedText type="titleMedium" themeColor="error" style={styles.flex}>
+          {title}
+        </ThemedText>
+      </View>
+      <ThemedText type="bodyLarge">{errorText(error)}</ThemedText>
       {api ? (
-        <ThemedText type="small" themeColor="inkMuted" selectable>
+        <ThemedText type="bodySmall" themeColor="onSurfaceVariant" selectable>
           Code: {api.code}
           {api.status ? ` (HTTP ${api.status})` : ""}
           {api.requestId ? `\nRequest ID: ${api.requestId}` : ""}
@@ -92,7 +100,8 @@ export function ErrorState({
       {onRetry ? (
         <Button
           title="Retry"
-          variant="secondary"
+          variant="tonal"
+          icon="refresh"
           onPress={onRetry}
           loading={retrying}
         />
@@ -117,10 +126,12 @@ const styles = StyleSheet.create({
   iconWrap: {
     width: 64,
     height: 64,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.full,
     alignItems: "center",
     justifyContent: "center",
   },
   centredText: { textAlign: "center" },
   action: { alignSelf: "stretch", marginTop: Spacing.two },
+  errorHead: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
+  flex: { flex: 1 },
 });

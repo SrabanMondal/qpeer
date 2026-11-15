@@ -1,30 +1,27 @@
 import type { ReactNode } from "react";
 import { type StyleProp, StyleSheet, View, type ViewStyle } from "react-native";
 
-import { Radius, Spacing } from "@/constants/theme";
-import { useIsDark, useTheme } from "@/hooks/use-theme";
+import { Radius, Spacing, type ThemeColor } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 
-/** White rounded card (§3): radius 16, padding 16, soft shadow; a border in dark mode. */
+/**
+ * A tonal card (§3): a surface container fill, radius 16, padding 16, no
+ * shadow and no border; depth comes from the tone. `tone` picks the
+ * container step (default `surfaceContainer`). Not every group needs one:
+ * use space and type first.
+ */
 export function Card({
   children,
   style,
+  tone = "surfaceContainer",
 }: {
   children: ReactNode;
   style?: StyleProp<ViewStyle>;
+  tone?: ThemeColor;
 }) {
   const theme = useTheme();
-  const dark = useIsDark();
   return (
-    <View
-      style={[
-        styles.card,
-        { backgroundColor: theme.card },
-        dark
-          ? { borderWidth: 1, borderColor: theme.border }
-          : { ...styles.shadow, shadowColor: theme.shadow },
-        style,
-      ]}
-    >
+    <View style={[styles.card, { backgroundColor: theme[tone] }, style]}>
       {children}
     </View>
   );
@@ -32,10 +29,4 @@ export function Card({
 
 const styles = StyleSheet.create({
   card: { borderRadius: Radius.card, padding: Spacing.three, gap: Spacing.two },
-  shadow: {
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-  },
 });

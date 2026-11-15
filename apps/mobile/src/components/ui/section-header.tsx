@@ -4,7 +4,10 @@ import { StyleSheet, View } from "react-native";
 import { ThemedText } from "@/components/themed-text";
 import { Spacing } from "@/constants/theme";
 
-/** Small uppercase label above a group of cards (`label` type, `inkMuted`). */
+/**
+ * M3 list subheader above a group: title small in `primary`, sentence case.
+ * Space above it separates the group; no divider.
+ */
 export function SectionHeader({
   title,
   right,
@@ -16,12 +19,12 @@ export function SectionHeader({
   return (
     <View style={styles.row}>
       <ThemedText
-        type="label"
-        themeColor="inkMuted"
+        type="titleSmall"
+        themeColor="primary"
         accessibilityRole="header"
         style={styles.title}
       >
-        {title.toUpperCase()}
+        {title}
       </ThemedText>
       {right}
     </View>
@@ -34,8 +37,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
     marginTop: Spacing.two,
-    marginBottom: -Spacing.two,
+    marginBottom: -Spacing.one,
     gap: Spacing.two,
   },
-  title: { flex: 1, letterSpacing: 0.5 },
+  title: { flex: 1 },
 });

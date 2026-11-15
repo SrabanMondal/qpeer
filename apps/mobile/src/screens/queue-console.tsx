@@ -22,6 +22,7 @@ import { ThemedText } from "@/components/themed-text";
 import {
   Badge,
   Button,
+  boardNumber,
   Card,
   ChoiceChips,
   ConfirmDialog,
@@ -34,8 +35,16 @@ import {
   SectionHeader,
   StatRow,
   StatusBanner,
+  TokenBoard,
 } from "@/components/ui";
-import { Radius, Spacing } from "@/constants/theme";
+import {
+  DISABLED_CONTENT_ALPHA,
+  Elevation,
+  Radius,
+  RIPPLE_ALPHA,
+  Spacing,
+  withAlpha,
+} from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import {
   type ConsoleCommand,
@@ -387,38 +396,45 @@ function UndoBar({
 }) {
   const theme = useTheme();
   const insets = useSafeAreaInsets();
+  const action = busy
+    ? withAlpha(theme.inverseOnSurface, DISABLED_CONTENT_ALPHA)
+    : theme.inversePrimary;
   return (
+    // An M3 snackbar with one action: inverseSurface, radius 4, level 3
+    // shadow (it floats).
     <View
       style={[
         styles.undo,
         styles.undoFloating,
         {
-          backgroundColor: theme.header,
-          shadowColor: theme.shadow,
+          backgroundColor: theme.inverseSurface,
+          boxShadow: Elevation.level3,
           left: insets.left + Spacing.three,
           right: insets.right + Spacing.three,
         },
       ]}
       accessibilityLiveRegion="polite"
     >
-      <ThemedText type="body" themeColor="onPrimary" style={styles.flex}>
+      <ThemedText
+        type="bodyMedium"
+        themeColor="inverseOnSurface"
+        style={styles.flex}
+      >
         {label ? `Called #${label}` : "Called next"} · undo in{" "}
         {formatCountdown(undoLeft)}
       </ThemedText>
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Undo the last Next"
+        accessibilityState={{ disabled: busy }}
         disabled={busy}
-        hitSlop={8}
         onPress={onUndo}
-        style={({ pressed }) => [
-          styles.undoButton,
-          (pressed || busy) && styles.dim,
-        ]}
+        android_ripple={{ color: theme.inversePrimary, alpha: RIPPLE_ALPHA }}
+        style={styles.undoButton}
       >
-        <Icon name="undo" color="onPrimary" />
-        <ThemedText type="body" themeColor="onPrimary">
-          UNDO
+        <Icon name="undo" size={20} colorValue={action} />
+        <ThemedText type="labelLarge" style={{ color: action }}>
+          Undo
         </ThemedText>
       </Pressable>
     </View>
@@ -479,6 +495,7 @@ function ConsoleView({
   rejoinFor: RejoinTarget;
   setRejoinFor: (t: RejoinTarget) => void;
 }) {
+  const theme = useTheme();
   const missed = state.missed ?? [];
   const dueText = priorityDueText(state);
   const status = liveStatusLook(state.status);
@@ -568,7 +585,7 @@ function ConsoleView({
                 <Button
                   title="Served"
                   icon="check"
-                  variant="secondary"
+                  variant="tonal"
                   disabled={busy}
                   onPress={() =>
                     void run(
@@ -581,7 +598,7 @@ function ConsoleView({
                 <Button
                   title="No-show"
                   icon="person_off"
-                  variant="danger-soft"
+                  variant="danger-tonal"
                   disabled={busy}
                   onPress={() =>
                     void run(
@@ -651,11 +668,11 @@ function ConsoleView({
 
       {closed ? (
         <>
-          <Card style={styles.centreCard}>
-            <ThemedText type="heading">{queue.name} is closed</ThemedText>
+          <Card style={styles.centreCard} tone="surfaceContainerLow">
+            <ThemedText type="titleLarge">{queue.name} is closed</ThemedText>
             <ThemedText
-              type="small"
-              themeColor="inkMuted"
+              type="bodyMedium"
+              themeColor="onSurfaceVariant"
               style={styles.centreText}
             >
               {carried.length > 0
@@ -665,7 +682,7 @@ function ConsoleView({
             <Button
               title="Open queue"
               icon="lock_open"
-              variant="brand"
+              size="large"
               loading={busy}
               onPress={() =>
                 void run({ kind: "queue", action: "open" }, "Could not open")
@@ -691,30 +708,10 @@ function ConsoleView({
         </>
       ) : (
         <>
-          {/* B10: one compact row, so Called and NEXT fit above the fold. */}
-          <Card style={styles.servingCard}>
-            <View style={styles.servingRow}>
-              <View style={styles.flex}>
-                <ThemedText type="heading">Now Serving</ThemedText>
-                {multi && state.serving.length > 0 ? (
-                  <ThemedText type="small" themeColor="inkMuted">
-                    {state.serving
-                      .map((s) => `Counter ${s.counter ?? "?"}: #${s.label}`)
-                      .join(" · ")}
-                  </ThemedText>
-                ) : null}
-              </View>
-              <ThemedText
-                type="display"
-                accessibilityLiveRegion="polite"
-                numberOfLines={1}
-                adjustsFontSizeToFit
-              >
-                {state.nowServing ? `#${state.nowServing}` : "—"}
-              </ThemedText>
-            </View>
-          </Card>
+          {/* The hero: the same LED board the customers see (design guide §1). */}
+          <ServingBoard state={state} paused={paused} multi={multi} />
 
+          {/* B10: Served / No-show right under the board, above NEXT. */}
           {calledSection}
 
           {multi ? (
@@ -729,9 +726,11 @@ function ConsoleView({
             />
           ) : null}
 
+          {/* NEXT: the console's one primary action, big brass full-round. */}
           <Button
             title={paused ? "Paused" : canNext ? "NEXT" : "Nobody waiting"}
             icon="fast_forward"
+            size="hero"
             accessibilityLabel={
               multi ? `Call next to counter ${counter}` : "Call next"
             }
@@ -747,14 +746,13 @@ function ConsoleView({
                 "Could not call next",
               )
             }
-            style={styles.next}
           />
           {dueText ? (
             <View style={styles.dueRow}>
-              <Icon name="bolt" size={18} color="brand" />
+              <Icon name="bolt" size={18} color="primary" />
               <ThemedText
-                type="small"
-                themeColor="inkMuted"
+                type="bodyMedium"
+                themeColor="onSurfaceVariant"
                 style={styles.flex}
                 accessibilityLiveRegion="polite"
               >
@@ -767,7 +765,7 @@ function ConsoleView({
             <Button
               title={paused ? "Resume" : "Pause"}
               icon={paused ? "play_arrow" : "pause"}
-              variant="secondary"
+              variant="tonal"
               disabled={busy}
               onPress={() =>
                 void run(
@@ -780,7 +778,7 @@ function ConsoleView({
             <Button
               title="Skip"
               icon="skip_next"
-              variant="secondary"
+              variant="tonal"
               accessibilityLabel={
                 atCounter ? `Skip #${atCounter.label}` : "Skip"
               }
@@ -802,7 +800,7 @@ function ConsoleView({
                   : "Priority (0)"
               }
               icon="emergency"
-              variant="danger-soft"
+              variant="danger-tonal"
               accessibilityLabel={`Priority triage, ${state.triageLeftToday} left today`}
               disabled={busy || state.triageLeftToday <= 0}
               onPress={() => void onTriage()}
@@ -811,14 +809,14 @@ function ConsoleView({
             <Button
               title="Add person"
               icon="person_add"
-              variant="secondary"
+              variant="tonal"
               accessibilityLabel="Add person, coming soon"
               disabled
               onPress={() => undefined}
               style={styles.cell}
             />
           </View>
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
             Add person (for customers without the app) is coming soon.
           </ThemedText>
         </>
@@ -869,7 +867,7 @@ function ConsoleView({
                   <Button
                     title="Rejoin for customer"
                     icon="restart_alt"
-                    variant="secondary"
+                    variant="tonal"
                     disabled={busy}
                     onPress={() => setRejoinFor({ token: t })}
                     style={styles.rowButton}
@@ -892,7 +890,7 @@ function ConsoleView({
         <Button
           title="Rejoin for customer"
           icon="restart_alt"
-          variant="secondary"
+          variant="tonal"
           disabled={busy}
           onPress={() => setRejoinFor({ token: null })}
           accessibilityLabel="Rejoin a missed customer by number and check code"
@@ -911,12 +909,12 @@ function ConsoleView({
         ]}
       />
       {(state.counts.booked ?? 0) > 0 ? (
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           {`${state.counts.booked} Priority ${state.counts.booked === 1 ? "Pass is" : "Passes are"} paid but not checked in yet (not in the line).`}
         </ThemedText>
       ) : null}
       {!closed ? (
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           Someone joining now:{" "}
           {waitText(
             {
@@ -937,7 +935,7 @@ function ConsoleView({
           <SectionHeader title={`Waiting (${state.counts.waiting})`} />
           {state.waiting.length === 0 ? (
             <Card>
-              <ThemedText type="small" themeColor="inkMuted">
+              <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
                 Nobody is waiting. New joiners appear here at once.
               </ThemedText>
             </Card>
@@ -949,25 +947,36 @@ function ConsoleView({
                 detail={`${t.position !== null ? `${t.position}. ` : ""}joined ${t.carriedOver ? formatDateTime(t.joinedAt) : formatClock(t.joinedAt)}`}
                 onLongPress={() => waitingMenu(t)}
                 trailing={
+                  // M3 icon button: a real 48 dp target, 40 dp ripple.
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`Actions for #${t.label}`}
+                    accessibilityState={{ disabled: busy }}
                     disabled={busy}
-                    hitSlop={8}
                     onPress={() => waitingMenu(t)}
-                    style={({ pressed }) => [
-                      styles.menuButton,
-                      (pressed || busy) && styles.dim,
-                    ]}
+                    android_ripple={{
+                      color: theme.onSurfaceVariant,
+                      alpha: RIPPLE_ALPHA,
+                      borderless: true,
+                      radius: 20,
+                    }}
+                    style={styles.menuButton}
                   >
-                    <Icon name="more_vert" color="inkMuted" />
+                    <Icon
+                      name="more_vert"
+                      colorValue={
+                        busy
+                          ? withAlpha(theme.onSurface, DISABLED_CONTENT_ALPHA)
+                          : theme.onSurfaceVariant
+                      }
+                    />
                   </Pressable>
                 }
               />
             ))
           )}
           {state.waiting.length > MAX_WAITING_ROWS ? (
-            <ThemedText type="small" themeColor="inkMuted">
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
               and {state.waiting.length - MAX_WAITING_ROWS} more…
             </ThemedText>
           ) : null}
@@ -976,7 +985,7 @@ function ConsoleView({
           <Button
             title="Close for the day"
             icon="stop_circle"
-            variant="danger-soft"
+            variant="danger-tonal"
             disabled={busy}
             onPress={() => void onClose()}
           />
@@ -987,11 +996,59 @@ function ConsoleView({
       <Button
         title="Verify a ticket"
         icon="qr_code_scanner"
-        variant="secondary"
+        variant="tonal"
         onPress={onVerify}
         accessibilityLabel="Verify a customer's ticket code"
       />
     </>
+  );
+}
+
+/**
+ * The console hero (design guide §1): "NOW SERVING 006" on the LED board,
+ * with the counters (several counters) or the waiting count under the rule.
+ * Spoken as one sentence; changes are announced politely.
+ */
+function ServingBoard({
+  state,
+  paused,
+  multi,
+}: {
+  state: ConsoleState;
+  paused: boolean;
+  multi: boolean;
+}) {
+  const waiting = state.counts.waiting;
+  const counters = state.serving
+    .filter((s) => s.counter !== null)
+    .map((s) => `C${s.counter} ${boardNumber(s.label)}`)
+    .join("  ");
+  const servingWords = state.nowServing
+    ? `Now serving ${state.nowServing}.`
+    : "Nobody called yet.";
+  const counterWords =
+    multi && state.serving.length > 0
+      ? ` ${state.serving
+          .map((s) => `Counter ${s.counter ?? "?"}: ${s.label}`)
+          .join(", ")}.`
+      : "";
+  return (
+    <TokenBoard
+      live
+      top={{
+        left: "NOW SERVING",
+        right: paused ? "PAUSED" : null,
+        rightTone: "dim",
+      }}
+      number={boardNumber(state.nowServing)}
+      numberTone={state.nowServing ? "led" : "dim"}
+      bottom={
+        multi && counters
+          ? { left: "COUNTERS", right: counters }
+          : { left: "WAITING", right: String(waiting) }
+      }
+      accessibilityLabel={`${servingWords}${counterWords} ${waiting} waiting.${paused ? " The queue is paused." : ""}`}
+    />
   );
 }
 
@@ -1033,16 +1090,21 @@ function TokenRow({
       onLongPress={onLongPress}
       disabled={!onLongPress}
       accessibilityLabel={`#${token.label}, ${tag}, ${line}`}
-      style={[
-        styles.row,
-        { backgroundColor: theme.card, borderColor: theme.border },
-      ]}
+      android_ripple={
+        onLongPress
+          ? { color: theme.onSurface, alpha: RIPPLE_ALPHA }
+          : undefined
+      }
+      style={[styles.row, { backgroundColor: theme.surfaceContainer }]}
     >
       <View style={styles.rowTop}>
         <View
-          style={[styles.labelPill, { backgroundColor: theme.primarySoft }]}
+          style={[
+            styles.labelPill,
+            { backgroundColor: theme.secondaryContainer },
+          ]}
         >
-          <ThemedText type="heading" themeColor="primary">
+          <ThemedText type="figure" themeColor="onSecondaryContainer">
             #{token.label}
           </ThemedText>
         </View>
@@ -1057,7 +1119,7 @@ function TokenRow({
                   : "neutral"
             }
           />
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {line}
           </ThemedText>
         </View>
@@ -1075,18 +1137,11 @@ const styles = StyleSheet.create({
   centreCard: { alignItems: "center" },
   centreText: { textAlign: "center" },
   stretch: { alignSelf: "stretch" },
-  servingCard: { paddingVertical: Spacing.two },
-  servingRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: Spacing.three,
-  },
-  next: { minHeight: 72 },
   undo: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.two,
-    borderRadius: Radius.button,
+    borderRadius: Radius.xs,
     paddingLeft: Spacing.three,
     paddingRight: Spacing.one,
     minHeight: UNDO_BAR_HEIGHT,
@@ -1094,19 +1149,17 @@ const styles = StyleSheet.create({
   undoFloating: {
     position: "absolute",
     bottom: Spacing.twoHalf,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 6,
   },
   undoButton: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.one,
-    minHeight: 44,
+    minHeight: 48,
+    minWidth: 48,
     paddingHorizontal: Spacing.twoHalf,
+    borderRadius: Radius.full,
+    overflow: "hidden",
   },
-  dim: { opacity: 0.6 },
   flex: { flex: 1, gap: Spacing.one },
   grid: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.twoHalf },
   cell: { flexBasis: "47%", flexGrow: 1 },
@@ -1114,7 +1167,7 @@ const styles = StyleSheet.create({
     gap: Spacing.two,
     padding: Spacing.twoHalf,
     borderRadius: Radius.card,
-    borderWidth: StyleSheet.hairlineWidth,
+    overflow: "hidden",
     minHeight: 56,
   },
   rowTop: {
@@ -1128,13 +1181,13 @@ const styles = StyleSheet.create({
     minWidth: 64,
     paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.one,
-    borderRadius: Radius.button,
+    borderRadius: Radius.md,
     alignItems: "center",
   },
-  rowButton: { flex: 1, minHeight: 44, paddingHorizontal: Spacing.twoHalf },
+  rowButton: { flex: 1, paddingHorizontal: Spacing.twoHalf },
   menuButton: {
-    minWidth: 44,
-    minHeight: 44,
+    minWidth: 48,
+    minHeight: 48,
     alignItems: "center",
     justifyContent: "center",
   },

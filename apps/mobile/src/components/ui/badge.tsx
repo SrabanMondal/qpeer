@@ -6,14 +6,18 @@ import { useTheme } from "@/hooks/use-theme";
 
 export type BadgeTone = "success" | "warning" | "danger" | "neutral";
 
+/** Container roles with their on-colours (pairs only, §2). */
 const TONE: Record<BadgeTone, { fill: ThemeColor; text: ThemeColor }> = {
-  success: { fill: "brandSoft", text: "brand" },
-  warning: { fill: "warningSoft", text: "ink" },
-  danger: { fill: "dangerSoft", text: "danger" },
-  neutral: { fill: "bg", text: "inkMuted" },
+  success: { fill: "tertiaryContainer", text: "onTertiaryContainer" },
+  warning: { fill: "primaryContainer", text: "onPrimaryContainer" },
+  danger: { fill: "errorContainer", text: "onErrorContainer" },
+  neutral: { fill: "surfaceContainerHighest", text: "onSurfaceVariant" },
 };
 
-/** A small status pill. Colour is never the only signal: the label says it all. */
+/**
+ * A small status label (radius 8, label medium). Colour is never the only
+ * signal: the words say it all.
+ */
 export function Badge({
   label,
   tone = "neutral",
@@ -25,7 +29,7 @@ export function Badge({
   const look = TONE[tone];
   return (
     <View style={[styles.pill, { backgroundColor: theme[look.fill] }]}>
-      <ThemedText type="label" themeColor={look.text}>
+      <ThemedText type="labelMedium" themeColor={look.text}>
         {label}
       </ThemedText>
     </View>
@@ -35,8 +39,8 @@ export function Badge({
 const styles = StyleSheet.create({
   pill: {
     alignSelf: "flex-start",
-    borderRadius: Radius.pill,
-    paddingHorizontal: Spacing.twoHalf,
+    borderRadius: Radius.sm,
+    paddingHorizontal: Spacing.two,
     paddingVertical: Spacing.half,
   },
 });

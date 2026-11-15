@@ -1,10 +1,11 @@
 import { Tabs } from "expo-router/js-tabs";
 import { useEffect, useState } from "react";
-import type { ColorValue } from "react-native";
+import { StyleSheet, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { HeaderModeSwitch } from "@/components/header-mode-switch";
 import { ThemedView } from "@/components/themed-view";
 import { Icon, type IconName, LoadingState } from "@/components/ui";
-import { Type } from "@/constants/theme";
+import { Radius, Spacing, Type } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useAuth } from "@/lib/auth";
 import { useAppMode } from "@/lib/mode";
@@ -12,11 +13,50 @@ import { useAppMode } from "@/lib/mode";
 /** Longest wait for the first /v1/me answer before the tabs open anyway. */
 const STARTUP_WAIT_MS = 2500;
 
+/** M3 navigation bar: 64 × 32 dp pill indicator, 80 dp tall bar. */
+const INDICATOR_W = 64;
+const INDICATOR_H = 32;
+const BAR_HEIGHT = 80;
+
+/**
+ * M3 navigation bar item icon: selected = filled icon on a
+ * `secondaryContainer` pill; unselected = outlined icon. The tab bar draws
+ * this twice (selected and not) and cross-fades between them.
+ */
 function tabIcon(name: IconName) {
-  return ({ color, size }: { color: ColorValue; size: number }) => (
-    <Icon name={name} size={size} colorValue={color} />
+  return function TabIcon({ focused }: { focused: boolean }) {
+    return <TabIconPill name={name} focused={focused} />;
+  };
+}
+
+function TabIconPill({ name, focused }: { name: IconName; focused: boolean }) {
+  const theme = useTheme();
+  return (
+    <View
+      style={[
+        tabStyles.pill,
+        focused && { backgroundColor: theme.secondaryContainer },
+      ]}
+    >
+      <Icon
+        name={name}
+        size={24}
+        filled={focused}
+        color={focused ? "onSecondaryContainer" : "onSurfaceVariant"}
+      />
+    </View>
   );
 }
+
+const tabStyles = StyleSheet.create({
+  pill: {
+    width: INDICATOR_W,
+    height: INDICATOR_H,
+    borderRadius: Radius.full,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+});
 
 /**
  * Bottom tabs (design guide §4). Customer: Home, Queue, Profile. Business:
@@ -25,6 +65,7 @@ function tabIcon(name: IconName) {
  */
 export default function TabsLayout() {
   const theme = useTheme();
+  const insets = useSafeAreaInsets();
   const { initializing } = useAuth();
   const { mode, me, registered } = useAppMode();
   const [waitedLongEnough, setWaitedLongEnough] = useState(false);
@@ -68,17 +109,23 @@ export default function TabsLayout() {
   return (
     <Tabs
       screenOptions={{
-        tabBarActiveTintColor: theme.primary,
-        tabBarInactiveTintColor: theme.inkMuted,
+        // M3 navigation bar on the platform tab bar (colours and sizes
+        // only): surfaceContainer, no top line, labels always shown.
+        tabBarActiveTintColor: theme.onSurface,
+        tabBarInactiveTintColor: theme.onSurfaceVariant,
         tabBarStyle: {
-          backgroundColor: theme.card,
-          borderTopColor: theme.border,
+          backgroundColor: theme.surfaceContainer,
+          borderTopWidth: 0,
+          height: BAR_HEIGHT + insets.bottom,
         },
-        tabBarLabelStyle: { ...Type.label },
-        headerStyle: { backgroundColor: theme.card },
-        headerTintColor: theme.ink,
-        headerTitleStyle: { ...Type.heading },
-        sceneStyle: { backgroundColor: theme.bg },
+        tabBarItemStyle: { paddingTop: Spacing.twoHalf },
+        tabBarIconStyle: { width: INDICATOR_W, height: INDICATOR_H },
+        tabBarLabelStyle: { ...Type.labelMedium, marginTop: Spacing.one },
+        headerStyle: { backgroundColor: theme.surface },
+        headerShadowVisible: false,
+        headerTintColor: theme.onSurface,
+        headerTitleStyle: { ...Type.appTitle },
+        sceneStyle: { backgroundColor: theme.surface },
       }}
     >
       <Tabs.Screen
@@ -106,12 +153,9 @@ export default function TabsLayout() {
           headerTitle: "My businesses",
           href: businessOnly,
           tabBarIcon: tabIcon("storefront"),
-          // Dark header band with the mode toggle (business-interface.jpg).
+          // The mode toggle sits in the top app bar (business-interface.jpg).
           // B3: title on the left takes the free space and truncates; the
-          // toggle is a compact pill on the right that never shrinks.
-          headerStyle: { backgroundColor: theme.header },
-          headerTintColor: theme.onPrimary,
-          headerTitleStyle: { ...Type.heading, color: theme.onPrimary },
+          // toggle is compact on the right and never shrinks.
           headerTitleAlign: "left",
           headerTitleContainerStyle: { flex: 1, maxWidth: "100%" },
           headerRightContainerStyle: { flexGrow: 0, flexBasis: "auto" },

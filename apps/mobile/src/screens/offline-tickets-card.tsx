@@ -31,14 +31,16 @@ export function OfflineTicketsCard({
   const active = tickets.filter((t) => isActiveState(t.view.state));
 
   return (
-    <Card style={styles.card}>
+    <Card style={styles.card} tone="surfaceContainerLow">
       <View style={styles.head}>
-        <View style={[styles.icon, { backgroundColor: theme.warningSoft }]}>
-          <Icon name="cloud_off" color="warning" />
+        <View
+          style={[styles.icon, { backgroundColor: theme.secondaryContainer }]}
+        >
+          <Icon name="cloud_off" color="onSecondaryContainer" />
         </View>
         <View style={styles.flex}>
-          <ThemedText type="heading">{title}</ThemedText>
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="titleMedium">{title}</ThemedText>
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {message}
           </ThemedText>
         </View>
@@ -60,7 +62,7 @@ export function OfflineTicketsCard({
       {onRetry ? (
         <Button
           title="Try again"
-          variant="secondary"
+          variant="tonal"
           icon="refresh"
           onPress={onRetry}
         />
@@ -73,9 +75,9 @@ const styles = StyleSheet.create({
   card: { gap: Spacing.twoHalf },
   head: { flexDirection: "row", alignItems: "center", gap: Spacing.twoHalf },
   icon: {
-    width: 44,
-    height: 44,
-    borderRadius: Radius.pill,
+    width: 40,
+    height: 40,
+    borderRadius: Radius.full,
     alignItems: "center",
     justifyContent: "center",
   },

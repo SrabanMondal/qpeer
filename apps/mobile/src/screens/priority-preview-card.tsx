@@ -11,7 +11,7 @@ const MINUTE_MS = 60_000;
 /**
  * PRI-02 honest preview (design guide §5a "Buy pass preview"): "Priority
  * holders wait about X min · regular wait about Y min · you save about Z
- * min", with the saving in bold `brand`. Waits are durations measured at
+ * min", with the saving as an Archivo figure in `primary`. Waits are durations measured at
  * `at`; `now` is the server-corrected clock.
  */
 export function PriorityPreviewCard({
@@ -26,7 +26,7 @@ export function PriorityPreviewCard({
     formatMinutes(Math.max(0, ((w.lowMs + w.highMs) / 2 - age) / MINUTE_MS));
   return (
     <Card>
-      <ThemedText type="heading">With a Priority Pass</ThemedText>
+      <ThemedText type="titleMedium">With a Priority Pass</ThemedText>
       {p.priorityWait && p.regularWait ? (
         <>
           <InfoRow
@@ -35,10 +35,10 @@ export function PriorityPreviewCard({
           />
           <InfoRow label="Regular wait" value={`~${minutes(p.regularWait)}`} />
           <View style={styles.row}>
-            <ThemedText type="body" themeColor="inkMuted">
+            <ThemedText type="bodyLarge" themeColor="onSurfaceVariant">
               You save
             </ThemedText>
-            <ThemedText type="heading" themeColor="brand">
+            <ThemedText type="figure" themeColor="primary">
               {`~${p.savingMin} min`}
             </ThemedText>
           </View>

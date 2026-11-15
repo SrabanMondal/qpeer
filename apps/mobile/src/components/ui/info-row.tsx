@@ -3,7 +3,10 @@ import { StyleSheet, View } from "react-native";
 import { ThemedText } from "@/components/themed-text";
 import { Spacing } from "@/constants/theme";
 
-/** Label left (`inkMuted`), value right (`ink`, bold) — §3. Wraps on large fonts. */
+/**
+ * Label left (body large, `onSurfaceVariant`), value right (title medium,
+ * `onSurface`) — §3. Wraps on large fonts.
+ */
 export function InfoRow({
   label,
   value,
@@ -15,10 +18,18 @@ export function InfoRow({
 }) {
   return (
     <View style={styles.row}>
-      <ThemedText type="body" themeColor="inkMuted" style={styles.label}>
+      <ThemedText
+        type="bodyLarge"
+        themeColor="onSurfaceVariant"
+        style={styles.label}
+      >
         {label}
       </ThemedText>
-      <ThemedText type="body" style={styles.value} selectable={selectable}>
+      <ThemedText
+        type="titleMedium"
+        style={styles.value}
+        selectable={selectable}
+      >
         {value}
       </ThemedText>
     </View>
@@ -35,5 +46,5 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.one,
   },
   label: { flexShrink: 0 },
-  value: { flexShrink: 1, fontWeight: "700", textAlign: "right" },
+  value: { flexShrink: 1, textAlign: "right" },
 });
