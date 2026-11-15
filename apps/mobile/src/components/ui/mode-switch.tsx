@@ -21,20 +21,20 @@ const KNOB_OFF = 16;
  * off = outlined track with a small `outline` knob. The whole control is a
  * 48 dp target with a ripple (no hitSlop).
  *
- * `onDark` (the name is historical: the header band is no longer dark) is
- * the compact form for the top app bar: the caption grows only a little
- * with large fonts, so it fits next to the title on a 360 dp screen (B3).
+ * `compact` is the form for the top app bar: the caption grows only a
+ * little with large fonts, so it fits next to the title on a 360 dp screen
+ * (B3).
  */
 export function ModeSwitch({
   mode,
   onChange,
   disabled = false,
-  onDark = false,
+  compact = false,
 }: {
   mode: AppMode;
   onChange: (mode: AppMode) => void;
   disabled?: boolean;
-  onDark?: boolean;
+  compact?: boolean;
 }) {
   const theme = useTheme();
   const on = mode === "business";
@@ -77,7 +77,7 @@ export function ModeSwitch({
         type="labelLarge"
         themeColor="onSurfaceVariant"
         numberOfLines={1}
-        maxFontSizeMultiplier={onDark ? 1.2 : undefined}
+        maxFontSizeMultiplier={compact ? 1.2 : undefined}
       >
         {on ? "Business" : "Customer"}
       </ThemedText>

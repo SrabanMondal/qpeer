@@ -1,11 +1,11 @@
 import type { AppMode } from "@qpeer/shared";
 import { router } from "expo-router";
 import { useCallback } from "react";
-import { Alert } from "react-native";
 
 import { useMe, useUpdateMe } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { errorText } from "@/lib/error-messages";
+import { showToast } from "@/lib/toast";
 
 /**
  * IDN-08: the app mode comes from `/v1/me` (`preferredMode`), so it is restored
@@ -57,10 +57,12 @@ export function useModeToggle() {
       try {
         await switchMode(next);
       } catch (e) {
-        Alert.alert(
-          "Could not switch mode",
-          `${errorText(e)} Your mode did not change.`,
-        );
+        showToast({
+          title: "Could not switch mode",
+          message: `${errorText(e)} Your mode did not change.`,
+          tone: "danger",
+          durationMs: 8000,
+        });
       }
     },
     [mode, registered, switchMode],

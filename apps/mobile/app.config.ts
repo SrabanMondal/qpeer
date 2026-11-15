@@ -23,7 +23,9 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     googleServicesFile:
       process.env.GOOGLE_SERVICES_JSON ?? "./google-services.json",
     adaptiveIcon: {
-      backgroundColor: "#E6F4FE",
+      // The token board's face (`boardBg` in src/constants/theme.ts). The
+      // background image below still wins where the launcher uses it.
+      backgroundColor: "#0B0B0C",
       foregroundImage: "./assets/images/android-icon-foreground.png",
       backgroundImage: "./assets/images/android-icon-background.png",
       monochromeImage: "./assets/images/android-icon-monochrome.png",
@@ -39,9 +41,16 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     [
       "expo-splash-screen",
       {
-        backgroundColor: "#208AEF",
+        // The theme's `surface` (src/constants/theme.ts), light and dark, so
+        // the splash hands over to the first screen without a colour flash.
+        // Native config: needs a rebuild.
+        backgroundColor: "#F7F9FF",
         image: "./assets/images/splash-icon.png",
         imageWidth: 76,
+        dark: {
+          backgroundColor: "#10131A",
+          image: "./assets/images/splash-icon.png",
+        },
       },
     ],
     // iOS only: use CocoaPods instead of SPM so static frameworks work.

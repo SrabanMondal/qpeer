@@ -3,17 +3,23 @@ import { Camera, MapView } from "@rnmapbox/maps";
 import * as Location from "expo-location";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { type ComponentRef, useEffect, useRef, useState } from "react";
-import { Alert, StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
-import { Button, ErrorState, LoadingState, Screen } from "@/components/ui";
+import {
+  Button,
+  ErrorState,
+  Fab,
+  Icon,
+  LoadingState,
+  Screen,
+} from "@/components/ui";
 import { config } from "@/config";
 import { Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { useBusiness, useUpdateBusiness } from "@/lib/api";
-import { errorText } from "@/lib/error-messages";
-import { formatLatLng } from "@/lib/format";
+import { showErrorToast } from "@/lib/toast";
 
 /** Jammu city centre, [longitude, latitude] as Mapbox expects. */
 const JAMMU: [number, number] = [74.857, 32.7266];
@@ -46,8 +52,8 @@ export default function BusinessLocationScreen() {
   if (!config.mapboxToken) {
     return (
       <Screen>
-        <ThemedText type="heading">Map not available</ThemedText>
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="titleMedium">Map not available</ThemedText>
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           Set EXPO_PUBLIC_MAPBOX_TOKEN in apps/mobile/.env.local (or the EAS
           environment) and restart Metro.
         </ThemedText>
@@ -103,7 +109,8 @@ function PinPicker({
     setCenter(target);
   };
 
-  const locateMe = async (quiet: boolean) => {
+  // A failed "Use my location" says so once, inline in the panel.
+  const locateMe = async () => {
     setLocating(true);
     try {
       const position = await phonePosition();
@@ -111,15 +118,12 @@ function PinPicker({
         setLocationNote(null);
         flyTo(position);
       } else {
-        const note =
-          "Location permission is off. Move the map to your business instead.";
-        setLocationNote(note);
-        if (!quiet) Alert.alert("Location not available", note);
+        setLocationNote(
+          "Location permission is off. Move the map to your business instead.",
+        );
       }
     } catch {
-      const note = "Could not get your location. Move the map instead.";
-      setLocationNote(note);
-      if (!quiet) Alert.alert("Location not available", note);
+      setLocationNote("Could not get your location. Move the map instead.");
     } finally {
       setLocating(false);
     }
@@ -131,25 +135,25 @@ function PinPicker({
   useEffect(() => {
     if (initial || startedFromPhone.current) return;
     startedFromPhone.current = true;
-    void locateMe(true);
+    void locateMe();
   }, []);
 
   const save = async () => {
     const location = LatLng.safeParse({ lat: center[1], lng: center[0] });
     if (!location.success) {
-      Alert.alert("Invalid position", "Move the map and try again.");
+      setLocationNote("This spot can't be saved. Move the map and try again.");
       return;
     }
     try {
       await update.mutateAsync({ location: location.data });
       router.back();
     } catch (e) {
-      Alert.alert("Could not save the pin", errorText(e));
+      showErrorToast("Could not save the pin", e);
     }
   };
 
   return (
-    <View style={[styles.fill, { backgroundColor: theme.bg }]}>
+    <View style={[styles.fill, { backgroundColor: theme.surface }]}>
       <View style={styles.fill}>
         <MapView
           style={styles.fill}
@@ -173,11 +177,25 @@ function PinPicker({
             <View
               style={[
                 styles.pinHead,
-                { backgroundColor: theme.brand, borderColor: theme.card },
+                {
+                  backgroundColor: theme.primary,
+                  borderColor: theme.onPrimary,
+                },
               ]}
             />
-            <View style={[styles.pinStem, { backgroundColor: theme.brand }]} />
+            <View
+              style={[styles.pinStem, { backgroundColor: theme.primary }]}
+            />
           </View>
+        </View>
+        {/* The map convention: locate is a button on the map. */}
+        <View style={styles.fab}>
+          <Fab
+            icon="my_location"
+            accessibilityLabel="Use my location"
+            loading={locating}
+            onPress={() => void locateMe()}
+          />
         </View>
       </View>
       <View
@@ -185,34 +203,29 @@ function PinPicker({
           styles.panel,
           {
             paddingBottom: insets.bottom + Spacing.three,
-            backgroundColor: theme.card,
-            borderColor: theme.border,
+            backgroundColor: theme.surfaceContainerLow,
           },
         ]}
       >
         {locationNote ? (
-          <ThemedText type="small" themeColor="danger">
-            {locationNote}
-          </ThemedText>
+          <View style={styles.note}>
+            <Icon name="error" size={20} color="error" />
+            <ThemedText
+              type="bodyMedium"
+              themeColor="error"
+              style={styles.fill}
+            >
+              {locationNote}
+            </ThemedText>
+          </View>
         ) : (
-          <ThemedText type="body">
+          <ThemedText type="bodyLarge">
             Move the map until the pin sits on your entrance.
           </ThemedText>
         )}
-        <ThemedText type="small" themeColor="inkMuted" selectable>
-          {formatLatLng(center[1], center[0])}
-        </ThemedText>
-        <Button
-          title="Use my location"
-          icon="my_location"
-          variant="outline"
-          onPress={() => {
-            void locateMe(false);
-          }}
-          loading={locating}
-        />
         <Button
           title="Save pin"
+          size="large"
           onPress={save}
           loading={update.isPending}
           needsNetwork
@@ -234,18 +247,23 @@ const styles = StyleSheet.create({
   pinHead: {
     width: PIN_SIZE,
     height: PIN_SIZE,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.full,
     borderWidth: 3,
   },
   pinStem: { width: 3, height: STEM },
-  // Rounded top sheet over the map.
+  fab: {
+    position: "absolute",
+    right: Spacing.three,
+    bottom: Spacing.three + Radius.card,
+  },
+  // Rounded tonal panel over the map's bottom edge.
   panel: {
     marginTop: -Radius.card,
     borderTopLeftRadius: Radius.card,
     borderTopRightRadius: Radius.card,
-    borderTopWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: Spacing.three,
     paddingTop: Spacing.three,
-    gap: Spacing.two,
+    gap: Spacing.twoHalf,
   },
+  note: { flexDirection: "row", alignItems: "flex-start", gap: Spacing.two },
 });

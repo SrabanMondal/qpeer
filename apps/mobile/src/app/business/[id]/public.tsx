@@ -6,6 +6,7 @@ import {
   waitSummary,
 } from "@qpeer/shared";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { PriorityChip } from "@/components/priority-chip";
@@ -20,6 +21,7 @@ import {
   LoadingState,
   Screen,
   SectionHeader,
+  Sheet,
   StatusBanner,
   type StatusTone,
 } from "@/components/ui";
@@ -45,6 +47,10 @@ export default function PublicBusinessScreen() {
   const now = useNow(true, 30_000);
   const { user } = useAuth();
   const guest = !user || user.isAnonymous;
+  // The queue whose "Reserve or skip the line" sheet is (or was last) open;
+  // kept while the sheet slides away.
+  const [sheetFor, setSheetFor] = useState<string | null>(null);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   if (!business.data) {
     return (
@@ -77,6 +83,13 @@ export default function PublicBusinessScreen() {
   const bizLook = openLook(bizStatus, b.isOpenNow);
   const stats = b.stats ?? null;
   const summary = stats ? statsSummary(stats) : null;
+  const sheetQueue = queues.find((q) => q.id === sheetFor) ?? null;
+  // With one queue its Join is the page's one action, in the pinned bar.
+  const single = queues.length === 1 ? queues[0] : null;
+  const singleOpen = single?.live?.status === "open";
+
+  const join = (q: QueueView) =>
+    router.push({ pathname: "/q/[id]", params: { id: q.id } });
 
   return (
     <Screen
@@ -84,30 +97,54 @@ export default function PublicBusinessScreen() {
       onRefresh={() => {
         void business.refetch();
       }}
+      bottomBar={
+        single ? (
+          <Button
+            title={singleOpen ? "Join" : "View queue"}
+            size="large"
+            variant={singleOpen ? "filled" : "outlined"}
+            icon={singleOpen ? "how_to_reg" : "info"}
+            onPress={() => join(single)}
+            accessibilityLabel={`${singleOpen ? "Join" : "View"} ${single.name}`}
+          />
+        ) : undefined
+      }
     >
       <Stack.Screen options={{ title: b.name }} />
 
+      {/* The app bar has the name: here what it is, where, and today's hours. */}
       <Card>
         <View style={styles.headerRow}>
-          <View style={[styles.iconWrap, { backgroundColor: theme.brandSoft }]}>
-            <Icon name={categoryIcon(b.category)} size={26} color="brand" />
+          <View
+            style={[
+              styles.iconWrap,
+              { backgroundColor: theme.secondaryContainer },
+            ]}
+          >
+            <Icon
+              name={categoryIcon(b.category)}
+              size={24}
+              color="onSecondaryContainer"
+            />
           </View>
           <View style={styles.flex}>
-            <ThemedText type="label" themeColor="inkMuted">
-              {categoryLabel(b.category).toUpperCase()}
+            <ThemedText type="titleMedium">
+              {categoryLabel(b.category)}
             </ThemedText>
-            <ThemedText type="title">{b.name}</ThemedText>
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+              {`Today: ${b.todayHours.text}`}
+            </ThemedText>
           </View>
         </View>
         {b.address ? (
-          <ThemedText type="body" themeColor="inkMuted">
+          <ThemedText type="bodyLarge" themeColor="onSurfaceVariant">
             {b.address}
           </ThemedText>
         ) : null}
         {b.location ? (
           <Button
             title="Directions"
-            variant="outline"
+            variant="outlined"
             icon="directions"
             onPress={() => {
               if (b.location) {
@@ -119,11 +156,11 @@ export default function PublicBusinessScreen() {
         ) : null}
       </Card>
 
-      <StatusBanner
-        tone={TONE_BANNER[bizLook.tone]}
-        title={bizLook.label}
-        detail={`Today: ${b.todayHours.text}`}
-      />
+      {/* With one queue, its badge says the same: the banner only sums up
+          several. */}
+      {queues.length >= 2 ? (
+        <StatusBanner tone={TONE_BANNER[bizLook.tone]} title={bizLook.label} />
+      ) : null}
 
       <SectionHeader title={`Queues · ${queues.length}`} />
       {queues.length === 0 ? (
@@ -139,62 +176,45 @@ export default function PublicBusinessScreen() {
             queue={q}
             withinHours={b.isOpenNow}
             now={now}
-            guest={guest}
-            onJoin={() =>
-              router.push({ pathname: "/q/[id]", params: { id: q.id } })
-            }
-            onReserve={() =>
-              router.push(payHref({ kind: "reservation", queueId: q.id }))
-            }
-            onPriority={() =>
-              router.push(
-                guest
-                  ? "/sign-in"
-                  : payHref({ kind: "priority", queueId: q.id }),
-              )
-            }
+            onJoin={single ? undefined : () => join(q)}
+            onMore={() => {
+              setSheetFor(q.id);
+              setSheetOpen(true);
+            }}
           />
         ))
       )}
 
-      <SectionHeader title="Last 4 weeks" />
-      <Card>
-        {stats && summary && summary.parts.length > 0 ? (
-          <>
-            <ThemedText type="heading">{summary.parts.join(" · ")}</ThemedText>
-            <ThemedText type="small" themeColor="inkMuted">
+      {stats && summary && summary.parts.length > 0 ? (
+        <>
+          <SectionHeader title="Last 4 weeks" />
+          <Card>
+            <ThemedText type="titleMedium">
+              {summary.parts.join(" · ")}
+            </ThemedText>
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
               {summary.basis.charAt(0).toUpperCase() + summary.basis.slice(1)}.
             </ThemedText>
-          </>
-        ) : (
-          <>
-            <ThemedText type="heading">Not enough data yet</ThemedText>
-            <ThemedText type="small" themeColor="inkMuted">
-              {summary
-                ? `Averages show after more visits (${summary.basis}).`
-                : "Average wait and service times show once this business has been on Qpeer for a while."}
-            </ThemedText>
-          </>
-        )}
-      </Card>
+          </Card>
+        </>
+      ) : null}
 
-      <SectionHeader title="How to get a place" />
-      <Card>
-        <ThemedText type="body">
-          Walk in: go to the business and tap Join on a queue above, or scan the
-          QR code at the counter. Qpeer checks once that you are there. Free.
-        </ThemedText>
-        <ThemedText type="body">
-          Reserve from home: hold a place for a small fee while the queue is
-          open, and come when we alert you. You see the fee and the refund rules
-          before you pay.
-        </ThemedText>
-        {guest ? (
-          <ThemedText type="small" themeColor="inkMuted">
-            Reserving and Priority Passes need a phone or Google sign-in.
-          </ThemedText>
-        ) : null}
-      </Card>
+      <WaysSheet
+        visible={sheetOpen && sheetQueue !== null}
+        queue={sheetQueue}
+        guest={guest}
+        onClose={() => setSheetOpen(false)}
+        onReserve={(q) => {
+          setSheetOpen(false);
+          router.push(payHref({ kind: "reservation", queueId: q.id }));
+        }}
+        onPriority={(q) => {
+          setSheetOpen(false);
+          router.push(
+            guest ? "/sign-in" : payHref({ kind: "priority", queueId: q.id }),
+          );
+        }}
+      />
     </Screen>
   );
 }
@@ -205,83 +225,147 @@ const TONE_BANNER: Record<OpenLook["tone"], StatusTone> = {
   neutral: "closed",
 };
 
+/** True when a queue offers a paid way in (reserve while open, or a pass). */
+function hasPaidWays(q: QueueView): boolean {
+  return q.live?.status === "open" || q.priority?.enabled === true;
+}
+
 function QueueCard({
   queue: q,
   withinHours,
   now,
-  guest,
   onJoin,
-  onReserve,
-  onPriority,
+  onMore,
 }: {
   queue: QueueView;
   withinHours: boolean;
   now: number;
-  guest: boolean;
-  onJoin: () => void;
-  onReserve: () => void;
-  onPriority: () => void;
+  /** Absent when the page's pinned bar holds this queue's Join. */
+  onJoin?: () => void;
+  onMore: () => void;
 }) {
   const live = q.live ?? null;
   const look = openLook(live?.status ?? "closed", withinHours);
   const open = live?.status === "open";
-  const priority = q.priority?.enabled ? q.priority : null;
-  const soldOut = live?.priority?.soldOut === true;
   return (
     <Card>
       <View style={styles.queueTop}>
-        <ThemedText type="heading" style={styles.flex}>
+        <ThemedText type="titleMedium" style={styles.flex}>
           {q.name}
         </ThemedText>
         <Badge label={look.label} tone={look.tone} />
       </View>
       <PriorityChip priority={q.priority} />
-      <ThemedText type="body">
+      <ThemedText type="bodyLarge">
         {live && live.status !== "closed"
           ? waitSummary(live, now)
           : "Not taking people right now"}
       </ThemedText>
-      <Button
-        title={open ? "Join" : "View queue"}
-        variant={open ? "brand" : "outline"}
-        icon={open ? "how_to_reg" : "info"}
-        onPress={onJoin}
-        accessibilityLabel={`${open ? "Join" : "View"} ${q.name}`}
-      />
-      {open ? (
+      {onJoin ? (
         <Button
-          title="Reserve from home"
-          variant="secondary"
-          icon="event_available"
-          onPress={onReserve}
-          accessibilityLabel={`Reserve a place in ${q.name} from home`}
-          needsNetwork
+          title={open ? "Join" : "View queue"}
+          variant={open ? "filled" : "outlined"}
+          icon={open ? "how_to_reg" : "info"}
+          onPress={onJoin}
+          accessibilityLabel={`${open ? "Join" : "View"} ${q.name}`}
         />
       ) : null}
-      {priority ? (
-        soldOut ? (
-          <Button
-            title="Priority Pass · sold out today"
-            variant="outline"
-            icon="block"
-            disabled
-            onPress={() => undefined}
-          />
-        ) : (
-          <Button
-            title={
-              guest
-                ? "Sign in to buy a Priority Pass"
-                : `Buy Priority Pass · ${formatRupees(priority.feePaise)}`
-            }
-            variant="outline"
-            icon="bolt"
-            onPress={onPriority}
-            needsNetwork
-          />
-        )
+      {hasPaidWays(q) ? (
+        <Button
+          title="Reserve or skip the line"
+          variant="tonal"
+          icon="event_available"
+          onPress={onMore}
+          accessibilityLabel={`Reserve or skip the line in ${q.name}`}
+        />
       ) : null}
     </Card>
+  );
+}
+
+/**
+ * The paid ways in, one tap behind "Reserve or skip the line" (owner
+ * decision 2026-11-15): Reserve from home and the Priority Pass with their
+ * prices and availability, and how getting a place works.
+ */
+function WaysSheet({
+  visible,
+  queue: q,
+  guest,
+  onClose,
+  onReserve,
+  onPriority,
+}: {
+  visible: boolean;
+  queue: QueueView | null;
+  guest: boolean;
+  onClose: () => void;
+  onReserve: (q: QueueView) => void;
+  onPriority: (q: QueueView) => void;
+}) {
+  const open = q?.live?.status === "open";
+  const priority = q?.priority?.enabled ? q.priority : null;
+  const soldOut = q?.live?.priority?.soldOut === true;
+  return (
+    <Sheet
+      visible={visible}
+      onDismiss={onClose}
+      title="Reserve or skip the line"
+    >
+      {q ? (
+        <>
+          <ThemedText type="titleMedium" themeColor="onSurfaceVariant">
+            {q.name}
+          </ThemedText>
+          <ThemedText type="bodyMedium">
+            Walk in: go to the business and tap Join, or scan the QR code at the
+            counter. Qpeer checks once that you are there. Free.
+          </ThemedText>
+          {open ? (
+            <View style={styles.way}>
+              <ThemedText type="bodyMedium">
+                Reserve from home: hold a place for a small fee while the queue
+                is open, and come when we alert you. You see the fee and the
+                refund rules before you pay.
+              </ThemedText>
+              <Button
+                title="Reserve from home"
+                variant="tonal"
+                icon="event_available"
+                onPress={() => onReserve(q)}
+                accessibilityLabel={`Reserve a place in ${q.name} from home`}
+                needsNetwork
+              />
+            </View>
+          ) : null}
+          {priority ? (
+            <View style={styles.way}>
+              <PriorityChip priority={q.priority} />
+              {soldOut ? (
+                <Badge label="Priority Pass · sold out today" tone="neutral" />
+              ) : (
+                <Button
+                  title={
+                    guest
+                      ? "Sign in to buy a Priority Pass"
+                      : `Buy Priority Pass · ${formatRupees(priority.feePaise)}`
+                  }
+                  variant="outlined"
+                  icon="bolt"
+                  onPress={() => onPriority(q)}
+                  needsNetwork
+                />
+              )}
+            </View>
+          ) : null}
+          {guest ? (
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+              Reserving and Priority Passes need a phone or Google sign-in.
+            </ThemedText>
+          ) : null}
+        </>
+      ) : null}
+    </Sheet>
   );
 }
 
@@ -294,10 +378,11 @@ const styles = StyleSheet.create({
   iconWrap: {
     width: 48,
     height: 48,
-    borderRadius: Radius.pill,
+    borderRadius: Radius.full,
     alignItems: "center",
     justifyContent: "center",
   },
   flex: { flex: 1 },
   queueTop: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
+  way: { gap: Spacing.two },
 });

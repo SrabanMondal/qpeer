@@ -8,7 +8,7 @@ import { useState } from "react";
 import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Button, Card, TextField } from "@/components/ui";
+import { Button, Sheet, TextField } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { ApiError, useStaffRejoin } from "@/lib/api";
 import { errorText } from "@/lib/error-messages";
@@ -33,21 +33,52 @@ export function staffRejoinError(e: unknown): string {
 }
 
 /**
- * R2 / QUE-29 "Rejoin for customer": after a missed turn, staff type the
- * ticket number + its 4-character check code (when the customer's phone is
- * dead), or scan the ticket QR from "Verify a ticket". Same once-only and
- * position rule as "I'm here"; staff never pick the position.
+ * R2 / QUE-29 "Rejoin for customer" as an M3 bottom sheet: after a missed
+ * turn, staff type the ticket number + its 4-character check code (when
+ * the customer's phone is dead), or scan the ticket QR from "Verify a
+ * ticket". Same once-only and position rule as "I'm here"; staff never pick
+ * the position. Swipe down, Back or the scrim closes it.
  */
-export function StaffRejoinCard({
+export function StaffRejoinSheet({
+  visible,
+  queueId,
+  prefill,
+  onClose,
+  onScan,
+}: {
+  visible: boolean;
+  queueId: string;
+  /** Pre-filled from a row of the Missed list; null for a blank form. */
+  prefill: ConsoleToken | null;
+  onClose: () => void;
+  onScan: () => void;
+}) {
+  return (
+    <Sheet visible={visible} onDismiss={onClose} title="Rejoin for customer">
+      <StaffRejoinForm
+        // A fresh form for each row (or the blank form).
+        key={prefill?.id ?? "blank"}
+        queueId={queueId}
+        prefill={prefill}
+        onDone={onClose}
+        onScan={() => {
+          onClose();
+          onScan();
+        }}
+      />
+    </Sheet>
+  );
+}
+
+function StaffRejoinForm({
   queueId,
   prefill,
   onDone,
   onScan,
 }: {
   queueId: string;
-  /** Pre-filled from a row of the Missed list. */
-  prefill?: ConsoleToken | null;
-  onDone?: () => void;
+  prefill: ConsoleToken | null;
+  onDone: () => void;
   onScan: () => void;
 }) {
   const offline = useOffline();
@@ -83,16 +114,15 @@ export function StaffRejoinCard({
       });
       setLabel("");
       setCode("");
-      onDone?.();
+      onDone();
     } catch (e) {
       setFailure(staffRejoinError(e));
     }
   };
 
   return (
-    <Card>
-      <ThemedText type="heading">Rejoin for customer</ThemedText>
-      <ThemedText type="small" themeColor="inkMuted">
+    <View style={styles.form}>
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         For a missed ticket whose phone is dead: ask for the number and the
         check code under it. The ticket goes back in by the rejoin rule, once.
       </ThemedText>
@@ -129,12 +159,13 @@ export function StaffRejoinCard({
         </View>
       </View>
       {failure ? (
-        <ThemedText type="small" themeColor="danger">
+        <ThemedText type="bodyMedium" themeColor="error">
           {failure}
         </ThemedText>
       ) : null}
       <Button
         title="Rejoin for customer"
+        size="large"
         icon="restart_alt"
         loading={rejoin.isPending}
         disabled={offline}
@@ -142,15 +173,16 @@ export function StaffRejoinCard({
       />
       <Button
         title="Scan their ticket instead"
-        variant="secondary"
+        variant="text"
         icon="qr_code_scanner"
         onPress={onScan}
       />
-    </Card>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  form: { gap: Spacing.twoHalf },
   fields: { flexDirection: "row", flexWrap: "wrap", gap: Spacing.twoHalf },
   field: { flexGrow: 1, flexBasis: 120 },
 });

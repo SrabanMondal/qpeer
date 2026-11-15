@@ -1,14 +1,11 @@
 import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import type { IconName } from "@/components/ui/icon";
 import { Spacing } from "@/constants/theme";
 
 export type Stat = {
   label: string;
   value: number | string;
-  /** @deprecated no longer drawn: the figure and its caption carry it. */
-  icon?: IconName;
 };
 
 /**

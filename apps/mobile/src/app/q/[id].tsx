@@ -1,7 +1,7 @@
 import { openLook, waitText } from "@qpeer/shared";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useState } from "react";
-import { Linking } from "react-native";
+import { Linking, StyleSheet, View } from "react-native";
 
 import { PriorityChip } from "@/components/priority-chip";
 import { ProblemCard } from "@/components/problem-card";
@@ -16,9 +16,9 @@ import {
   Screen,
   StatusBanner,
 } from "@/components/ui";
+import { Spacing } from "@/constants/theme";
 import { ApiError, useJoinQueue, useQueue } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { categoryLabel } from "@/lib/format";
 import {
   type JoinProblem,
   joinErrorView,
@@ -114,7 +114,6 @@ export default function JoinScreen() {
           action={
             <Button
               title="Scan QR code"
-              variant="brand"
               icon="qr_code_scanner"
               onPress={() => router.replace("/scan")}
             />
@@ -152,7 +151,6 @@ export default function JoinScreen() {
   const status = liveStatusLook(live.status);
   // B16: the queue state decides; the hours only add "(after usual hours)".
   const look = openLook(live.status, business.isOpenNow);
-  const walkInLine = `Walk-in check: you must be within ${joinRadiusM} m`;
   const busy = phase !== "idle";
   const open = live.status === "open";
   const wait = open ? waitText(live, now) : null;
@@ -163,31 +161,55 @@ export default function JoinScreen() {
       onRefresh={() => {
         void info.refetch();
       }}
+      // "Join queue" stays under the thumb; the status line sits under it.
+      bottomBar={
+        <>
+          <Button
+            title={problem?.fix === "retry" ? "Try again" : "Join queue"}
+            size="large"
+            icon="how_to_reg"
+            onPress={() => void doJoin()}
+            loading={busy}
+            disabled={!open || offline}
+            accessibilityLabel={`Join ${queue.name} at ${business.name}`}
+          />
+          <ThemedText
+            type="bodySmall"
+            themeColor="onSurfaceVariant"
+            accessibilityLiveRegion="polite"
+          >
+            {phase === "locating"
+              ? "Checking your location…"
+              : phase === "joining"
+                ? "Joining…"
+                : offline
+                  ? OFFLINE_ACTION_TEXT
+                  : open
+                    ? `Walk-in check: you must be within ${joinRadiusM} m. Your location is checked once to confirm you are here. It is not stored.`
+                    : "Joining opens when the queue is open."}
+          </ThemedText>
+        </>
+      }
     >
       <Stack.Screen options={{ title: "Join queue" }} />
 
-      <Card>
-        <ThemedText type="label" themeColor="inkMuted">
-          {categoryLabel(business.category).toUpperCase()}
-        </ThemedText>
-        <ThemedText type="title">{business.name}</ThemedText>
-        <ThemedText type="heading" themeColor="inkMuted">
+      <View style={styles.head}>
+        <ThemedText type="headlineSmall">{business.name}</ThemedText>
+        <ThemedText type="titleMedium" themeColor="onSurfaceVariant">
           {queue.name}
         </ThemedText>
         {business.address ? (
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {business.address}
           </ThemedText>
         ) : null}
-      </Card>
+      </View>
 
       <StatusBanner
         tone={status.tone}
         title={look.label}
         detail={
-          business.todayHours
-            ? `Today: ${business.todayHours.text}\n${walkInLine}`
-            : walkInLine
+          business.todayHours ? `Today: ${business.todayHours.text}` : undefined
         }
       />
 
@@ -208,32 +230,8 @@ export default function JoinScreen() {
         <ProblemCard problem={problem} onFix={(p) => void runFix(p)} />
       ) : null}
 
-      <Button
-        title={problem?.fix === "retry" ? "Try again" : "Join queue"}
-        variant="brand"
-        icon="how_to_reg"
-        onPress={() => void doJoin()}
-        loading={busy}
-        disabled={!open || offline}
-        accessibilityLabel={`Join ${queue.name} at ${business.name}`}
-      />
-      <ThemedText
-        type="small"
-        themeColor="inkMuted"
-        accessibilityLiveRegion="polite"
-      >
-        {phase === "locating"
-          ? "Checking your location…"
-          : phase === "joining"
-            ? "Joining…"
-            : offline
-              ? OFFLINE_ACTION_TEXT
-              : open
-                ? "Your location is checked once to confirm you are here. It is not stored."
-                : "Joining opens when the queue is open."}
-      </ThemedText>
       {myRole ? (
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           You manage this queue. You can still join it as a customer, for
           example to test it.
         </ThemedText>
@@ -251,3 +249,7 @@ export default function JoinScreen() {
     </Screen>
   );
 }
+
+const styles = StyleSheet.create({
+  head: { gap: Spacing.half },
+});

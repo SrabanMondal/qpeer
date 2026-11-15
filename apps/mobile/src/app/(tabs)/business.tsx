@@ -78,7 +78,7 @@ export default function BusinessTab() {
           <Button
             title="Add another business"
             icon="add"
-            variant="outline"
+            variant="outlined"
             onPress={create}
           />
         </>

@@ -1,18 +1,17 @@
 import { type Href, Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { Alert } from "react-native";
+import { useState } from "react";
 
-import { ThemedText } from "@/components/themed-text";
 import {
   AppSwitch,
-  Badge,
   Button,
   Card,
   ConfirmDialog,
   EmptyState,
   ErrorState,
-  InfoRow,
+  ExpandableSection,
   ListItem,
   LoadingState,
+  OverflowMenu,
   Screen,
   SectionHeader,
   StatusBanner,
@@ -22,17 +21,22 @@ import {
   useSetBusinessStatus,
   useUpdateBusiness,
 } from "@/lib/api";
-import { errorText } from "@/lib/error-messages";
 import {
   categoryLabel,
   formatLatLng,
   listingStatus,
   todayText,
 } from "@/lib/format";
-import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
+import { useOffline } from "@/lib/network";
 import { showErrorToast } from "@/lib/toast";
 
-/** One business: summary, listing status (BIZ-07) and every section to edit. */
+/**
+ * One business (BIZ-07). Job: an owner checks whether it is listed on the
+ * map and opens the part to change: profile, pin, hours, queues, payments
+ * or the public page. The app bar title is the business name; the rare,
+ * serious "Deactivate" sits behind the app bar menu (⋮). The connection
+ * strip at the top says when actions are offline.
+ */
 export default function BusinessScreen() {
   const router = useRouter();
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -40,6 +44,7 @@ export default function BusinessScreen() {
   const business = useBusiness(id);
   const setStatus = useSetBusinessStatus(id);
   const update = useUpdateBusiness(id);
+  const [showArchived, setShowArchived] = useState(false);
 
   if (!business.data) {
     return (
@@ -60,8 +65,12 @@ export default function BusinessScreen() {
 
   const b = business.data;
   const status = listingStatus(b);
+  const active = b.status === "active";
   const activeQueues = b.queues.filter((q) => q.status === "active");
   const archivedQueues = b.queues.filter((q) => q.status === "archived");
+  const profileLine = [categoryLabel(b.category), b.address, b.phone]
+    .filter(Boolean)
+    .join(" · ");
 
   const onDeactivate = async () => {
     const ok = await ConfirmDialog.show({
@@ -74,7 +83,7 @@ export default function BusinessScreen() {
     try {
       await setStatus.mutateAsync(false);
     } catch (e) {
-      Alert.alert("Could not deactivate", errorText(e));
+      showErrorToast("Could not deactivate", e);
     }
   };
 
@@ -90,9 +99,12 @@ export default function BusinessScreen() {
     try {
       await setStatus.mutateAsync(true);
     } catch (e) {
-      Alert.alert("Could not activate", errorText(e));
+      showErrorToast("Could not activate", e);
     }
   };
+
+  const createQueue = () =>
+    router.push({ pathname: "/business/[id]/new-queue", params: { id } });
 
   return (
     <Screen
@@ -101,33 +113,53 @@ export default function BusinessScreen() {
         void business.refetch();
       }}
     >
-      <Stack.Screen options={{ title: b.name }} />
+      <Stack.Screen
+        options={{
+          title: b.name,
+          headerRight: active
+            ? () => (
+                <OverflowMenu
+                  accessibilityLabel="More business actions"
+                  disabled={offline || setStatus.isPending}
+                  items={[
+                    {
+                      label: "Deactivate business",
+                      destructive: true,
+                      onPress: () => void onDeactivate(),
+                    },
+                  ]}
+                />
+              )
+            : undefined,
+        }}
+      />
 
       <StatusBanner
         tone={status.tone}
         title={status.title}
         detail={status.detail}
       />
+      {active ? null : (
+        // Inactive: activating is this state's one primary action.
+        <Button
+          title="Activate business"
+          size="large"
+          icon="storefront"
+          onPress={onActivate}
+          loading={setStatus.isPending}
+          disabled={offline}
+        />
+      )}
 
-      <Card>
-        <ThemedText type="title">{b.name}</ThemedText>
-        <InfoRow label="Category" value={categoryLabel(b.category)} />
-        <InfoRow label="Address" value={b.address || "—"} />
-        <InfoRow label="Phone" value={b.phone ?? "—"} />
-        <InfoRow label="Today" value={todayText(b.hours)} />
-      </Card>
-
-      <SectionHeader title="Profile" />
+      <SectionHeader title="Set up" />
       <ListItem
         icon="edit"
         title="Edit profile"
-        subtitle="Name, category, address, phone"
+        subtitle={profileLine || "Name, category, address, phone"}
         onPress={() =>
           router.push({ pathname: "/business/[id]/edit", params: { id } })
         }
       />
-
-      <SectionHeader title="Location" />
       <ListItem
         icon="location_on"
         title={b.location ? "Move pin" : "Set pin"}
@@ -140,8 +172,6 @@ export default function BusinessScreen() {
           router.push({ pathname: "/business/[id]/location", params: { id } })
         }
       />
-
-      <SectionHeader title="Hours" />
       <ListItem
         icon="schedule"
         title="Opening hours"
@@ -157,31 +187,49 @@ export default function BusinessScreen() {
           icon="queue"
           title="No queues yet"
           message="Create a queue, such as “OPD” or “Sample collection”. You need at least one to show on the map."
+          action={
+            <Button title="Create queue" icon="add" onPress={createQueue} />
+          }
         />
+      ) : (
+        <>
+          {activeQueues.map((q) => (
+            <ListItem
+              key={q.id}
+              icon="queue"
+              title={q.name}
+              onPress={() =>
+                router.push({ pathname: "/queue/[id]", params: { id: q.id } })
+              }
+            />
+          ))}
+          <Button
+            title="Create queue"
+            icon="add"
+            variant="tonal"
+            onPress={createQueue}
+          />
+        </>
+      )}
+      {archivedQueues.length > 0 ? (
+        <ExpandableSection
+          title={`Archived (${archivedQueues.length})`}
+          summary="Cannot be edited or joined"
+          expanded={showArchived}
+          onToggle={() => setShowArchived((s) => !s)}
+        >
+          {archivedQueues.map((q) => (
+            <ListItem
+              key={q.id}
+              icon="archive"
+              title={q.name}
+              onPress={() =>
+                router.push({ pathname: "/queue/[id]", params: { id: q.id } })
+              }
+            />
+          ))}
+        </ExpandableSection>
       ) : null}
-      {[...activeQueues, ...archivedQueues].map((q) => (
-        <ListItem
-          key={q.id}
-          icon="queue"
-          title={q.name}
-          footer={
-            q.status === "archived" ? (
-              <Badge label="Archived" tone="neutral" />
-            ) : null
-          }
-          onPress={() =>
-            router.push({ pathname: "/queue/[id]", params: { id: q.id } })
-          }
-        />
-      ))}
-      <Button
-        title="Create queue"
-        icon="add"
-        variant="secondary"
-        onPress={() =>
-          router.push({ pathname: "/business/[id]/new-queue", params: { id } })
-        }
-      />
 
       {b.myRole === "owner" ? (
         <>
@@ -196,24 +244,20 @@ export default function BusinessScreen() {
               )
             }
           />
-          <SectionHeader title="Public stats" />
-          <Card>
-            <AppSwitch
-              label="Show public stats"
-              description="Average wait and service time on your public page. Shown automatically after 14 days on the map."
-              value={b.publicStats === true}
-              onValueChange={(v) => void onPublicStats(v)}
-              disabled={update.isPending || offline}
-              right={
-                offline ? (
-                  <ThemedText type="small" themeColor="warning">
-                    {OFFLINE_ACTION_TEXT}
-                  </ThemedText>
-                ) : null
-              }
-            />
-          </Card>
         </>
+      ) : null}
+
+      <SectionHeader title="Public page" />
+      {b.myRole === "owner" ? (
+        <Card>
+          <AppSwitch
+            label="Show public stats"
+            description="Average wait and service time on your public page. Shown automatically after 14 days on the map."
+            value={b.publicStats === true}
+            onValueChange={(v) => void onPublicStats(v)}
+            disabled={update.isPending || offline}
+          />
+        </Card>
       ) : null}
       <ListItem
         icon="storefront"
@@ -223,30 +267,6 @@ export default function BusinessScreen() {
           router.push({ pathname: "/business/[id]/public", params: { id } })
         }
       />
-
-      <SectionHeader title="Status" />
-      {b.status === "active" ? (
-        <Button
-          title="Deactivate business"
-          variant="danger-soft"
-          onPress={onDeactivate}
-          loading={setStatus.isPending}
-          disabled={offline}
-        />
-      ) : (
-        <Button
-          title="Activate business"
-          variant="brand"
-          onPress={onActivate}
-          loading={setStatus.isPending}
-          disabled={offline}
-        />
-      )}
-      {offline ? (
-        <ThemedText type="small" themeColor="inkMuted">
-          {OFFLINE_ACTION_TEXT}
-        </ThemedText>
-      ) : null}
     </Screen>
   );
 }

@@ -36,10 +36,11 @@ import { EarningsSection } from "@/screens/insights/earnings-section";
 /** Saved Insights answers kept on the phone (newest first). */
 const MAX_SAVED = 6;
 
+/** Better = tertiary (success), worse = error; the words say which, too. */
 const TONE_COLOR: Record<Insight["tone"], ThemeColor> = {
-  good: "brand",
-  bad: "danger",
-  neutral: "primary",
+  good: "tertiary",
+  bad: "error",
+  neutral: "onSurfaceVariant",
 };
 const KIND_ICON: Record<Insight["kind"], IconName> = {
   busiest: "schedule",
@@ -71,12 +72,15 @@ function KpiGrid({ data }: { data: AnalyticsResponse }) {
             accessibilityLabel={`${k.label}: ${k.value}${k.delta ? `, ${k.delta.text}` : ""}`}
             style={styles.tileInner}
           >
-            <ThemedText type="label" themeColor="inkMuted">
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
               {k.label}
             </ThemedText>
-            <ThemedText type="title">{k.value}</ThemedText>
+            <ThemedText type="figure">{k.value}</ThemedText>
             {k.delta ? (
-              <ThemedText type="small" themeColor={TONE_COLOR[k.delta.tone]}>
+              <ThemedText
+                type="bodySmall"
+                themeColor={TONE_COLOR[k.delta.tone]}
+              >
                 {k.delta.text}
               </ThemedText>
             ) : null}
@@ -90,8 +94,8 @@ function KpiGrid({ data }: { data: AnalyticsResponse }) {
 function InsightCards({ insights }: { insights: Insight[] }) {
   if (insights.length === 0) {
     return (
-      <Card>
-        <ThemedText type="small" themeColor="inkMuted">
+      <Card tone="surfaceContainerLow">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           No clear patterns yet. Tips appear here once there are enough visits
           to be sure.
         </ThemedText>
@@ -102,8 +106,8 @@ function InsightCards({ insights }: { insights: Insight[] }) {
     <>
       {insights.map((i) => (
         <Card key={i.kind} style={styles.insight}>
-          <Icon name={KIND_ICON[i.kind]} size={26} color={TONE_COLOR[i.tone]} />
-          <ThemedText type="body" style={styles.flex}>
+          <Icon name={KIND_ICON[i.kind]} size={24} color={TONE_COLOR[i.tone]} />
+          <ThemedText type="bodyLarge" style={styles.flex}>
             {i.text}
           </ThemedText>
         </Card>
@@ -116,14 +120,14 @@ function Counts({ data }: { data: AnalyticsResponse }) {
   const t = data.totals;
   return (
     <Card>
-      <ThemedText type="heading">Who came and who didn't</ThemedText>
+      <ThemedText type="titleMedium">Who came and who didn't</ThemedText>
       <InfoRow label="Joined" value={String(t.joins)} />
-      <InfoRow label="Served" value={String(t.served)} />
+      {/* The tile shows the no-show rate; this is the count. */}
       <InfoRow label="No-shows" value={String(t.noShows)} />
       <InfoRow label="Left the line" value={String(t.left)} />
       <InfoRow label="Cancelled (paid)" value={String(t.cancelled)} />
       <InfoRow label="Gave up waiting" value={pctText(t.abandonmentPct)} />
-      <ThemedText type="small" themeColor="inkMuted">
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         "Gave up" counts people who left or cancelled out of everyone who
         joined. Percentages and averages show once there are 20 visits.
       </ThemedText>
@@ -258,20 +262,21 @@ export function InsightsScreen() {
     body = (
       <>
         {usingSaved && saved ? (
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {`Saved ${formatAge(saved.savedAt)}. Pull down to refresh when you're online.`}
           </ThemedText>
         ) : null}
         <KpiGrid data={data} />
+        {/* Explains the tiles' changes, right under them. */}
+        <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
+          {`Changes compare with ${periodText(data.rangeDays)}, up to the same time of day.`}
+        </ThemedText>
         <SectionHeader title="What stands out" />
         <InsightCards insights={data.insights} />
         <SectionHeader title="Trends" />
         <TrendCharts days={data.days} />
         <PeakStrip peak={data.peak} />
         <Counts data={data} />
-        <ThemedText type="small" themeColor="inkMuted">
-          {`Changes compare with ${periodText(data.rangeDays)}, up to the same time of day.`}
-        </ThemedText>
       </>
     );
   }
@@ -326,11 +331,6 @@ export function InsightsScreen() {
           fetchingNext={earnings.isFetchingNextPage}
           onMore={() => void earnings.fetchNextPage()}
         />
-      ) : null}
-      {business && !isOwner ? (
-        <ThemedText type="small" themeColor="inkMuted">
-          Earnings are shown to the business owner only.
-        </ThemedText>
       ) : null}
     </Screen>
   );

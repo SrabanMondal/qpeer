@@ -1,7 +1,15 @@
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useState } from "react";
+import { Pressable, StyleSheet, TextInput, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Radius, Spacing, Type } from "@/constants/theme";
+import { Icon } from "@/components/ui";
+import {
+  Radius,
+  RIPPLE_ALPHA,
+  Spacing,
+  Type,
+  withAlpha,
+} from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import { formatTime12 } from "@/lib/format";
 
@@ -51,8 +59,10 @@ export function normalizeTime(text: string): string {
 }
 
 /**
- * A 24-hour time field: type "HH:MM" or step by 30 minutes with − / +.
- * No native date picker needed.
+ * A 24-hour time field: type "HH:MM" or step by 30 minutes with the tonal
+ * − / + icon buttons (real 48 dp targets with a ripple). The field is the
+ * app's outlined input (radius 12, 2 dp `primary` while focused, `error`
+ * when invalid). No native date picker needed.
  */
 export function TimeInput({
   label,
@@ -66,6 +76,7 @@ export function TimeInput({
   invalid?: boolean;
 }) {
   const theme = useTheme();
+  const [focused, setFocused] = useState(false);
 
   const step = (delta: number) => {
     const current = toMinutes(normalizeTime(value));
@@ -81,49 +92,69 @@ export function TimeInput({
     onChange(fromMinutes(snapped));
   };
 
-  const stepButton = (delta: number, symbol: string, spoken: string) => (
+  const stepButton = (
+    delta: number,
+    icon: "remove" | "add",
+    spoken: string,
+  ) => (
     <Pressable
       onPress={() => step(delta)}
       accessibilityRole="button"
       accessibilityLabel={`${spoken} ${label}`}
-      style={({ pressed }) => [
-        styles.step,
-        { backgroundColor: theme.primarySoft },
-        pressed && styles.pressed,
-      ]}
+      android_ripple={{
+        color: theme.onSecondaryContainer,
+        alpha: RIPPLE_ALPHA,
+      }}
+      style={[styles.step, { backgroundColor: theme.secondaryContainer }]}
     >
-      <Text style={[styles.stepText, { color: theme.ink }]}>{symbol}</Text>
+      <Icon name={icon} color="onSecondaryContainer" />
     </Pressable>
   );
 
   const normalized = normalizeTime(value);
+  const thick = focused || invalid;
   return (
     <View style={styles.wrap}>
-      <ThemedText type="label" themeColor="inkMuted">
+      <ThemedText
+        type="labelLarge"
+        themeColor={
+          invalid ? "error" : focused ? "primary" : "onSurfaceVariant"
+        }
+      >
         {label}
         {toMinutes(normalized) !== null ? ` · ${formatTime12(normalized)}` : ""}
       </ThemedText>
       <View style={styles.row}>
-        {stepButton(-STEP_MIN, "−", "30 minutes earlier,")}
+        {stepButton(-STEP_MIN, "remove", "30 minutes earlier,")}
         <TextInput
           value={value}
           onChangeText={onChange}
-          onBlur={() => onChange(normalizeTime(value))}
+          onFocus={() => setFocused(true)}
+          onBlur={() => {
+            setFocused(false);
+            onChange(normalizeTime(value));
+          }}
           accessibilityLabel={`${label}, 24-hour time`}
           keyboardType="numbers-and-punctuation"
           maxLength={5}
           placeholder="HH:MM"
-          placeholderTextColor={theme.inkMuted}
+          placeholderTextColor={theme.onSurfaceVariant}
+          cursorColor={theme.primary}
+          selectionColor={withAlpha(theme.primary, 0.4)}
           style={[
             styles.input,
             {
-              color: theme.ink,
-              backgroundColor: theme.card,
-              borderColor: invalid ? theme.danger : theme.border,
+              color: theme.onSurface,
+              borderColor: invalid
+                ? theme.error
+                : focused
+                  ? theme.primary
+                  : theme.outline,
+              borderWidth: thick ? 2 : 1,
             },
           ]}
         />
-        {stepButton(STEP_MIN, "+", "30 minutes later,")}
+        {stepButton(STEP_MIN, "add", "30 minutes later,")}
       </View>
     </View>
   );
@@ -131,23 +162,22 @@ export function TimeInput({
 
 const styles = StyleSheet.create({
   // Two fit side by side on most phones; they wrap on narrow or large-font screens.
-  wrap: { gap: Spacing.half, flexGrow: 1, flexBasis: 160 },
+  wrap: { gap: Spacing.one, flexGrow: 1, flexBasis: 176 },
   row: { flexDirection: "row", alignItems: "center", gap: Spacing.one },
   step: {
-    minWidth: 44,
-    minHeight: 44,
-    borderRadius: Radius.input,
+    width: 48,
+    height: 48,
+    borderRadius: Radius.full,
+    overflow: "hidden",
     alignItems: "center",
     justifyContent: "center",
   },
-  stepText: { ...Type.heading },
-  pressed: { opacity: 0.6 },
   input: {
-    ...Type.body,
+    ...Type.bodyLarge,
+    fontVariant: ["tabular-nums"],
     flex: 1,
-    minHeight: 44,
+    minHeight: 48,
     minWidth: 64,
-    borderWidth: 1,
     borderRadius: Radius.input,
     textAlign: "center",
     paddingHorizontal: Spacing.one,

@@ -16,14 +16,13 @@ import { captureRef } from "react-native-view-shot";
 
 import { ThemedText } from "@/components/themed-text";
 import { Button, ErrorState, LoadingState, Screen } from "@/components/ui";
-import { Radius, Spacing, Type } from "@/constants/theme";
+import { PrintColors, Radius, Spacing, Type } from "@/constants/theme";
 import { useQueue } from "@/lib/api";
-import { errorText } from "@/lib/error-messages";
-import { showToast } from "@/lib/toast";
+import { showErrorToast, showToast } from "@/lib/toast";
 
 /** Print colours of the QR card: always dark on white, in both themes. */
-const PRINT_INK = "#000000";
-const PRINT_PAPER = "#FFFFFF";
+const PRINT_INK = PrintColors.ink;
+const PRINT_PAPER = PrintColors.paper;
 
 /**
  * BIZ-14: full-screen QR of the queue's join link, with the business and
@@ -63,7 +62,7 @@ export default function QueueQrScreen() {
         message: `Join the "${q.name}" queue at ${business.name} on Qpeer: ${q.joinUrl}`,
       });
     } catch (e) {
-      Alert.alert("Could not share", errorText(e));
+      showErrorToast("Could not share", e);
     }
   };
 
@@ -77,7 +76,11 @@ export default function QueueQrScreen() {
     try {
       const uri = await capture();
       if (!(await Sharing.isAvailableAsync())) {
-        Alert.alert("Sharing is not available on this phone");
+        showToast({
+          title: "Sharing is not available on this phone",
+          message: "Save the image to your photos instead.",
+          tone: "warning",
+        });
         return;
       }
       await Sharing.shareAsync(uri, {
@@ -85,7 +88,7 @@ export default function QueueQrScreen() {
         dialogTitle: `QR code: ${q.name}`,
       });
     } catch (e) {
-      Alert.alert("Could not share the image", errorText(e));
+      showErrorToast("Could not share the image", e);
     } finally {
       setBusy(null);
     }
@@ -116,7 +119,7 @@ export default function QueueQrScreen() {
       await MediaLibrary.Asset.create(await capture());
       showToast({ title: "QR code saved to your photos", tone: "success" });
     } catch (e) {
-      Alert.alert("Could not save the image", errorText(e));
+      showErrorToast("Could not save the image", e);
     } finally {
       setBusy(null);
     }
@@ -147,18 +150,17 @@ export default function QueueQrScreen() {
         </Text>
       </View>
       <ThemedText
-        type="small"
-        themeColor="inkMuted"
+        type="bodyMedium"
+        themeColor="onSurfaceVariant"
         selectable
         style={styles.centred}
       >
-        Scan with the phone camera or the Qpeer app to join.{"\n"}
         {q.joinUrl}
       </ThemedText>
       <Button
         title="Share QR image"
         icon="share"
-        variant="brand"
+        size="large"
         loading={busy === "share"}
         disabled={busy !== null}
         onPress={() => void shareImage()}
@@ -167,7 +169,7 @@ export default function QueueQrScreen() {
       <Button
         title="Save to photos"
         icon="download"
-        variant="secondary"
+        variant="tonal"
         loading={busy === "save"}
         disabled={busy !== null}
         onPress={() => void saveImage()}
@@ -176,7 +178,7 @@ export default function QueueQrScreen() {
       <Button
         title="Share link"
         icon="link"
-        variant="outline"
+        variant="text"
         onPress={() => void shareLink()}
         style={styles.button}
       />
@@ -194,9 +196,13 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingBottom: Spacing.three,
   },
-  printTitle: { ...Type.title, textAlign: "center" },
-  printQueue: { ...Type.heading, textAlign: "center" },
-  printHint: { ...Type.small, textAlign: "center", marginTop: Spacing.one },
+  printTitle: { ...Type.headlineSmall, textAlign: "center" },
+  printQueue: { ...Type.titleMedium, textAlign: "center" },
+  printHint: {
+    ...Type.bodyMedium,
+    textAlign: "center",
+    marginTop: Spacing.one,
+  },
   centred: { textAlign: "center" },
   button: { alignSelf: "stretch" },
 });

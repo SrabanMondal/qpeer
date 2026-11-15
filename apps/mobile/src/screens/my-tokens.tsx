@@ -1,17 +1,21 @@
 import { isActiveState, type TokenSummary } from "@qpeer/shared";
 import { useFocusEffect, useRouter } from "expo-router";
 import { type ReactNode, useCallback } from "react";
+import { StyleSheet, View } from "react-native";
 
+import { ThemedText } from "@/components/themed-text";
 import {
   Badge,
   Button,
   EmptyState,
   ErrorState,
+  ExtendedFab,
   ListItem,
   LoadingState,
   Screen,
   SectionHeader,
 } from "@/components/ui";
+import { Spacing } from "@/constants/theme";
 import { useMyTokens } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { useOffline } from "@/lib/network";
@@ -116,11 +120,9 @@ export function MyTokens() {
       <>
         <SectionHeader title="Active" />
         {activeItems.length === 0 ? (
-          <EmptyState
-            icon="confirmation_number"
-            title="No active tickets"
-            message="Scan a queue's QR code to join."
-          />
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+            No active tickets. Scan a queue's QR code to join.
+          </ThemedText>
         ) : (
           activeItems.map((t) => {
             const badge = tokenStatusBadge(t);
@@ -166,24 +168,40 @@ export function MyTokens() {
     );
   }
 
+  const hasTickets = activeItems.length > 0 || recentItems.length > 0;
+
   return (
-    <Screen
-      bottomInset={false}
-      refreshing={active.isRefetching || recent.isRefetching}
-      onRefresh={() => {
-        void active.refetch();
-        void recent.refetch();
-      }}
-    >
-      {activeItems.length > 0 || recentItems.length > 0 ? (
-        <Button
-          title="Scan QR to join"
-          size="large"
-          icon="qr_code_scanner"
-          onPress={scan}
-        />
+    <View style={styles.fill}>
+      <Screen
+        bottomInset={false}
+        refreshing={active.isRefetching || recent.isRefetching}
+        onRefresh={() => {
+          void active.refetch();
+          void recent.refetch();
+        }}
+        // Room under the last row for the floating Scan QR button.
+        contentStyle={hasTickets ? styles.fabSpace : undefined}
+      >
+        {body}
+      </Screen>
+      {/* With tickets, scanning is the second job: an extended FAB in the
+          lower half, so the tickets come first. */}
+      {hasTickets ? (
+        <View style={styles.fab}>
+          <ExtendedFab
+            icon="qr_code_scanner"
+            label="Scan QR"
+            accessibilityLabel="Scan a queue's QR code to join"
+            onPress={scan}
+          />
+        </View>
       ) : null}
-      {body}
-    </Screen>
+    </View>
   );
 }
+
+const styles = StyleSheet.create({
+  fill: { flex: 1 },
+  fabSpace: { paddingBottom: 56 + Spacing.three * 2 },
+  fab: { position: "absolute", right: Spacing.three, bottom: Spacing.three },
+});

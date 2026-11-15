@@ -3,18 +3,27 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
 import { Icon, type IconName } from "@/components/ui";
-import { Radius, Spacing, Type } from "@/constants/theme";
-import { useIsDark, useTheme } from "@/hooks/use-theme";
+import {
+  Elevation,
+  Radius,
+  RIPPLE_ALPHA,
+  Spacing,
+  type ThemeColor,
+  Type,
+} from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 import { CATEGORY_CHOICES } from "@/lib/format";
 
 export type DiscoverView = "map" | "list";
 
-const CHIP_HIT = { top: 4, bottom: 4, left: 2, right: 2 };
+/** Visible chip height (M3 filter chip); the tap area is 48. */
+const CHIP_HEIGHT = 32;
 
 /**
- * Top overlay of the Discover screen (map-interface.jpg): title bar with the
- * Map ⇄ List toggle and Scan QR, then filter chips (MAP-04): Open now,
- * All, Clinic, Lab, Service centre, Salon, Other.
+ * Top overlay of the Discover screen (map-interface.jpg): a floating title
+ * bar with the Map ⇄ List toggle and Scan QR, then M3 filter chips (MAP-04):
+ * Open now, All, Clinic, Lab, Service centre, Salon, Other. A wider gap
+ * separates Open now from the categories.
  */
 export function DiscoverTopBar({
   title,
@@ -36,27 +45,21 @@ export function DiscoverTopBar({
   onOpenNow: (v: boolean) => void;
 }) {
   const theme = useTheme();
-  const dark = useIsDark();
-  const surface = {
-    backgroundColor: theme.card,
-    borderColor: theme.border,
-    borderWidth: dark ? 1 : 0,
-  };
 
   return (
     <View style={styles.wrap}>
+      {/* It floats over the map: a tonal surface with the level 3 shadow. */}
       <View
         style={[
           styles.bar,
-          surface,
-          !dark && styles.shadow,
-          !dark && { shadowColor: theme.shadow },
+          {
+            backgroundColor: theme.surfaceContainerHigh,
+            boxShadow: Elevation.level3,
+          },
         ]}
       >
-        <Icon name="search" size={22} color="inkMuted" />
         <ThemedText
-          type="body"
-          themeColor="inkMuted"
+          type="titleMedium"
           numberOfLines={1}
           style={styles.title}
           accessibilityRole="header"
@@ -68,13 +71,16 @@ export function DiscoverTopBar({
           label={view === "map" ? "List" : "Map"}
           accessibilityLabel={view === "map" ? "Show as list" : "Show map"}
           onPress={() => onView(view === "map" ? "list" : "map")}
+          fill="secondaryContainer"
+          content="onSecondaryContainer"
         />
         <BarButton
           icon="qr_code_scanner"
           label="Scan QR"
           accessibilityLabel="Scan QR to join"
           onPress={onScan}
-          brand
+          fill="primary"
+          content="onPrimary"
         />
       </View>
 
@@ -86,12 +92,12 @@ export function DiscoverTopBar({
       >
         <Chip
           label="Open now"
-          icon={openNow ? "check" : "schedule"}
+          icon="schedule"
           selected={openNow}
           onPress={() => onOpenNow(!openNow)}
           role="switch"
         />
-        <View style={[styles.divider, { backgroundColor: theme.border }]} />
+        <View style={styles.groupGap} />
         <Chip
           label="All"
           selected={category === null}
@@ -110,18 +116,21 @@ export function DiscoverTopBar({
   );
 }
 
+/** A full-round button in the bar: 48 dp, icon and label, ripple. */
 function BarButton({
   icon,
   label,
   accessibilityLabel,
   onPress,
-  brand = false,
+  fill,
+  content,
 }: {
   icon: IconName;
   label: string;
   accessibilityLabel: string;
   onPress: () => void;
-  brand?: boolean;
+  fill: ThemeColor;
+  content: ThemeColor;
 }) {
   const theme = useTheme();
   return (
@@ -129,18 +138,12 @@ function BarButton({
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel}
-      style={({ pressed }) => [
-        styles.barButton,
-        { backgroundColor: brand ? theme.brand : theme.primarySoft },
-        pressed && styles.dim,
-      ]}
+      android_ripple={{ color: theme[content], alpha: RIPPLE_ALPHA }}
+      style={[styles.barButton, { backgroundColor: theme[fill] }]}
     >
-      <Icon name={icon} size={20} color={brand ? "onPrimary" : "ink"} />
+      <Icon name={icon} size={20} color={content} />
       <Text
-        style={[
-          styles.barButtonText,
-          { color: brand ? theme.onPrimary : theme.ink },
-        ]}
+        style={[Type.labelLarge, { color: theme[content] }]}
         maxFontSizeMultiplier={1.3}
       >
         {label}
@@ -149,6 +152,11 @@ function BarButton({
   );
 }
 
+/**
+ * M3 filter chip over the map: a 32 dp chip inside a real 48 dp target
+ * (no hitSlop), radius 8, a check and `secondaryContainer` when selected,
+ * a light surface with an outline when not, so it reads on any map.
+ */
 function Chip({
   label,
   icon,
@@ -163,86 +171,92 @@ function Chip({
   role?: "radio" | "switch";
 }) {
   const theme = useTheme();
+  const content = selected ? "onSecondaryContainer" : "onSurfaceVariant";
+  const leading: IconName | undefined = selected ? "check" : icon;
   return (
     <Pressable
       onPress={onPress}
-      hitSlop={CHIP_HIT}
       accessibilityRole={role}
       accessibilityState={
         role === "switch" ? { checked: selected } : { selected }
       }
       accessibilityLabel={label}
-      style={({ pressed }) => [
-        styles.chip,
-        {
-          backgroundColor: selected ? theme.primary : theme.card,
-          borderColor: selected ? theme.primary : theme.border,
-        },
-        pressed && styles.dim,
-      ]}
+      style={styles.target}
     >
-      {icon ? (
-        <Icon name={icon} size={18} color={selected ? "onPrimary" : "ink"} />
-      ) : null}
-      <Text
+      <View
         style={[
-          styles.chipText,
-          { color: selected ? theme.onPrimary : theme.ink },
+          styles.chip,
+          selected
+            ? { backgroundColor: theme.secondaryContainer }
+            : {
+                backgroundColor: theme.surfaceContainerLow,
+                borderWidth: 1,
+                borderColor: theme.outline,
+              },
         ]}
-        maxFontSizeMultiplier={1.3}
       >
-        {label}
-      </Text>
+        {/* The ripple sits on the visible chip, not the 48 dp area. */}
+        <Pressable
+          onPress={onPress}
+          accessible={false}
+          importantForAccessibility="no-hide-descendants"
+          android_ripple={{ color: theme[content], alpha: RIPPLE_ALPHA }}
+          style={styles.chipInner}
+        >
+          {leading ? <Icon name={leading} size={18} color={content} /> : null}
+          <Text
+            style={[Type.labelLarge, { color: theme[content] }]}
+            maxFontSizeMultiplier={1.3}
+          >
+            {label}
+          </Text>
+        </Pressable>
+      </View>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { gap: Spacing.two },
+  wrap: { gap: Spacing.one },
   bar: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.two,
-    borderRadius: Radius.card,
-    paddingLeft: Spacing.twoHalf,
+    borderRadius: Radius.xl,
+    paddingLeft: Spacing.three,
     paddingRight: Spacing.one,
     paddingVertical: Spacing.one,
     minHeight: 56,
   },
-  shadow: {
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 4,
-  },
   title: { flex: 1 },
   barButton: {
-    minHeight: 44,
-    minWidth: 44,
-    paddingHorizontal: Spacing.twoHalf,
-    borderRadius: Radius.button,
+    minHeight: 48,
+    minWidth: 48,
+    paddingHorizontal: Spacing.three,
+    borderRadius: Radius.full,
+    overflow: "hidden",
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: Spacing.one,
   },
-  barButtonText: { ...Type.label },
   chips: {
-    gap: Spacing.two,
+    columnGap: Spacing.two,
     alignItems: "center",
     paddingRight: Spacing.three,
   },
+  groupGap: { width: Spacing.two },
+  target: { minHeight: 48, justifyContent: "center" },
   chip: {
-    minHeight: 40,
-    paddingHorizontal: Spacing.twoHalf,
-    borderRadius: Radius.pill,
-    borderWidth: 1,
+    minHeight: CHIP_HEIGHT,
+    borderRadius: Radius.chip,
+    overflow: "hidden",
+  },
+  chipInner: {
+    minHeight: CHIP_HEIGHT,
     flexDirection: "row",
     alignItems: "center",
-    gap: Spacing.one,
-    elevation: 2,
+    gap: Spacing.two,
+    paddingHorizontal: Spacing.twoHalf,
   },
-  chipText: { ...Type.small, fontWeight: "600" },
-  divider: { width: 1, height: 24 },
-  dim: { opacity: 0.6 },
 });

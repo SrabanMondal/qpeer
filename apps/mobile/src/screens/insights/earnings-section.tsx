@@ -20,8 +20,7 @@ import {
   LoadingState,
   SectionHeader,
 } from "@/components/ui";
-import { Radius, Spacing } from "@/constants/theme";
-import { useTheme } from "@/hooks/use-theme";
+import { Spacing } from "@/constants/theme";
 import { formatRupees } from "@/lib/format";
 import {
   dayLabel,
@@ -30,52 +29,6 @@ import {
   signedRupees,
 } from "@/lib/insights-format";
 import { formatDateTime } from "@/lib/queue-format";
-
-/** Business share vs Qpeer share as one bar (INS-07). */
-function SplitBar({
-  business,
-  platform,
-}: {
-  business: number;
-  platform: number;
-}) {
-  const theme = useTheme();
-  const total = business + platform;
-  if (total <= 0) return null;
-  return (
-    <View
-      style={[styles.bar, { backgroundColor: theme.primarySoft }]}
-      accessible
-      accessibilityLabel={`Your share ${formatRupees(business)}, Qpeer ${formatRupees(platform)}`}
-    >
-      <View
-        style={{
-          flex: Math.max(0, business),
-          backgroundColor: theme.brand,
-        }}
-      />
-      <View
-        style={{ flex: Math.max(0, platform), backgroundColor: theme.primary }}
-      />
-    </View>
-  );
-}
-
-function Legend() {
-  const theme = useTheme();
-  return (
-    <View style={styles.legend}>
-      <View style={[styles.dot, { backgroundColor: theme.brand }]} />
-      <ThemedText type="small" themeColor="inkMuted">
-        Your share
-      </ThemedText>
-      <View style={[styles.dot, { backgroundColor: theme.primary }]} />
-      <ThemedText type="small" themeColor="inkMuted">
-        Qpeer
-      </ThemedText>
-    </View>
-  );
-}
 
 /** Totals per day (7 days) or per week (28 days): your share, with the gross under it. */
 function Periods({ days, range }: { days: EarningsDay[]; range: number }) {
@@ -89,7 +42,7 @@ function Periods({ days, range }: { days: EarningsDay[]; range: number }) {
         }));
   return (
     <Card>
-      <ThemedText type="heading">
+      <ThemedText type="titleMedium">
         {range === 7 ? "By day" : "By week"}
       </ThemedText>
       {rows.map((r) => (
@@ -111,11 +64,11 @@ function EventRow({ e, pct }: { e: EarningsEvent; pct: number }) {
   return (
     <View style={styles.event}>
       <View style={styles.flex}>
-        <ThemedText type="body">{eventTitle(e)}</ThemedText>
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyLarge">{eventTitle(e)}</ThemedText>
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           {`${e.queueName} · ${formatDateTime(e.at)}`}
         </ThemedText>
-        <ThemedText type="small" themeColor="inkMuted">
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
           {e.kind === "forfeit"
             ? `You keep your ${formatRupees(splitPaise(e.paymentAmountPaise, pct).business)} share`
             : `Your share ${signedRupees(e.businessSharePaise)}`}
@@ -125,8 +78,9 @@ function EventRow({ e, pct }: { e: EarningsEvent; pct: number }) {
         <Badge label="Kept" tone="warning" />
       ) : (
         <ThemedText
-          type="heading"
-          themeColor={e.amountPaise < 0 ? "danger" : "ink"}
+          type="titleMedium"
+          themeColor={e.amountPaise < 0 ? "error" : "onSurface"}
+          style={styles.amount}
         >
           {signedRupees(e.amountPaise)}
         </ThemedText>
@@ -194,17 +148,12 @@ export function EarningsSection({
     body = (
       <>
         <Card>
-          <ThemedText type="label" themeColor="inkMuted">
-            YOUR SHARE
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+            Your share
           </ThemedText>
-          <ThemedText type="title" accessibilityRole="text">
+          <ThemedText type="figure" accessibilityRole="text">
             {formatRupees(t.businessSharePaise)}
           </ThemedText>
-          <SplitBar
-            business={t.businessSharePaise}
-            platform={t.platformSharePaise}
-          />
-          <Legend />
           <InfoRow label="Fees paid" value={formatRupees(t.capturedPaise)} />
           <InfoRow
             label={`Refunds (${t.refunds})`}
@@ -220,15 +169,15 @@ export function EarningsSection({
             label={`No-show fees kept (${t.forfeits})`}
             value={formatRupees(t.forfeitedPaise)}
           />
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             {`You keep ${first.businessSharePct}% of each fee, after refunds. Test mode: no real money moves.`}
           </ThemedText>
         </Card>
         <Periods days={first.days} range={range} />
         <Card>
-          <ThemedText type="heading">Money in and out</ThemedText>
+          <ThemedText type="titleMedium">Money in and out</ThemedText>
           {items.length === 0 ? (
-            <ThemedText type="small" themeColor="inkMuted">
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
               Nothing in this period.
             </ThemedText>
           ) : (
@@ -239,7 +188,7 @@ export function EarningsSection({
           {hasNextPage ? (
             <Button
               title="Show older"
-              variant="secondary"
+              variant="tonal"
               loading={fetchingNext}
               onPress={onMore}
               needsNetwork
@@ -257,7 +206,7 @@ export function EarningsSection({
       <Button
         title="All payments"
         icon="receipt_long"
-        variant="outline"
+        variant="outlined"
         onPress={openPayments}
       />
     </>
@@ -265,14 +214,7 @@ export function EarningsSection({
 }
 
 const styles = StyleSheet.create({
-  bar: {
-    flexDirection: "row",
-    height: 12,
-    borderRadius: Radius.pill,
-    overflow: "hidden",
-  },
-  legend: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
-  dot: { width: 10, height: 10, borderRadius: 5 },
+  amount: { fontVariant: ["tabular-nums"] },
   event: {
     flexDirection: "row",
     alignItems: "center",

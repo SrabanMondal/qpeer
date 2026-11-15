@@ -4,11 +4,9 @@ import {
   UpdateBusinessBody,
 } from "@qpeer/shared";
 import { useEffect, useState } from "react";
-import { Alert } from "react-native";
 
 import { Button, ChoiceChips, TextField } from "@/components/ui";
 import { ApiError } from "@/lib/api";
-import { errorText } from "@/lib/error-messages";
 import {
   apiFieldErrors,
   type FieldErrors,
@@ -16,6 +14,7 @@ import {
   zodFieldErrors,
 } from "@/lib/form";
 import { CATEGORY_CHOICES } from "@/lib/format";
+import { showErrorToast } from "@/lib/toast";
 
 export type BusinessProfileValues = {
   name: string;
@@ -130,7 +129,8 @@ export function BusinessForm({
       if (e instanceof ApiError && e.issues.length > 0) {
         form.showErrors(friendly(apiFieldErrors(e.issues)));
       } else {
-        Alert.alert("Could not save", errorText(e));
+        // The typed values stay; the snackbar says what went wrong.
+        showErrorToast("Could not save", e);
       }
     } finally {
       setSaving(false);
@@ -177,6 +177,7 @@ export function BusinessForm({
       />
       <Button
         title={submitLabel}
+        size="large"
         onPress={submit}
         loading={saving}
         needsNetwork

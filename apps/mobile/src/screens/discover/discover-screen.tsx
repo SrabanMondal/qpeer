@@ -16,13 +16,7 @@ import {
 import type { MapState } from "@rnmapbox/maps";
 import { useIsFocused, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  ActivityIndicator,
-  Linking,
-  Pressable,
-  StyleSheet,
-  View,
-} from "react-native";
+import { ActivityIndicator, Linking, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
@@ -32,13 +26,14 @@ import {
   ConnectionBanner,
   EmptyState,
   ErrorState,
+  Fab,
   Icon,
   type IconName,
   LoadingState,
 } from "@/components/ui";
 import { config } from "@/config";
-import { Radius, Spacing } from "@/constants/theme";
-import { useIsDark, useTheme } from "@/hooks/use-theme";
+import { Elevation, Radius, Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 import { isNetworkError, useMapBusinesses } from "@/lib/api";
 import { turnOnLocation } from "@/lib/join-location";
 import { onBackOnline, useOffline } from "@/lib/network";
@@ -82,7 +77,6 @@ function boxAround(c: LatLng): MapBox {
 export function DiscoverScreen() {
   const router = useRouter();
   const theme = useTheme();
-  const dark = useIsDark();
   const insets = useSafeAreaInsets();
   const focused = useIsFocused();
   const map = useRef<QueueMapHandle>(null);
@@ -300,10 +294,11 @@ export function DiscoverScreen() {
   const notices = (
     <>
       <ConnectionBanner />
-      {!hasToken ? (
+      {/* A developer message: release builds just show the list. */}
+      {!hasToken && __DEV__ ? (
         <Card>
-          <ThemedText type="heading">Map not available</ThemedText>
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="titleMedium">Map not available</ThemedText>
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             Mapbox token missing: set EXPO_PUBLIC_MAPBOX_TOKEN in
             apps/mobile/.env.local (or the EAS environment) and restart Metro.
             The list still works.
@@ -381,7 +376,7 @@ export function DiscoverScreen() {
         filtersOn ? (
           <Button
             title="Clear filters"
-            variant="secondary"
+            variant="tonal"
             onPress={() => {
               setCategory(null);
               setOpenNow(false);
@@ -393,7 +388,7 @@ export function DiscoverScreen() {
   ) : null;
 
   return (
-    <View style={[styles.fill, { backgroundColor: theme.bg }]}>
+    <View style={[styles.fill, { backgroundColor: theme.surface }]}>
       {hasToken ? (
         <QueueMap
           key={mapKey}
@@ -412,7 +407,9 @@ export function DiscoverScreen() {
       ) : null}
 
       {listMode ? (
-        <View style={[StyleSheet.absoluteFill, { backgroundColor: theme.bg }]}>
+        <View
+          style={[StyleSheet.absoluteFill, { backgroundColor: theme.surface }]}
+        >
           <BusinessList
             rows={rows}
             sort={effectiveSort}
@@ -428,21 +425,21 @@ export function DiscoverScreen() {
             header={
               <View style={styles.listTop}>
                 {notices}
-                <ThemedText type="small" themeColor="inkMuted">
+                <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
                   {userLoc
                     ? `Within ~${LIST_RADIUS_KM} km of you`
                     : `Within ~${LIST_RADIUS_KM} km of the map centre`}
                 </ThemedText>
                 {userLoc === null ? (
-                  <Pressable
-                    onPress={() => void recenter()}
-                    accessibilityRole="button"
-                    style={styles.link}
-                  >
-                    <ThemedText type="small" themeColor="primary">
-                      Use my location to sort by distance
-                    </ThemedText>
-                  </Pressable>
+                  <View style={styles.link}>
+                    <Button
+                      title="Use my location to sort by distance"
+                      variant="text"
+                      icon="my_location"
+                      loading={locating}
+                      onPress={() => void recenter()}
+                    />
+                  </View>
                 ) : null}
               </View>
             }
@@ -457,7 +454,7 @@ export function DiscoverScreen() {
         style={[
           styles.top,
           { paddingTop: insets.top + Spacing.two },
-          listMode && { backgroundColor: theme.bg },
+          listMode && { backgroundColor: theme.surface },
         ]}
         pointerEvents="box-none"
         onLayout={(e) => setTopHeight(e.nativeEvent.layout.height)}
@@ -488,41 +485,39 @@ export function DiscoverScreen() {
             {notices}
             {shown.isFetching && !firstLoad ? (
               <View
-                style={[styles.refreshing, { backgroundColor: theme.card }]}
+                style={[
+                  styles.refreshing,
+                  {
+                    backgroundColor: theme.surfaceContainerHigh,
+                    boxShadow: Elevation.level3,
+                  },
+                ]}
                 accessibilityLabel="Refreshing"
               >
                 <ActivityIndicator size="small" color={theme.primary} />
               </View>
             ) : null}
             {stateCard && !selected ? (
-              <View style={[styles.stateCard, { backgroundColor: theme.card }]}>
+              <View
+                style={[
+                  styles.stateCard,
+                  { backgroundColor: theme.surfaceContainerLow },
+                ]}
+              >
                 {stateCard}
               </View>
             ) : null}
           </View>
 
           <View style={styles.bottom} pointerEvents="box-none">
-            <Pressable
-              onPress={() => void recenter()}
-              accessibilityRole="button"
-              accessibilityLabel="Show my location"
-              style={({ pressed }) => [
-                styles.fab,
-                {
-                  backgroundColor: theme.card,
-                  borderColor: theme.border,
-                  borderWidth: dark ? 1 : 0,
-                  shadowColor: theme.shadow,
-                },
-                pressed && styles.dim,
-              ]}
-            >
-              {locating ? (
-                <ActivityIndicator color={theme.primary} />
-              ) : (
-                <Icon name="my_location" color="primary" />
-              )}
-            </Pressable>
+            <View style={styles.fab}>
+              <Fab
+                icon="my_location"
+                accessibilityLabel="Show my location"
+                loading={locating}
+                onPress={() => void recenter()}
+              />
+            </View>
             {selected ? (
               <BusinessCard
                 business={selected}
@@ -537,18 +532,19 @@ export function DiscoverScreen() {
   );
 }
 
+/** A slim tonal strip (like the connection strip) for map and list notices. */
 function Notice({ icon, text }: { icon: IconName; text: string }) {
   const theme = useTheme();
   return (
     <View
       style={[
         styles.notice,
-        { backgroundColor: theme.card, borderColor: theme.border },
+        { backgroundColor: theme.surfaceContainerHighest },
       ]}
       accessibilityLiveRegion="polite"
     >
-      <Icon name={icon} size={18} color="inkMuted" />
-      <ThemedText type="small" style={styles.fill}>
+      <Icon name={icon} size={18} color="onSurfaceVariant" />
+      <ThemedText type="bodyMedium" style={styles.fill}>
         {text}
       </ThemedText>
     </View>
@@ -566,7 +562,7 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.two,
   },
   listTop: { gap: Spacing.two },
-  link: { minHeight: 44, justifyContent: "center" },
+  link: { alignItems: "flex-start", marginLeft: -Spacing.twoHalf },
   mapNotices: {
     position: "absolute",
     left: Spacing.three,
@@ -577,16 +573,14 @@ const styles = StyleSheet.create({
   stateCard: { marginTop: Spacing.two, borderRadius: Radius.card },
   refreshing: {
     alignSelf: "center",
-    borderRadius: Radius.pill,
+    borderRadius: Radius.full,
     padding: Spacing.two,
-    elevation: 3,
   },
   notice: {
     flexDirection: "row",
     alignItems: "center",
     gap: Spacing.two,
-    borderRadius: Radius.input,
-    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: Radius.md,
     paddingHorizontal: Spacing.twoHalf,
     paddingVertical: Spacing.two,
   },
@@ -597,17 +591,5 @@ const styles = StyleSheet.create({
     bottom: Spacing.three,
     gap: Spacing.twoHalf,
   },
-  fab: {
-    alignSelf: "flex-end",
-    width: 52,
-    height: 52,
-    borderRadius: Radius.pill,
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 6,
-  },
-  dim: { opacity: 0.6 },
+  fab: { alignSelf: "flex-end" },
 });

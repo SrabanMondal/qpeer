@@ -4,15 +4,12 @@ import type { ReactNode } from "react";
 import { ThemedText } from "@/components/themed-text";
 import {
   Button,
-  Card,
   EmptyState,
   ErrorState,
-  InfoRow,
   LoadingState,
   Screen,
 } from "@/components/ui";
 import { useBusiness, useBusinessPayments } from "@/lib/api";
-import { formatRupees } from "@/lib/format";
 import { useOffline } from "@/lib/network";
 import { PaymentRow } from "@/screens/payment-list";
 
@@ -27,7 +24,6 @@ export default function BusinessPaymentsScreen() {
   const business = useBusiness(businessId);
   const payments = useBusinessPayments(businessId);
   const items = payments.data?.pages.flatMap((p) => p.items) ?? [];
-  const share = items.reduce((s, p) => s + p.businessSharePaise, 0);
 
   let body: ReactNode;
   if (payments.isPending) {
@@ -60,23 +56,16 @@ export default function BusinessPaymentsScreen() {
   } else {
     body = (
       <>
-        <Card>
-          <InfoRow
-            label={`Your share (${items.length} shown)`}
-            value={formatRupees(share)}
-          />
-          <ThemedText type="small" themeColor="inkMuted">
-            Net after refunds. In this demo the business keeps 70% of each fee
-            and Qpeer 30%. Walk-ins pay you directly, outside Qpeer.
-          </ThemedText>
-        </Card>
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+          Walk-ins pay you directly, outside Qpeer.
+        </ThemedText>
         {items.map((p) => (
           <PaymentRow key={p.id} payment={p} showBusiness={false} />
         ))}
         {payments.hasNextPage ? (
           <Button
             title="Show older payments"
-            variant="secondary"
+            variant="tonal"
             loading={payments.isFetchingNextPage}
             onPress={() => void payments.fetchNextPage()}
             needsNetwork

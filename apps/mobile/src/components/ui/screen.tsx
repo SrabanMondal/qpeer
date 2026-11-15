@@ -49,6 +49,12 @@ type ScreenProps = {
   /** The "Connecting…" / "Offline" strip at the top. Default true. */
   connectionBanner?: boolean;
   contentStyle?: StyleProp<ViewStyle>;
+  /**
+   * A pinned bottom action bar: the state's one primary action stays under
+   * the thumb at any scroll position, and rises above the keyboard. It
+   * takes the bottom inset when `bottomInset` is on.
+   */
+  bottomBar?: ReactNode;
   /** Imperative scrolling for scroll screens (e.g. to the first invalid field). */
   ref?: Ref<ScreenHandle>;
 };
@@ -70,6 +76,7 @@ export function Screen({
   bottomInset = true,
   connectionBanner = true,
   contentStyle,
+  bottomBar,
   ref,
 }: ScreenProps) {
   const theme = useTheme();
@@ -131,15 +138,32 @@ export function Screen({
     };
   }, [scroll, revealFocusedInput]);
 
+  const bottomPad = bottomInset ? insets.bottom : 0;
   const padding = {
-    paddingBottom: (bottomInset ? insets.bottom : 0) + Spacing.four,
+    // With a bar, the bar takes the inset.
+    paddingBottom: (bottomBar ? 0 : bottomPad) + Spacing.four,
     paddingLeft: insets.left + Spacing.three,
     paddingRight: insets.right + Spacing.three,
   };
   const banner = connectionBanner ? <ConnectionBanner /> : null;
+  const bar = bottomBar ? (
+    <View
+      style={[
+        styles.bar,
+        {
+          backgroundColor: theme.surfaceContainer,
+          paddingBottom: bottomPad + Spacing.twoHalf,
+          paddingLeft: insets.left + Spacing.three,
+          paddingRight: insets.right + Spacing.three,
+        },
+      ]}
+    >
+      {bottomBar}
+    </View>
+  ) : null;
 
   if (!scroll) {
-    return (
+    const body = (
       <View
         style={[
           styles.fill,
@@ -151,6 +175,13 @@ export function Screen({
       >
         {banner}
         {children}
+      </View>
+    );
+    if (!bar) return body;
+    return (
+      <View style={[styles.fill, { backgroundColor: theme.surface }]}>
+        {body}
+        {bar}
       </View>
     );
   }
@@ -187,6 +218,7 @@ export function Screen({
         {banner}
         {children}
       </ScrollView>
+      {bar}
     </KeyboardAvoidingView>
   );
 }
@@ -194,4 +226,5 @@ export function Screen({
 const styles = StyleSheet.create({
   fill: { flex: 1 },
   content: { paddingTop: Spacing.three, gap: Spacing.three },
+  bar: { paddingTop: Spacing.twoHalf, gap: Spacing.two },
 });

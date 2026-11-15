@@ -48,11 +48,12 @@ export default function NewQueueScreen() {
         returnKeyType="done"
         onSubmitEditing={submit}
       />
-      <ThemedText type="small" themeColor="inkMuted">
+      <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
         The queue starts with default settings. You can change them next.
       </ThemedText>
       <Button
         title="Create queue"
+        size="large"
         icon="add"
         onPress={submit}
         loading={create.isPending}

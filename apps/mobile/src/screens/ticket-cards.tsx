@@ -16,16 +16,20 @@ import {
 } from "@/lib/join-errors";
 import { readJoinLocation, turnOnLocation } from "@/lib/join-location";
 import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
-import { formatClock, formatDateTime, ticketTitle } from "@/lib/queue-format";
+import { formatDateTime } from "@/lib/queue-format";
 
 type GpsPhase = "idle" | "locating" | "sending";
+
+export type GpsAction = ReturnType<typeof useGpsAction>;
 
 /**
  * The walk-in GPS check for a ticket (same flow and texts as joining,
  * JON-05/06): Priority Pass check-in (PRI-03) or "I'm here" (QUE-23). The
  * reading goes straight into the request; it is never stored or logged.
+ * The ticket screen owns it, so its button can sit in the pinned bar while
+ * the explanation and any problem stay in the content.
  */
-function useGpsAction(
+export function useGpsAction(
   tokenId: string,
   action: "checkin" | "rejoin",
   onDone: (t: TokenView) => void,
@@ -64,7 +68,14 @@ function useGpsAction(
   return { phase, problem, run, fix };
 }
 
-function GpsStatus({ phase, idleText }: { phase: GpsPhase; idleText: string }) {
+/** The line next to a GPS action: progress, offline, or the privacy note. */
+export function GpsStatus({
+  phase,
+  idleText,
+}: {
+  phase: GpsPhase;
+  idleText: string;
+}) {
   const offline = useOffline();
   return (
     <ThemedText
@@ -81,6 +92,13 @@ function GpsStatus({ phase, idleText }: { phase: GpsPhase; idleText: string }) {
             : idleText}
     </ThemedText>
   );
+}
+
+/** What went wrong with the GPS action, with its fix, next to the text. */
+export function GpsProblem({ gps }: { gps: GpsAction }) {
+  return gps.problem ? (
+    <ProblemCard problem={gps.problem} onFix={(p) => void gps.fix(p)} />
+  ) : null;
 }
 
 /** Title line of a ticket state block: an icon and a title large. */
@@ -101,31 +119,33 @@ function StateTitle({
   );
 }
 
+/** True when this missed ticket can still rejoin with "I'm here". */
+export function canRejoin(t: TokenView): boolean {
+  return t.rejoinAvailable !== false;
+}
+
 /**
  * MISSED (QUE-22/23, design guide §5a): "You missed your turn. When you're
  * here, tap I'm here to rejoin." One rejoin, with a GPS check; after the
- * late window the rejoin goes to the end of the line. "I'm here" is the
- * state's one primary action.
+ * late window the rejoin goes to the end of the line. The board shows the
+ * REJOIN BY time; "I'm here" sits in the screen's pinned bar.
  */
 export function MissedCard({
   t,
   now,
-  onRejoined,
+  gps,
 }: {
   t: TokenView;
   now: number;
-  onRejoined: (t: TokenView) => void;
+  gps: GpsAction;
 }) {
-  const offline = useOffline();
-  const gps = useGpsAction(t.id, "rejoin", onRejoined);
-  const canRejoin = t.rejoinAvailable !== false;
   const until = t.rejoinUntil ?? null;
   const late = until !== null && now > until;
   return (
     <>
       <View style={styles.block}>
         <StateTitle icon="schedule" title="You missed your turn" />
-        {canRejoin ? (
+        {canRejoin(t) ? (
           <>
             <ThemedText type="bodyLarge">
               When you're here, tap I'm here to rejoin.
@@ -135,21 +155,8 @@ export function MissedCard({
                 ? "You can rejoin once. You go back in a little behind the front."
                 : late
                   ? "You'll rejoin at the end of the line."
-                  : `Tap before ${formatClock(until)} to go back in a little behind the front. After that you rejoin at the end of the line. You can rejoin once.`}
+                  : "Tap I'm here soon to go back in a little behind the front. After that you rejoin at the end of the line. You can rejoin once."}
             </ThemedText>
-            <Button
-              title="I'm here"
-              size="large"
-              icon="where_to_vote"
-              loading={gps.phase !== "idle"}
-              disabled={offline}
-              onPress={() => void gps.run()}
-              accessibilityLabel="I'm here: check my location and rejoin the queue"
-            />
-            <GpsStatus
-              phase={gps.phase}
-              idleText="Your location is checked once to confirm you are here. It is not stored."
-            />
           </>
         ) : (
           <ThemedText type="bodyLarge">
@@ -159,33 +166,50 @@ export function MissedCard({
           </ThemedText>
         )}
       </View>
-      {gps.problem ? (
-        <ProblemCard problem={gps.problem} onFix={(p) => void gps.fix(p)} />
-      ) : null}
+      <GpsProblem gps={gps} />
+    </>
+  );
+}
+
+/** "I'm here" for the pinned bar, with its status line above it. */
+export function MissedAction({ gps }: { gps: GpsAction }) {
+  const offline = useOffline();
+  return (
+    <>
+      <GpsStatus
+        phase={gps.phase}
+        idleText="Your location is checked once to confirm you are here. It is not stored."
+      />
+      <Button
+        title="I'm here"
+        size="large"
+        icon="where_to_vote"
+        loading={gps.phase !== "idle"}
+        disabled={offline}
+        onPress={() => void gps.run()}
+        accessibilityLabel="I'm here: check my location and rejoin the queue"
+      />
     </>
   );
 }
 
 /**
  * BOOKED pass (PRI-03, design guide §5a): "Priority Pass · booked", valid
- * until, one big "Check in" (GPS, the primary action), an outlined Cancel
- * with the refund.
+ * until, an outlined Cancel with the refund. "Check in" (GPS) sits in the
+ * screen's pinned bar.
  */
 export function BookedCard({
   t,
-  onCheckedIn,
+  gps,
   onCancel,
   cancelling,
 }: {
   t: TokenView;
-  onCheckedIn: (t: TokenView) => void;
+  gps: GpsAction;
   onCancel: () => void;
   cancelling: boolean;
 }) {
   const offline = useOffline();
-  const gps = useGpsAction(t.id, "checkin", onCheckedIn);
-  const closed = t.queueStatus === "closed";
-  const paused = t.queueStatus === "paused";
   const pct = t.cancelRefundPct ?? null;
   return (
     <>
@@ -199,25 +223,6 @@ export function BookedCard({
           join the priority lane and get your P number.
         </ThemedText>
         <Button
-          title="Check in"
-          size="large"
-          icon="where_to_vote"
-          loading={gps.phase !== "idle"}
-          disabled={offline || closed || paused}
-          onPress={() => void gps.run()}
-          accessibilityLabel="Check in: check my location and join the priority lane"
-        />
-        <GpsStatus
-          phase={gps.phase}
-          idleText={
-            closed
-              ? "Check-in opens when the queue opens."
-              : paused
-                ? "The queue is paused. Check in when it resumes."
-                : "Your location is checked once to confirm you are here. It is not stored."
-          }
-        />
-        <Button
           title={
             pct !== null && pct > 0
               ? `Cancel pass · ${pct}% back`
@@ -230,9 +235,37 @@ export function BookedCard({
           onPress={onCancel}
         />
       </View>
-      {gps.problem ? (
-        <ProblemCard problem={gps.problem} onFix={(p) => void gps.fix(p)} />
-      ) : null}
+      <GpsProblem gps={gps} />
+    </>
+  );
+}
+
+/** "Check in" for the pinned bar, with its status line above it. */
+export function CheckInAction({ t, gps }: { t: TokenView; gps: GpsAction }) {
+  const offline = useOffline();
+  const closed = t.queueStatus === "closed";
+  const paused = t.queueStatus === "paused";
+  return (
+    <>
+      <GpsStatus
+        phase={gps.phase}
+        idleText={
+          closed
+            ? "Check-in opens when the queue opens."
+            : paused
+              ? "The queue is paused. Check in when it resumes."
+              : "Your location is checked once to confirm you are here. It is not stored."
+        }
+      />
+      <Button
+        title="Check in"
+        size="large"
+        icon="where_to_vote"
+        loading={gps.phase !== "idle"}
+        disabled={offline || closed || paused}
+        onPress={() => void gps.run()}
+        accessibilityLabel="Check in: check my location and join the priority lane"
+      />
     </>
   );
 }
@@ -241,7 +274,7 @@ export function BookedCard({
  * PRI-05 / C2: "Skip ahead · about N min faster" as a tonal row with the
  * price in a ₹ chip (the mock-up's row), only when the server says
  * `upgrade.show` (never "save ~0 min"; hidden under the threshold). The
- * whole row is one button.
+ * whole row is one button; the pay screen states the rules.
  */
 export function SkipAheadCard({
   t,
@@ -263,14 +296,13 @@ export function SkipAheadCard({
       android_ripple={{ color: theme.onPrimaryContainer, alpha: RIPPLE_ALPHA }}
       style={[styles.skip, { backgroundColor: theme.primaryContainer }]}
     >
-      <View style={styles.flex}>
-        <ThemedText type="bodyLarge" themeColor="onPrimaryContainer">
-          {`Skip ahead · about ${u.savingMin} min faster`}
-        </ThemedText>
-        <ThemedText type="bodySmall" themeColor="onPrimaryContainer">
-          {`Your ticket ${ticketTitle(t)} moves to the priority lane and keeps its number.`}
-        </ThemedText>
-      </View>
+      <ThemedText
+        type="bodyLarge"
+        themeColor="onPrimaryContainer"
+        style={styles.flex}
+      >
+        {`Skip ahead · about ${u.savingMin} min faster`}
+      </ThemedText>
       <View style={[styles.chip, { backgroundColor: theme.primary }]}>
         <ThemedText type="labelLarge" themeColor="onPrimary">
           {price}
@@ -283,7 +315,7 @@ export function SkipAheadCard({
 const styles = StyleSheet.create({
   block: { gap: Spacing.twoHalf },
   headline: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
-  flex: { flex: 1, gap: Spacing.half },
+  flex: { flex: 1 },
   skip: {
     flexDirection: "row",
     alignItems: "center",

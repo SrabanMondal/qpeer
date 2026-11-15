@@ -7,7 +7,7 @@ import { useRouter } from "expo-router";
 import { StyleSheet, View } from "react-native";
 
 import { ThemedText } from "@/components/themed-text";
-import { Button, Card, Icon } from "@/components/ui";
+import { Badge, Button, Card, Icon } from "@/components/ui";
 import { Spacing } from "@/constants/theme";
 import { useAuth } from "@/lib/auth";
 import { formatRupees } from "@/lib/format";
@@ -68,13 +68,7 @@ export function PriorityBuyCard({
           : "Buy from anywhere; check in when you arrive to join the priority lane."}
       </ThemedText>
       {soldOut ? (
-        <Button
-          title="Sold out for today"
-          variant="outlined"
-          icon="block"
-          disabled
-          onPress={() => undefined}
-        />
+        <Badge label="Sold out for today" tone="neutral" />
       ) : guest ? (
         <>
           <Button
@@ -89,8 +83,10 @@ export function PriorityBuyCard({
           </ThemedText>
         </>
       ) : (
+        // Tonal: the free "Join queue" is the screen's one filled button.
         <Button
           title={`Buy Priority Pass · ${formatRupees(feePaise)}`}
+          variant="tonal"
           icon="bolt"
           onPress={() => router.push(payHref({ kind: "priority", queueId }))}
           needsNetwork

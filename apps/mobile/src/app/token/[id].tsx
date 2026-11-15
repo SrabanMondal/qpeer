@@ -25,11 +25,12 @@ import {
   InfoRow,
   LoadingState,
   Screen,
+  Sheet,
   StatRow,
-  StatusBanner,
   TokenBoard,
 } from "@/components/ui";
-import { Radius, Spacing } from "@/constants/theme";
+import { PrintColors, Radius, Spacing } from "@/constants/theme";
+import { useTheme } from "@/hooks/use-theme";
 import {
   mergeToken,
   queryKeys,
@@ -43,7 +44,7 @@ import { useAuth } from "@/lib/auth";
 import { openDirections } from "@/lib/directions";
 import { useLiveSocket } from "@/lib/live";
 import { goHome, useAppMode } from "@/lib/mode";
-import { OFFLINE_ACTION_TEXT, useOffline } from "@/lib/network";
+import { useOffline } from "@/lib/network";
 import { payHref } from "@/lib/pay-flow";
 import {
   type AlertPermission,
@@ -63,7 +64,15 @@ import {
 import { useSavedTicket, useStored } from "@/lib/storage";
 import { ticketBoard } from "@/lib/ticket-board";
 import { showErrorToast, showToast } from "@/lib/toast";
-import { BookedCard, MissedCard, SkipAheadCard } from "@/screens/ticket-cards";
+import {
+  BookedCard,
+  CheckInAction,
+  canRejoin,
+  MissedAction,
+  MissedCard,
+  SkipAheadCard,
+  useGpsAction,
+} from "@/screens/ticket-cards";
 
 function endCard(t: TokenView): {
   icon: IconName;
@@ -135,7 +144,9 @@ function countdownFigure(ms: number): string {
 /**
  * M5 ticket screen (TOK-01–05, TOK-07; ALR-06 tip). A reading screen: the
  * hero is the token board (design guide §1, §5a). Under it the figures for
- * the state, then the state's one action, then Directions and Leave queue.
+ * the state, then Directions and Leave queue. The state's one action ("I'm
+ * here", "Check in", "Back to home") sits in the pinned bottom bar; the
+ * ticket code opens in a sheet.
  */
 export default function TicketScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -144,6 +155,7 @@ export default function TicketScreen() {
   const queryClient = useQueryClient();
   const uid = useAuth().user?.uid ?? null;
   const { mode } = useAppMode();
+  const theme = useTheme();
   const token = useToken(tokenId);
   // C1: the last view saved on the phone, for offline (also a cold start).
   const saved = useSavedTicket(uid, tokenId);
@@ -157,6 +169,29 @@ export default function TicketScreen() {
   const router = useRouter();
   const tip = useStored("batteryTipDismissed");
   const [alerts, setAlerts] = useState<AlertPermission>("granted");
+  const [codeOpen, setCodeOpen] = useState(false);
+
+  const onPositionChange = (fresh: TokenView, title: string) => {
+    showToast({
+      title,
+      message:
+        fresh.state === "WAITING"
+          ? `${peopleAheadText(fresh.peopleAhead, fresh.peopleAheadHigh)} ahead of you.`
+          : undefined,
+      tone: "success",
+    });
+  };
+  // "I'm here" (MISSED) or "Check in" (BOOKED pass): the GPS check whose
+  // button sits in the pinned bar.
+  const checkIn = t?.state === "BOOKED";
+  const gps = useGpsAction(tokenId, checkIn ? "checkin" : "rejoin", (fresh) =>
+    onPositionChange(
+      fresh,
+      checkIn
+        ? `Checked in — you're #${fresh.label} in the priority lane`
+        : "You're back in the line",
+    ),
+  );
 
   // GRACE: the countdown ticks every second (R3).
   const now = useNow(active && focused, t?.state === "GRACE" ? 1000 : 15_000);
@@ -225,7 +260,6 @@ export default function TicketScreen() {
 
   const location = queue.data?.business.location ?? null;
   const address = queue.data?.business.address ?? null;
-  const called = t.state === "CALLED";
   const grace = t.state === "GRACE";
 
   const onLeave = async () => {
@@ -283,17 +317,6 @@ export default function TicketScreen() {
     }
   };
 
-  const onPositionChange = (fresh: TokenView, title: string) => {
-    showToast({
-      title,
-      message:
-        fresh.state === "WAITING"
-          ? `${peopleAheadText(fresh.peopleAhead, fresh.peopleAheadHigh)} ahead of you.`
-          : undefined,
-      tone: "success",
-    });
-  };
-
   // One wait formula on every surface (coordinator report 2026-10-16): the
   // DO's range, shown as its midpoint like the map, list and join screen.
   // With the priority lane on a regular's people ahead is a range (C3):
@@ -313,7 +336,8 @@ export default function TicketScreen() {
   const closedKept = active && t.queueStatus === "closed";
   const paused = waiting && t.queueStatus === "paused";
   // While offline (or showing a saved view) the time of the last update is
-  // what matters; the live line says "Last updated N min ago".
+  // what matters; the live line says "Last updated N min ago". The normal,
+  // live case needs no line at all.
   const updatedAt = fromSaved
     ? (saved?.savedAt ?? null)
     : token.dataUpdatedAt || null;
@@ -321,8 +345,23 @@ export default function TicketScreen() {
   const board = ticketBoard(t, now);
   const graceEnds = t.graceEndsAt ?? t.graceUntil;
   const graceLeft = graceEnds !== null ? graceEnds - now : 0;
-  const counterText =
-    t.counter !== null ? `Counter ${t.counter}` : "The counter";
+  const showTip =
+    active && Platform.OS === "android" && tip.ready && !tip.value;
+
+  // The pinned bar holds the state's one action.
+  const bar =
+    missed && canRejoin(t) ? (
+      <MissedAction gps={gps} />
+    ) : booked ? (
+      <CheckInAction t={t} gps={gps} />
+    ) : !active ? (
+      <Button
+        title="Back to home"
+        size="large"
+        icon="home"
+        onPress={() => goHome(mode)}
+      />
+    ) : undefined;
 
   return (
     <Screen
@@ -331,6 +370,7 @@ export default function TicketScreen() {
         void token.refetch();
         void queue.refetch();
       }}
+      bottomBar={bar}
     >
       <Stack.Screen options={{ title: "Your ticket" }} />
 
@@ -357,31 +397,51 @@ export default function TicketScreen() {
           accessibilityLabel={board.label}
           relightKey={board.relightKey}
         />
-        {active ? (
+        {active && stale ? (
           <ThemedText
             type="bodySmall"
             themeColor="onSurfaceVariant"
             style={styles.centre}
             accessibilityLiveRegion="polite"
           >
-            {!stale
-              ? "● Live — updates by itself"
-              : updatedAt !== null
-                ? `Last updated ${formatAge(updatedAt)}${offline ? " · offline" : " · reconnecting…"}`
-                : "Reconnecting… pull down to refresh"}
+            {updatedAt !== null
+              ? `Last updated ${formatAge(updatedAt)}${offline ? " · offline · your place is kept" : " · reconnecting…"}`
+              : "Reconnecting… pull down to refresh"}
           </ThemedText>
+        ) : null}
+        {active && alerts !== "granted" ? (
+          <View
+            style={[
+              styles.alertsRow,
+              { backgroundColor: theme.surfaceContainerLow },
+            ]}
+          >
+            <Icon name="notifications_off" color="onSurfaceVariant" />
+            <ThemedText type="bodyLarge" style={styles.flex}>
+              Alerts are off
+            </ThemedText>
+            <HeaderButton
+              title="Turn on"
+              accessibilityLabel={
+                alerts === "denied"
+                  ? "Turn on alerts in the phone's settings"
+                  : "Turn on alerts"
+              }
+              onPress={async () => {
+                if (alerts === "denied") {
+                  await Linking.openSettings();
+                } else if (uid) {
+                  await askForAlertsAfterJoin(uid);
+                }
+                setAlerts(await alertPermission());
+              }}
+            />
+          </View>
         ) : null}
       </View>
 
       {/* TOK-04: each state reads differently. Figures in Archivo. */}
-      {called ? (
-        <StatRow
-          stats={[
-            { label: "Your turn", value: "Now" },
-            { label: "Go to", value: counterText },
-          ]}
-        />
-      ) : grace ? (
+      {grace ? (
         <>
           <StatRow
             stats={[
@@ -393,41 +453,29 @@ export default function TicketScreen() {
             ]}
           />
           <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
-            {`Tell the staff your number (#${t.label}${t.checkCode ? ` · ${t.checkCode}` : ""}). If the time runs out your turn is missed; you can then rejoin once with I'm here.`}
+            Tell the staff your number. If the time runs out your turn is
+            missed; you can then rejoin once with I'm here.
           </ThemedText>
         </>
       ) : missed ? (
-        <MissedCard
-          t={t}
-          now={now}
-          onRejoined={(fresh) =>
-            onPositionChange(fresh, "You're back in the line")
-          }
-        />
+        <MissedCard t={t} now={now} gps={gps} />
       ) : booked ? (
         <BookedCard
           t={t}
+          gps={gps}
           cancelling={cancel.isPending}
           onCancel={() => void onCancel()}
-          onCheckedIn={(fresh) =>
-            onPositionChange(
-              fresh,
-              `Checked in — you're #${fresh.label} in the priority lane`,
-            )
-          }
         />
       ) : closedKept ? (
-        <StatusBanner
-          tone="paused"
-          title="The queue is closed — your ticket is kept"
-          detail={`You keep number #${t.label} and go first when it opens again${t.expiresAt ? `, if that is before ${formatDateTime(t.expiresAt)}` : ""}.`}
-        />
+        // The board says "QUEUE CLOSED · NUMBER KEPT".
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+          {`You go first when it opens again${t.expiresAt ? `, if that is before ${formatDateTime(t.expiresAt)}` : ""}.`}
+        </ThemedText>
       ) : paused ? (
-        <StatusBanner
-          tone="paused"
-          title="The queue is paused"
-          detail="Your place is kept. Wait times update when it resumes."
-        />
+        // The board says "QUEUE PAUSED · PLACE KEPT".
+        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+          Wait times update when it resumes.
+        </ThemedText>
       ) : waiting ? (
         <View style={styles.group}>
           <StatRow
@@ -440,11 +488,17 @@ export default function TicketScreen() {
             ]}
           />
           <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
-            {(t.peopleAhead === 0 && !ranged ? "You are next. " : "") +
-              "We will alert you when it's time to head back." +
-              (ranged
-                ? " The range allows for priority customers who may check in ahead of you."
-                : "")}
+            {[
+              t.peopleAhead === 0 && !ranged ? "You are next." : null,
+              alerts === "granted"
+                ? "We will alert you when it's time to head back."
+                : null,
+              ranged
+                ? "The range allows for priority customers who may check in ahead of you."
+                : null,
+            ]
+              .filter(Boolean)
+              .join(" ")}
           </ThemedText>
         </View>
       ) : null}
@@ -473,13 +527,6 @@ export default function TicketScreen() {
           >
             {endCard(t).message}
           </ThemedText>
-          <Button
-            title="Back to home"
-            size="large"
-            icon="home"
-            onPress={() => goHome(mode)}
-            style={styles.stretch}
-          />
         </Card>
       ) : null}
 
@@ -529,16 +576,21 @@ export default function TicketScreen() {
               : "Cancelling now gives no refund."}
         </ThemedText>
       ) : null}
-      {active && offline ? (
-        <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
-          {OFFLINE_ACTION_TEXT} Your place is kept.
-        </ThemedText>
-      ) : null}
       {active && carried && !closedKept ? (
         <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
           Kept from an earlier session: you keep number #{t.label} and are
           served first.
         </ThemedText>
+      ) : null}
+
+      {/* C3: the signed ticket staff can check, also without internet. */}
+      {active && t.signedTicket ? (
+        <Button
+          title="Show ticket code"
+          variant="tonal"
+          icon="qr_code_2"
+          onPress={() => setCodeOpen(true)}
+        />
       ) : null}
 
       {/* Times that are not on the board (the rest is shown above). */}
@@ -547,101 +599,64 @@ export default function TicketScreen() {
           {waiting && t.beBackByMs !== null ? (
             <InfoRow label="Be back by" value={formatClock(t.beBackByMs)} />
           ) : null}
-          {missed && t.rejoinUntil ? (
-            <InfoRow
-              label="Rejoin near the front until"
-              value={formatClock(t.rejoinUntil)}
-            />
+          {!booked && !missed && t.expiresAt ? (
+            <InfoRow label="Valid until" value={formatDateTime(t.expiresAt)} />
           ) : null}
-          {booked ? (
-            <InfoRow
-              label="Check in before"
-              value={
-                t.validUntil ? formatDateTime(t.validUntil) : "The end of today"
-              }
-            />
-          ) : !missed ? (
-            <InfoRow
-              label="Valid until"
-              value={
-                t.expiresAt
-                  ? formatDateTime(t.expiresAt)
-                  : "The queue closes for the day"
-              }
-            />
-          ) : null}
-          <InfoRow label="Joined" value={formatClock(t.joinedAt)} />
+          {t.signedTicket ? null : (
+            <InfoRow label="Joined" value={formatClock(t.joinedAt)} />
+          )}
         </View>
       ) : null}
 
-      {/* C3: signed ticket staff can check, also without internet. */}
       {active && t.signedTicket ? (
-        <Card style={styles.qrCard} tone="surfaceContainerLow">
-          <ThemedText type="titleMedium">Your ticket code</ThemedText>
-          <View style={styles.qrBox}>
-            <QRCode value={t.signedTicket} size={200} quietZone={12} ecl="M" />
-          </View>
-          <ThemedText
-            type="bodyMedium"
-            themeColor="onSurfaceVariant"
-            style={styles.centre}
-          >
-            Staff can scan it to check your ticket. It works without internet.
-          </ThemedText>
-        </Card>
-      ) : null}
-
-      {active && alerts !== "granted" ? (
-        <Card tone="surfaceContainerLow">
-          <View style={styles.headline}>
-            <Icon name="notifications_off" color="primary" />
-            <ThemedText type="titleMedium">Alerts are off</ThemedText>
-          </View>
-          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
-            Without alerts you need to keep checking this screen. Turn them on
-            to hear when to head back and when you are called.
-          </ThemedText>
-          <Button
-            title={alerts === "denied" ? "Open settings" : "Turn on alerts"}
-            variant="tonal"
-            icon="notifications_active"
-            onPress={async () => {
-              if (alerts === "denied") {
-                await Linking.openSettings();
-              } else if (uid) {
-                await askForAlertsAfterJoin(uid);
-              }
-              setAlerts(await alertPermission());
-            }}
-          />
-        </Card>
-      ) : null}
-
-      {active && Platform.OS === "android" && tip.ready && !tip.value ? (
-        <Card tone="surfaceContainerLow">
-          <View style={styles.tipHead}>
-            <Icon name="battery_saver" color="primary" />
-            <ThemedText type="bodyLarge" style={styles.flex}>
-              Allow Qpeer to run in the background so alerts arrive on time
+        <Sheet
+          visible={codeOpen}
+          onDismiss={() => setCodeOpen(false)}
+          title="Your ticket code"
+        >
+          <View style={styles.qrBlock}>
+            <View style={styles.qrBox}>
+              <QRCode
+                value={t.signedTicket}
+                size={200}
+                quietZone={12}
+                ecl="M"
+              />
+            </View>
+            <ThemedText
+              type="bodyMedium"
+              themeColor="onSurfaceVariant"
+              style={styles.centre}
+            >
+              Staff can scan it to check your ticket. It works without internet.
             </ThemedText>
-            <HeaderButton
-              title="Dismiss"
-              color="onSurfaceVariant"
-              onPress={() => tip.set(true)}
-            />
           </View>
-          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
-            In the list, find Qpeer and choose "Don't optimise" (or "Not
-            optimised").
-          </ThemedText>
-          <Button
-            title="Open battery settings"
-            variant="tonal"
-            icon="settings"
-            onPress={() => void openBatterySettings()}
-          />
-        </Card>
+          <InfoRow label="Joined" value={formatClock(t.joinedAt)} />
+        </Sheet>
       ) : null}
+
+      {/* ALR-06: a one-time setup step, shown once as a sheet (Profile keeps
+          a permanent "Alerts and battery" row). */}
+      <Sheet
+        visible={showTip}
+        onDismiss={() => tip.set(true)}
+        title="Let alerts arrive on time"
+      >
+        <ThemedText type="bodyLarge">
+          Allow Qpeer to run in the background. In the list, find Qpeer and
+          choose "Don't optimise" (or "Not optimised").
+        </ThemedText>
+        <Button
+          title="Open battery settings"
+          size="large"
+          icon="battery_saver"
+          onPress={() => {
+            tip.set(true);
+            void openBatterySettings();
+          }}
+        />
+        <Button title="Not now" variant="text" onPress={() => tip.set(true)} />
+      </Sheet>
     </Screen>
   );
 }
@@ -650,17 +665,23 @@ const styles = StyleSheet.create({
   place: { gap: Spacing.half },
   boardBlock: { gap: Spacing.two },
   group: { gap: Spacing.two },
-  headline: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
+  alertsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: Spacing.twoHalf,
+    minHeight: 56,
+    paddingLeft: Spacing.three,
+    paddingRight: Spacing.one,
+    borderRadius: Radius.card,
+  },
   end: { alignItems: "center", gap: Spacing.twoHalf },
   centre: { textAlign: "center" },
-  stretch: { alignSelf: "stretch" },
   actions: { flexDirection: "row", gap: Spacing.twoHalf },
   flex: { flex: 1 },
-  tipHead: { flexDirection: "row", alignItems: "center", gap: Spacing.two },
-  qrCard: { alignItems: "center", gap: Spacing.two },
+  qrBlock: { alignItems: "center", gap: Spacing.two },
   // The QR's quiet zone stays pure white in both themes so scanners read it.
   qrBox: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: PrintColors.paper,
     borderRadius: Radius.card,
     overflow: "hidden",
   },

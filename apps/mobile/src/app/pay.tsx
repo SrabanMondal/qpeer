@@ -151,7 +151,7 @@ export default function PayScreen() {
         email: profile?.email,
         phone: profile?.phone,
       },
-      theme.brand,
+      theme.primary,
     );
     if (result.kind === "unavailable") {
       setPhase({
@@ -230,6 +230,15 @@ export default function PayScreen() {
     kind === "upgrade"
       ? (ticket.data?.priority ?? null)
       : (queue.data?.priority ?? queue.data?.queue.priority ?? null);
+  // The order is ready to pay: the pay button sits in the pinned bar, the
+  // price on it (design guide §5a).
+  const ready =
+    registered &&
+    !soldOut &&
+    !existing &&
+    !order.isError &&
+    o !== undefined &&
+    phase.kind !== "done";
 
   return (
     <Screen
@@ -240,24 +249,46 @@ export default function PayScreen() {
           void preview.refetch();
         }
       }}
+      bottomBar={
+        ready && o ? (
+          <>
+            <Button
+              title={
+                phase.kind === "confirming"
+                  ? "Confirming your payment…"
+                  : kind === "priority"
+                    ? `Buy Priority Pass · ${formatRupees(o.amountPaise)}`
+                    : `Pay ${formatRupees(o.amountPaise)}`
+              }
+              size="large"
+              icon="payments"
+              loading={busy}
+              onPress={() => void pay(o)}
+              needsNetwork
+            />
+            <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
+              {phase.kind === "confirming"
+                ? "Keep this screen open for a few seconds."
+                : "Payments run through Razorpay (test mode in this version: no real money). Qpeer never sees your card or UPI details."}
+            </ThemedText>
+          </>
+        ) : undefined
+      }
     >
       <Stack.Screen options={{ title: TITLES[kind] }} />
 
-      <Card>
-        <ThemedText type="label" themeColor="inkMuted">
-          {TITLES[kind].toUpperCase()}
-        </ThemedText>
-        <ThemedText type="title">
+      <View style={styles.head}>
+        <ThemedText type="headlineSmall">
           {o?.businessName ??
             queue.data?.business.name ??
             ticket.data?.businessName ??
             " "}
         </ThemedText>
-        <ThemedText type="heading" themeColor="inkMuted">
+        <ThemedText type="titleMedium" themeColor="onSurfaceVariant">
           {o?.queueName ?? queue.data?.queue.name ?? ticket.data?.queueName}
         </ThemedText>
         <PriorityChip priority={priority} />
-      </Card>
+      </View>
 
       {kind === "priority" && preview.data ? (
         <PriorityPreviewCard preview={preview.data} now={now} />
@@ -265,7 +296,7 @@ export default function PayScreen() {
 
       {kind === "upgrade" && ticket.data?.upgrade ? (
         <Card>
-          <ThemedText type="heading">
+          <ThemedText type="titleMedium">
             {`Skip ahead · about ${ticket.data.upgrade.savingMin} min faster`}
           </ThemedText>
           <InfoRow label="Your ticket" value={`#${ticket.data.label}`} />
@@ -278,9 +309,8 @@ export default function PayScreen() {
               )}
             />
           ) : null}
-          <ThemedText type="small" themeColor="inkMuted">
-            Your ticket keeps its number and moves to the priority lane as soon
-            as the payment is confirmed. No new check-in needed.
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+            No new check-in needed.
           </ThemedText>
         </Card>
       ) : null}
@@ -299,7 +329,7 @@ export default function PayScreen() {
                 : "—"
             }
           />
-          <ThemedText type="small" themeColor="inkMuted">
+          <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
             Your place is held from now. We alert you when it's time to head to
             the business.
           </ThemedText>
@@ -330,7 +360,7 @@ export default function PayScreen() {
           {payErrorView(order.error).fix === "retry" ? (
             <Button
               title="Try again"
-              variant="secondary"
+              variant="tonal"
               icon="refresh"
               loading={order.isFetching}
               onPress={() => void order.refetch()}
@@ -353,18 +383,10 @@ export default function PayScreen() {
         <>
           <SectionHeader title="Before you pay" />
           <Card>
-            <View style={styles.feeRow}>
-              <ThemedText type="body" themeColor="inkMuted">
-                Fee
-              </ThemedText>
-              <ThemedText type="title">
-                {formatRupees(o.amountPaise)}
-              </ThemedText>
-            </View>
             {payRules(o).map((line) => (
               <View key={line} style={styles.rule}>
-                <Icon name="check_circle" size={18} color="brand" />
-                <ThemedText type="small" style={styles.flex}>
+                <Icon name="check_circle" size={18} color="primary" />
+                <ThemedText type="bodyMedium" style={styles.flex}>
                   {line}
                 </ThemedText>
               </View>
@@ -381,55 +403,35 @@ export default function PayScreen() {
 
           {phase.kind === "done" && phase.outcome.kind === "refunded" ? (
             <Card>
-              <ThemedText type="heading" themeColor="danger">
+              <ThemedText type="titleMedium" themeColor="error">
                 {phase.outcome.title}
               </ThemedText>
-              <ThemedText type="body">{phase.outcome.message}</ThemedText>
+              <ThemedText type="bodyLarge">{phase.outcome.message}</ThemedText>
               <Button
                 title="See my payments"
-                variant="secondary"
+                variant="tonal"
                 icon="receipt_long"
                 onPress={() => router.push("/payments" as Href)}
               />
             </Card>
           ) : phase.kind === "done" ? (
             <Card>
-              <ThemedText type="heading">
+              <ThemedText type="titleMedium">
                 Payment received — confirming
               </ThemedText>
-              <ThemedText type="body">
+              <ThemedText type="bodyLarge">
                 Razorpay took the payment and Qpeer is still confirming it. Your
                 ticket appears in the Queue tab as soon as it is confirmed. If
                 no ticket can be made, the full fee is refunded automatically.
               </ThemedText>
               <Button
                 title="See my payments"
-                variant="secondary"
+                variant="tonal"
                 icon="receipt_long"
                 onPress={() => router.push("/payments" as Href)}
               />
             </Card>
-          ) : (
-            <Button
-              title={
-                phase.kind === "confirming"
-                  ? "Confirming your payment…"
-                  : kind === "priority"
-                    ? `Buy Priority Pass · ${formatRupees(o.amountPaise)}`
-                    : `Pay ${formatRupees(o.amountPaise)}`
-              }
-              variant="brand"
-              icon="payments"
-              loading={busy}
-              onPress={() => void pay(o)}
-              needsNetwork
-            />
-          )}
-          <ThemedText type="small" themeColor="inkMuted">
-            {phase.kind === "confirming"
-              ? "Keep this screen open for a few seconds."
-              : "Payments run through Razorpay (test mode in this version: no real money). Qpeer never sees your card or UPI details."}
-          </ThemedText>
+          ) : null}
         </>
       )}
     </Screen>
@@ -437,11 +439,7 @@ export default function PayScreen() {
 }
 
 const styles = StyleSheet.create({
-  feeRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
+  head: { gap: Spacing.half },
   rule: { flexDirection: "row", gap: Spacing.two, alignItems: "flex-start" },
   flex: { flex: 1 },
 });

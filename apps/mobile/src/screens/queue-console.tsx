@@ -7,15 +7,21 @@ import {
   waitText,
 } from "@qpeer/shared";
 import { useQueryClient } from "@tanstack/react-query";
-import { type Href, useFocusEffect, useRouter } from "expo-router";
+import {
+  type Href,
+  useFocusEffect,
+  useNavigation,
+  useRouter,
+} from "expo-router";
 import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react";
-import { Alert, Pressable, StyleSheet, View } from "react-native";
+import { Pressable, StyleSheet, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { ThemedText } from "@/components/themed-text";
@@ -30,10 +36,12 @@ import {
   ErrorState,
   HeaderButton,
   Icon,
+  IconButton,
   LoadingState,
+  OverflowMenu,
+  type OverflowMenuHandle,
   Screen,
   SectionHeader,
-  StatRow,
   StatusBanner,
   TokenBoard,
 } from "@/components/ui";
@@ -67,7 +75,7 @@ import {
 } from "@/lib/queue-format";
 import { useStored } from "@/lib/storage";
 import { showErrorToast, showToast } from "@/lib/toast";
-import { StaffRejoinCard } from "@/screens/staff-rejoin";
+import { StaffRejoinSheet } from "@/screens/staff-rejoin";
 
 /** Waiting rows drawn at most; the rest is summarised. */
 const MAX_WAITING_ROWS = 50;
@@ -220,11 +228,16 @@ function ConsoleBody({
   const consoleQ = useConsole(queue.id);
   const command = useConsoleCommand(queue.id);
   const [counter, setCounter] = useState(1);
-  // R2: the "Rejoin for customer" form: closed, open blank, or for one row.
+  // R2: the "Rejoin for customer" sheet: closed, open blank, or for one row.
   const [rejoinFor, setRejoinFor] = useState<RejoinTarget>(null);
+  // Height of the pinned bar's content, so the Undo snackbar floats above it.
+  const [barHeight, setBarHeight] = useState(0);
   const ownNoShows = useRef(new Set<string>());
   const seenGrace = useRef<Set<string> | null>(null);
   const state = consoleQ.data;
+  const navigation = useNavigation();
+  // The app bar's "Close for the day" reads the latest state through this.
+  const closeRef = useRef<(() => void) | null>(null);
 
   const live = useLiveSocket({
     queueId: queue.id,
@@ -273,6 +286,50 @@ function ConsoleBody({
   const fast = Boolean(undoActive || (state && state.grace.length > 0));
   const now = useNow(true, fast ? 1000 : 30_000);
 
+  // C3: open the ticket scanner (works offline: signature check on the
+  // phone). A plain string: the typed-routes file (.expo/types, made by
+  // `expo start`) may not list this route yet on a checkout.
+  const onVerify = useCallback(
+    () => router.push(`/queue/${encodeURIComponent(queue.id)}/verify` as Href),
+    [router, queue.id],
+  );
+  const closed = state?.status === "closed";
+  const canClose = state !== undefined && !closed;
+  const offlineOrBusy = command.isPending || offline;
+
+  // Top app bar: "Verify a ticket" in every state; the rare, final "Close
+  // for the day" behind the overflow menu (⋮) while the queue is not closed.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <View style={styles.appBarActions}>
+          <IconButton
+            icon="qr_code_scanner"
+            accessibilityLabel="Verify a ticket"
+            color="onSurface"
+            onPress={onVerify}
+          />
+          {canClose ? (
+            <OverflowMenu
+              accessibilityLabel="More console actions"
+              disabled={offlineOrBusy}
+              items={[
+                {
+                  label: "Close for the day",
+                  destructive: true,
+                  onPress: () => closeRef.current?.(),
+                },
+              ]}
+            />
+          ) : null}
+        </View>
+      ),
+    });
+    // A layout cleanup runs before the next body's layout effect (another
+    // queue), so the actions never vanish on a switch.
+    return () => navigation.setOptions({ headerRight: undefined });
+  }, [navigation, onVerify, canClose, offlineOrBusy]);
+
   if (!state) {
     return (
       <Screen bottomInset={false}>
@@ -313,6 +370,39 @@ function ConsoleBody({
     state.undoUntil !== null ? Math.max(0, state.undoUntil - now) : 0;
   const showUndo = undoLeft > 0 && state.status !== "closed";
 
+  closeRef.current = () => {
+    // C4: waiting tickets still valid after now carry over instead of ending.
+    // Step 4: paid tickets that end are refunded in full automatically.
+    void (async () => {
+      const c = closeSummary(state, now);
+      const left = c.ending;
+      const keepText =
+        c.kept > 0
+          ? ` ${c.kept} ${c.kept === 1 ? "ticket is" : "tickets are"} valid beyond today and will be served first next time.`
+          : "";
+      const paidText =
+        c.paidRefunded > 0
+          ? ` ${c.paidRefunded} of them ${c.paidRefunded === 1 ? "is a paid ticket and is" : "are paid tickets and are"} refunded in full automatically.`
+          : "";
+      const bookedText =
+        c.booked > 0
+          ? ` ${c.booked} Priority ${c.booked === 1 ? "Pass" : "Passes"} not checked in yet ${c.booked === 1 ? "stays" : "stay"} valid.`
+          : "";
+      const ok = await ConfirmDialog.show({
+        title: "Close for the day?",
+        message:
+          left > 0
+            ? `${left} ${left === 1 ? "ticket is" : "tickets are"} still active. They will expire and those customers are told the queue closed.${paidText} Numbers start again at 1 when you open next time.${keepText}${bookedText}`
+            : `Nobody can join until you open the queue again. Numbers start again at 1 next time.${keepText}${bookedText}`,
+        confirmLabel: "Close queue",
+      });
+      if (ok) await run({ kind: "queue", action: "close" }, "Could not close");
+    })();
+  };
+
+  const multi = state.counters > 1;
+  const atCounter = Math.min(counter, state.counters);
+
   return (
     <View style={styles.fill}>
       <Screen
@@ -328,6 +418,22 @@ function ConsoleBody({
           styles.compact,
           showUndo && { paddingBottom: UNDO_BAR_SPACE },
         ]}
+        // NEXT (or Resume / Open queue) stays under the thumb at any scroll
+        // position, just above the tab bar.
+        bottomBar={
+          <View
+            onLayout={(e) => setBarHeight(e.nativeEvent.layout.height)}
+            style={styles.barContent}
+          >
+            <PrimaryAction
+              state={state}
+              busy={busy}
+              counter={atCounter}
+              multi={multi}
+              run={run}
+            />
+          </View>
+        }
       >
         {picker}
         {offline ? (
@@ -344,21 +450,20 @@ function ConsoleBody({
             live={live === "live"}
             busy={busy}
             now={now}
-            counter={Math.min(counter, state.counters)}
+            counter={atCounter}
             setCounter={setCounter}
             run={run}
-            onVerify={() =>
-              // A plain string: the typed-routes file (.expo/types, made by
-              // `expo start`) may not list this new route yet on a checkout.
-              router.push(
-                `/queue/${encodeURIComponent(queue.id)}/verify` as Href,
-              )
-            }
-            rejoinFor={rejoinFor}
-            setRejoinFor={setRejoinFor}
+            onRejoin={setRejoinFor}
           />
         </View>
       </Screen>
+      <StaffRejoinSheet
+        visible={rejoinFor !== null}
+        queueId={queue.id}
+        prefill={rejoinFor?.token ?? null}
+        onClose={() => setRejoinFor(null)}
+        onScan={onVerify}
+      />
       {showUndo ? (
         <UndoBar
           // The token the last NEXT called (P1, T2…), even after a No-show
@@ -366,12 +471,86 @@ function ConsoleBody({
           label={lastCalledLabel(state) ?? state.nowServing}
           undoLeft={undoLeft}
           busy={busy}
+          // Above the pinned bar (its padding is 12 top and bottom).
+          bottom={barHeight + Spacing.twoHalf * 3}
           onUndo={() =>
             void run({ kind: "queue", action: "undo-next" }, "Could not undo")
           }
         />
       ) : null}
     </View>
+  );
+}
+
+/**
+ * The pinned bar's one primary action for the state: NEXT (72 dp, the
+ * biggest button in the app) while open, a filled Resume while paused, Open
+ * queue while closed.
+ */
+function PrimaryAction({
+  state,
+  busy,
+  counter,
+  multi,
+  run,
+}: {
+  state: ConsoleState;
+  busy: boolean;
+  counter: number;
+  multi: boolean;
+  run: (cmd: ConsoleCommand, errorTitle: string) => Promise<boolean>;
+}) {
+  if (state.status === "closed") {
+    return (
+      <Button
+        title="Open queue"
+        icon="lock_open"
+        size="large"
+        loading={busy}
+        onPress={() =>
+          void run({ kind: "queue", action: "open" }, "Could not open")
+        }
+      />
+    );
+  }
+  if (state.status === "paused") {
+    return (
+      <Button
+        title="Resume"
+        icon="play_arrow"
+        size="large"
+        loading={busy}
+        onPress={() =>
+          void run({ kind: "queue", action: "resume" }, "Could not resume")
+        }
+      />
+    );
+  }
+  const atCounter =
+    state.serving.find((s) => s.counter === counter) ??
+    (multi ? undefined : state.serving[0]);
+  const canNext = state.counts.waiting > 0 || atCounter !== undefined;
+  return (
+    <Button
+      title={canNext ? "NEXT" : "Nobody waiting"}
+      icon="fast_forward"
+      size="hero"
+      accessibilityLabel={
+        multi ? `Call next to counter ${counter}` : "Call next"
+      }
+      loading={busy}
+      disabled={!canNext}
+      onPress={() =>
+        void run(
+          {
+            kind: "queue",
+            action: "next",
+            counter: multi ? counter : undefined,
+          },
+          "Could not call next",
+        )
+      }
+    />
   );
 }
 
@@ -387,11 +566,14 @@ function UndoBar({
   label,
   undoLeft,
   busy,
+  bottom,
   onUndo,
 }: {
   label: string | null;
   undoLeft: number;
   busy: boolean;
+  /** Distance from the bottom of the console (above the pinned bar). */
+  bottom: number;
   onUndo: () => void;
 }) {
   const theme = useTheme();
@@ -409,6 +591,7 @@ function UndoBar({
         {
           backgroundColor: theme.inverseSurface,
           boxShadow: Elevation.level3,
+          bottom,
           left: insets.left + Spacing.three,
           right: insets.right + Spacing.three,
         },
@@ -478,9 +661,7 @@ function ConsoleView({
   counter,
   setCounter,
   run,
-  onVerify,
-  rejoinFor,
-  setRejoinFor,
+  onRejoin,
 }: {
   state: ConsoleState;
   queue: ConsoleQueue;
@@ -490,12 +671,9 @@ function ConsoleView({
   counter: number;
   setCounter: (c: number) => void;
   run: (cmd: ConsoleCommand, errorTitle: string) => Promise<boolean>;
-  /** C3: open the ticket scanner. */
-  onVerify: () => void;
-  rejoinFor: RejoinTarget;
-  setRejoinFor: (t: RejoinTarget) => void;
+  /** Opens the "Rejoin for customer" sheet, for a row or blank. */
+  onRejoin: (t: RejoinTarget) => void;
 }) {
-  const theme = useTheme();
   const missed = state.missed ?? [];
   const dueText = priorityDueText(state);
   const status = liveStatusLook(state.status);
@@ -512,8 +690,6 @@ function ConsoleView({
   const atCounter =
     state.serving.find((s) => s.counter === counter) ??
     (multi ? undefined : state.serving[0]);
-  const canNext =
-    !closed && !paused && (state.counts.waiting > 0 || atCounter !== undefined);
 
   const onTriage = async () => {
     const ok = await ConfirmDialog.show({
@@ -526,48 +702,6 @@ function ConsoleView({
     if (await run({ kind: "triage" }, "Could not add a triage token")) {
       showToast({ title: "Triage token added at the front", tone: "success" });
     }
-  };
-
-  const onClose = async () => {
-    // C4: waiting tickets still valid after now carry over instead of ending.
-    // Step 4: paid tickets that end are refunded in full automatically.
-    const c = closeSummary(state, now);
-    const left = c.ending;
-    const keepText =
-      c.kept > 0
-        ? ` ${c.kept} ${c.kept === 1 ? "ticket is" : "tickets are"} valid beyond today and will be served first next time.`
-        : "";
-    const paidText =
-      c.paidRefunded > 0
-        ? ` ${c.paidRefunded} of them ${c.paidRefunded === 1 ? "is a paid ticket and is" : "are paid tickets and are"} refunded in full automatically.`
-        : "";
-    const bookedText =
-      c.booked > 0
-        ? ` ${c.booked} Priority ${c.booked === 1 ? "Pass" : "Passes"} not checked in yet ${c.booked === 1 ? "stays" : "stay"} valid.`
-        : "";
-    const ok = await ConfirmDialog.show({
-      title: "Close for the day?",
-      message:
-        left > 0
-          ? `${left} ${left === 1 ? "ticket is" : "tickets are"} still active. They will expire and those customers are told the queue closed.${paidText} Numbers start again at 1 when you open next time.${keepText}${bookedText}`
-          : `Nobody can join until you open the queue again. Numbers start again at 1 next time.${keepText}${bookedText}`,
-      confirmLabel: "Close queue",
-    });
-    if (ok) await run({ kind: "queue", action: "close" }, "Could not close");
-  };
-
-  const waitingMenu = (t: ConsoleToken) => {
-    Alert.alert(`#${t.label}`, "Waiting", [
-      {
-        text: "Skip (move back a few places)",
-        onPress: () =>
-          void run(
-            { kind: "token", action: "skip", tokenId: t.id },
-            "Could not skip",
-          ),
-      },
-      { text: "Cancel", style: "cancel" },
-    ]);
   };
 
   // B10: Served / No-show sit right under Now Serving.
@@ -617,23 +751,27 @@ function ConsoleView({
 
   return (
     <>
-      <StatusBanner
-        tone={status.tone}
-        title={
-          closed
-            ? "Closed"
-            : paused
-              ? "Paused — nobody is called"
-              : "Open — service active"
-        }
-        detail={`Walk-in check: GPS · ${queue.joinRadiusM ?? "—"} m`}
-        right={
-          <Badge
-            label={live ? "Live" : "Reconnecting"}
-            tone={live ? "success" : "warning"}
-          />
-        }
-      />
+      {/* Only the exceptions get a banner: open and live is the normal case
+          the board and NEXT already show (design guide §5). */}
+      {closed || paused || !live ? (
+        <StatusBanner
+          tone={status.tone}
+          title={
+            closed
+              ? "Closed"
+              : paused
+                ? "Paused — nobody is called"
+                : "Open — service active"
+          }
+          detail={`Walk-in check: GPS · ${queue.joinRadiusM ?? "—"} m`}
+          right={
+            <Badge
+              label={live ? "Live" : "Reconnecting"}
+              tone={live ? "success" : "warning"}
+            />
+          }
+        />
+      ) : null}
 
       {closingSoon && autoCloseAt !== null ? (
         <StatusBanner
@@ -679,16 +817,6 @@ function ConsoleView({
                 ? `Open it to start a new session. ${carried.length} ${carried.length === 1 ? "ticket is" : "tickets are"} still valid and will be served first.`
                 : "Open it to start today's session. Customers can then scan the QR code and join."}
             </ThemedText>
-            <Button
-              title="Open queue"
-              icon="lock_open"
-              size="large"
-              loading={busy}
-              onPress={() =>
-                void run({ kind: "queue", action: "open" }, "Could not open")
-              }
-              style={styles.stretch}
-            />
           </Card>
           {calledSection}
           {carried.length > 0 ? (
@@ -726,27 +854,7 @@ function ConsoleView({
             />
           ) : null}
 
-          {/* NEXT: the console's one primary action, big brass full-round. */}
-          <Button
-            title={paused ? "Paused" : canNext ? "NEXT" : "Nobody waiting"}
-            icon="fast_forward"
-            size="hero"
-            accessibilityLabel={
-              multi ? `Call next to counter ${counter}` : "Call next"
-            }
-            loading={busy}
-            disabled={!canNext}
-            onPress={() =>
-              void run(
-                {
-                  kind: "queue",
-                  action: "next",
-                  counter: multi ? counter : undefined,
-                },
-                "Could not call next",
-              )
-            }
-          />
+          {/* NEXT itself sits in the pinned bar below. */}
           {dueText ? (
             <View style={styles.dueRow}>
               <Icon name="bolt" size={18} color="primary" />
@@ -762,19 +870,22 @@ function ConsoleView({
           ) : null}
 
           <View style={styles.grid}>
-            <Button
-              title={paused ? "Resume" : "Pause"}
-              icon={paused ? "play_arrow" : "pause"}
-              variant="tonal"
-              disabled={busy}
-              onPress={() =>
-                void run(
-                  { kind: "queue", action: paused ? "resume" : "pause" },
-                  paused ? "Could not resume" : "Could not pause",
-                )
-              }
-              style={styles.cell}
-            />
+            {/* While paused, Resume is the bar's primary action. */}
+            {paused ? null : (
+              <Button
+                title="Pause"
+                icon="pause"
+                variant="tonal"
+                disabled={busy}
+                onPress={() =>
+                  void run(
+                    { kind: "queue", action: "pause" },
+                    "Could not pause",
+                  )
+                }
+                style={styles.cell}
+              />
+            )}
             <Button
               title="Skip"
               icon="skip_next"
@@ -806,19 +917,7 @@ function ConsoleView({
               onPress={() => void onTriage()}
               style={styles.cell}
             />
-            <Button
-              title="Add person"
-              icon="person_add"
-              variant="tonal"
-              accessibilityLabel="Add person, coming soon"
-              disabled
-              onPress={() => undefined}
-              style={styles.cell}
-            />
           </View>
-          <ThemedText type="bodySmall" themeColor="onSurfaceVariant">
-            Add person (for customers without the app) is coming soon.
-          </ThemedText>
         </>
       )}
 
@@ -869,7 +968,7 @@ function ConsoleView({
                     icon="restart_alt"
                     variant="tonal"
                     disabled={busy}
-                    onPress={() => setRejoinFor({ token: t })}
+                    onPress={() => onRejoin({ token: t })}
                     style={styles.rowButton}
                   />
                 )
@@ -878,61 +977,48 @@ function ConsoleView({
           ))}
         </>
       ) : null}
-      {rejoinFor ? (
-        <StaffRejoinCard
-          key={rejoinFor.token?.id ?? "blank"}
-          queueId={queue.id}
-          prefill={rejoinFor.token}
-          onDone={() => setRejoinFor(null)}
-          onScan={onVerify}
-        />
-      ) : !closed ? (
-        <Button
-          title="Rejoin for customer"
-          icon="restart_alt"
-          variant="tonal"
-          disabled={busy}
-          onPress={() => setRejoinFor({ token: null })}
-          accessibilityLabel="Rejoin a missed customer by number and check code"
-        />
-      ) : null}
-
-      <StatRow
-        stats={[
-          { label: "Waiting", value: state.counts.waiting, icon: "groups" },
-          {
-            label: "In service",
-            value: state.counts.inService,
-            icon: "person",
-          },
-          { label: "Total", value: state.counts.total, icon: "groups" },
-        ]}
-      />
-      {(state.counts.booked ?? 0) > 0 ? (
-        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
-          {`${state.counts.booked} Priority ${state.counts.booked === 1 ? "Pass is" : "Passes are"} paid but not checked in yet (not in the line).`}
-        </ThemedText>
-      ) : null}
+      {/* The dead-phone path: number + check code, even when the list is
+          empty (owner decision 2026-11-15). */}
       {!closed ? (
-        <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
-          Someone joining now:{" "}
-          {waitText(
-            {
-              waiting: state.counts.waiting,
-              inService: state.counts.inService,
-              waitLowMs: state.eta.waitLowMs,
-              waitHighMs: state.eta.waitHighMs,
-              updatedAt: state.updatedAt,
-            },
-            now,
-          ) ?? "wait not known yet"}
-          {state.eta.coldStart ? " (estimate from your settings)" : ""}.
-        </ThemedText>
+        <View style={styles.textAction}>
+          <Button
+            title="Rejoin by number"
+            variant="text"
+            icon="restart_alt"
+            disabled={busy}
+            onPress={() => onRejoin({ token: null })}
+            accessibilityLabel="Rejoin a missed customer by number and check code"
+          />
+        </View>
       ) : null}
 
       {!closed ? (
         <>
           <SectionHeader title={`Waiting (${state.counts.waiting})`} />
+          <View style={styles.waitingNotes}>
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+              {`Total: ${state.counts.total} active (waiting, called and late)`}
+            </ThemedText>
+            <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+              Someone joining now:{" "}
+              {waitText(
+                {
+                  waiting: state.counts.waiting,
+                  inService: state.counts.inService,
+                  waitLowMs: state.eta.waitLowMs,
+                  waitHighMs: state.eta.waitHighMs,
+                  updatedAt: state.updatedAt,
+                },
+                now,
+              ) ?? "wait not known yet"}
+              {state.eta.coldStart ? " (estimate from your settings)" : ""}.
+            </ThemedText>
+            {(state.counts.booked ?? 0) > 0 ? (
+              <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
+                {`${state.counts.booked} Priority ${state.counts.booked === 1 ? "Pass is" : "Passes are"} paid but not checked in yet (not in the line).`}
+              </ThemedText>
+            ) : null}
+          </View>
           {state.waiting.length === 0 ? (
             <Card>
               <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
@@ -940,67 +1026,61 @@ function ConsoleView({
               </ThemedText>
             </Card>
           ) : (
-            state.waiting.slice(0, MAX_WAITING_ROWS).map((t) => (
-              <TokenRow
-                key={t.id}
-                token={t}
-                detail={`${t.position !== null ? `${t.position}. ` : ""}joined ${t.carriedOver ? formatDateTime(t.joinedAt) : formatClock(t.joinedAt)}`}
-                onLongPress={() => waitingMenu(t)}
-                trailing={
-                  // M3 icon button: a real 48 dp target, 40 dp ripple.
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel={`Actions for #${t.label}`}
-                    accessibilityState={{ disabled: busy }}
-                    disabled={busy}
-                    onPress={() => waitingMenu(t)}
-                    android_ripple={{
-                      color: theme.onSurfaceVariant,
-                      alpha: RIPPLE_ALPHA,
-                      borderless: true,
-                      radius: 20,
-                    }}
-                    style={styles.menuButton}
-                  >
-                    <Icon
-                      name="more_vert"
-                      colorValue={
-                        busy
-                          ? withAlpha(theme.onSurface, DISABLED_CONTENT_ALPHA)
-                          : theme.onSurfaceVariant
-                      }
-                    />
-                  </Pressable>
-                }
-              />
-            ))
+            state.waiting
+              .slice(0, MAX_WAITING_ROWS)
+              .map((t) => (
+                <WaitingRow key={t.id} token={t} busy={busy} run={run} />
+              ))
           )}
           {state.waiting.length > MAX_WAITING_ROWS ? (
             <ThemedText type="bodyMedium" themeColor="onSurfaceVariant">
               and {state.waiting.length - MAX_WAITING_ROWS} more…
             </ThemedText>
           ) : null}
-
-          <SectionHeader title="End of day" />
-          <Button
-            title="Close for the day"
-            icon="stop_circle"
-            variant="danger-tonal"
-            disabled={busy}
-            onPress={() => void onClose()}
-          />
         </>
       ) : null}
-
-      {/* C3: works offline (signature check on the phone). */}
-      <Button
-        title="Verify a ticket"
-        icon="qr_code_scanner"
-        variant="tonal"
-        onPress={onVerify}
-        accessibilityLabel="Verify a customer's ticket code"
-      />
     </>
+  );
+}
+
+/**
+ * A waiting token with its M3 menu anchored to the row's ⋮; a long-press
+ * on the row opens the same menu. "Move back a few places" skips this
+ * waiting person (the grid's Skip is for the person at the counter).
+ */
+function WaitingRow({
+  token,
+  busy,
+  run,
+}: {
+  token: ConsoleToken;
+  busy: boolean;
+  run: (cmd: ConsoleCommand, errorTitle: string) => Promise<boolean>;
+}) {
+  const menu = useRef<OverflowMenuHandle>(null);
+  return (
+    <TokenRow
+      token={token}
+      detail={`${token.position !== null ? `${token.position}. ` : ""}joined ${token.carriedOver ? formatDateTime(token.joinedAt) : formatClock(token.joinedAt)}`}
+      onLongPress={busy ? undefined : () => menu.current?.open()}
+      trailing={
+        <OverflowMenu
+          ref={menu}
+          accessibilityLabel={`Actions for #${token.label}`}
+          disabled={busy}
+          items={[
+            {
+              label: "Move back a few places",
+              onPress: () =>
+                void run(
+                  { kind: "token", action: "skip", tokenId: token.id },
+                  "Could not move back",
+                ),
+            },
+          ]}
+        />
+      }
+    />
   );
 }
 
@@ -1185,10 +1265,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   rowButton: { flex: 1, paddingHorizontal: Spacing.twoHalf },
-  menuButton: {
-    minWidth: 48,
-    minHeight: 48,
-    alignItems: "center",
-    justifyContent: "center",
-  },
+  appBarActions: { flexDirection: "row", alignItems: "center" },
+  barContent: { gap: Spacing.two },
+  textAction: { alignItems: "flex-start" },
+  waitingNotes: { gap: Spacing.one },
 });
