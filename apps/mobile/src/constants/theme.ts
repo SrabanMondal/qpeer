@@ -162,6 +162,16 @@ export const Colors = {
   dark: { ...dark, ...aliases(dark) },
 } as const;
 
+/**
+ * Print colours of QR codes: always dark ink on white paper, in both
+ * themes, so every scanner reads them (the queue's printable card and the
+ * ticket code's quiet zone).
+ */
+export const PrintColors = {
+  ink: "#000000",
+  paper: "#FFFFFF",
+} as const;
+
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 export type ThemeColors = { [K in ThemeColor]: string };
 

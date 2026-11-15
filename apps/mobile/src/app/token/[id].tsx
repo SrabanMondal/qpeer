@@ -29,7 +29,7 @@ import {
   StatRow,
   TokenBoard,
 } from "@/components/ui";
-import { Radius, Spacing } from "@/constants/theme";
+import { PrintColors, Radius, Spacing } from "@/constants/theme";
 import { useTheme } from "@/hooks/use-theme";
 import {
   mergeToken,
@@ -681,7 +681,7 @@ const styles = StyleSheet.create({
   qrBlock: { alignItems: "center", gap: Spacing.two },
   // The QR's quiet zone stays pure white in both themes so scanners read it.
   qrBox: {
-    backgroundColor: "#FFFFFF",
+    backgroundColor: PrintColors.paper,
     borderRadius: Radius.card,
     overflow: "hidden",
   },
