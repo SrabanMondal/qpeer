@@ -278,6 +278,24 @@ const roles = {
     letterSpacing: 0.5,
     fontVariant: ["tabular-nums"],
   },
+  /** Map pills: the board face in small (Doto 900, the 15 sp minimum). */
+  boardPill: {
+    fontFamily: FontFamily.board,
+    fontWeight: "normal",
+    fontSize: 15,
+    lineHeight: 20,
+    letterSpacing: 1,
+    fontVariant: ["tabular-nums"],
+  },
+  /** Map pills at font scale ≥ 1.3 (Archivo 800, the access rule). */
+  boardPillSolid: {
+    fontFamily: FontFamily.figureHeavy,
+    fontWeight: "normal",
+    fontSize: 15,
+    lineHeight: 20,
+    letterSpacing: 0.5,
+    fontVariant: ["tabular-nums"],
+  },
   /** Figures next to the board, stat numbers (Archivo 700). */
   figure: {
     fontFamily: FontFamily.figure,

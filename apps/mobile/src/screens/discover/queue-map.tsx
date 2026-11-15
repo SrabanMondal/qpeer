@@ -2,6 +2,7 @@ import type { LatLng, MarkerFeatureCollection } from "@qpeer/shared";
 import {
   Camera,
   CircleLayer,
+  Image,
   Images,
   LocationPuck,
   Logger,
@@ -21,36 +22,15 @@ import {
 import { StyleSheet } from "react-native";
 
 import { useIsDark, useTheme } from "@/hooks/use-theme";
+import {
+  MapPill,
+  type PillKind,
+  pillImageId,
+  pillKind,
+} from "@/screens/discover/map-pill";
 
-/** Map pill images (3x PNGs, see NOTES "Step 3 mobile"): fill + white border + tail. */
-const PILL = {
-  scale: 3,
-  // Straight parts left and right of the tail stretch equally, so the tail stays centred.
-  stretchX: [
-    [48, 54],
-    [90, 96],
-  ] as [number, number][],
-  stretchY: [[46, 50]] as [number, number][],
-  // Where the text sits (image pixels): left, top, right, bottom of the pill body.
-  content: [30, 24, 114, 72] as [number, number, number, number],
-};
-
-const PILL_IMAGES = {
-  "pill-open": { image: require("../../../assets/map/pill-open.png"), ...PILL },
-  "pill-closed": {
-    image: require("../../../assets/map/pill-closed.png"),
-    ...PILL,
-  },
-  "pill-selected": {
-    image: require("../../../assets/map/pill-selected.png"),
-    ...PILL,
-  },
-};
-
+/** Mapbox glyph fonts for the cluster counts (the style's own fonts). */
 const FONT = ["Open Sans Bold", "Arial Unicode MS Bold"];
-/** Text size of the pill label; the offset lifts it above the tail (14 dp / 13 dp ≈ 1.08 em). */
-const PILL_TEXT_SIZE = 13;
-const PILL_TEXT_OFFSET = [0, -1.08];
 /** Points stop clustering above this zoom (street level). */
 const CLUSTER_MAX_ZOOM = 14;
 
@@ -133,27 +113,33 @@ export function QueueMap({
     [],
   );
 
+  // Board-style pills (design guide §1): each pill is a React Native view
+  // (Doto LEDs on the board face) that Mapbox draws as an image, one image
+  // per kind and label. The label is baked in, so the layer draws no text.
+  const { shape, pills } = useMemo(() => {
+    const seen = new Map<string, { kind: PillKind; label: string }>();
+    const withImages = features.features.map((f) => {
+      const kind = pillKind(
+        f.properties.status,
+        f.properties.id === selectedId,
+      );
+      const image = pillImageId(kind, f.properties.label);
+      if (!seen.has(image))
+        seen.set(image, { kind, label: f.properties.label });
+      return { ...f, properties: { ...f.properties, image } };
+    });
+    return {
+      shape: { ...features, features: withImages },
+      pills: [...seen.entries()],
+    };
+  }, [features, selectedId]);
+
   const pillStyle = useMemo(
     () => ({
-      iconImage: [
-        "case",
-        ["==", ["get", "id"], selectedId ?? ""],
-        "pill-selected",
-        ["==", ["get", "status"], "open"],
-        "pill-open",
-        "pill-closed",
-      ] as const,
-      iconTextFit: "both" as const,
+      iconImage: ["get", "image"] as const,
+      iconAnchor: "bottom" as const,
       iconAllowOverlap: true,
       iconIgnorePlacement: true,
-      textField: ["get", "label"] as const,
-      textFont: FONT,
-      textSize: PILL_TEXT_SIZE,
-      textColor: theme.onPrimary,
-      textAnchor: "bottom" as const,
-      textOffset: PILL_TEXT_OFFSET,
-      textAllowOverlap: true,
-      textIgnorePlacement: true,
       // The selected pill is drawn on top of its neighbours.
       symbolSortKey: [
         "case",
@@ -162,7 +148,7 @@ export function QueueMap({
         0,
       ] as const,
     }),
-    [selectedId, theme.onPrimary],
+    [selectedId],
   );
 
   return (
@@ -195,11 +181,17 @@ export function QueueMap({
       {showUser ? (
         <LocationPuck visible pulsing={{ isEnabled: false }} />
       ) : null}
-      <Images images={PILL_IMAGES} />
+      <Images>
+        {pills.map(([id, p]) => (
+          <Image key={id} name={id}>
+            <MapPill kind={p.kind} label={p.label} />
+          </Image>
+        ))}
+      </Images>
       <ShapeSource
         ref={source}
         id="businesses"
-        shape={features}
+        shape={shape}
         cluster
         clusterRadius={48}
         clusterMaxZoomLevel={CLUSTER_MAX_ZOOM}
@@ -233,7 +225,7 @@ export function QueueMap({
           id="business-clusters"
           filter={["has", "point_count"]}
           style={{
-            circleColor: theme.brand,
+            circleColor: theme.primary,
             circleRadius: ["step", ["get", "point_count"], 18, 10, 22, 50, 28],
             circleStrokeColor: theme.onPrimary,
             circleStrokeWidth: 2,
