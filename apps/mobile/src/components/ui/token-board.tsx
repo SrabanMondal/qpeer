@@ -18,7 +18,6 @@ import Svg, { Circle, Defs, Pattern, Rect } from "react-native-svg";
 
 import {
   BOARD_SOLID_FONT_SCALE,
-  FontFamily,
   Radius,
   Spacing,
   Spring,
@@ -133,27 +132,19 @@ export function TokenBoard({
     }
   };
 
-  const face: TextStyle = solid
-    ? { fontFamily: FontFamily.figureHeavy, letterSpacing: 0.5 }
-    : {};
+  // Access rule: solid Archivo 800 instead of dot-matrix when text is large.
+  const label = solid ? Type.boardLabelSolid : Type.boardLabel;
+  const display = solid ? Type.boardDisplaySolid : Type.boardDisplay;
 
   const renderRow = (row: BoardRow) => (
     <View style={styles.row}>
-      <Text
-        style={[Type.boardLabel, styles.glowSmall, face, tone(row.leftTone)]}
-      >
+      <Text style={[label, styles.glowSmall, tone(row.leftTone)]}>
         {row.left}
       </Text>
       {row.right ? (
         <Text
           selectable={row.rightSelectable}
-          style={[
-            Type.boardLabel,
-            styles.glowSmall,
-            styles.right,
-            face,
-            tone(row.rightTone),
-          ]}
+          style={[label, styles.glowSmall, styles.right, tone(row.rightTone)]}
         >
           {row.right}
         </Text>
@@ -179,12 +170,7 @@ export function TokenBoard({
           numberOfLines={1}
           adjustsFontSizeToFit
           maxFontSizeMultiplier={1.3}
-          style={[
-            Type.boardDisplay,
-            styles.glowLarge,
-            solid && styles.solidNumber,
-            tone(numberTone),
-          ]}
+          style={[display, styles.glowLarge, tone(numberTone)]}
         >
           {number}
         </Text>
@@ -259,10 +245,6 @@ const styles = StyleSheet.create({
     textShadowRadius: 14,
     marginTop: Spacing.two,
     marginBottom: Spacing.one,
-  },
-  solidNumber: {
-    fontFamily: FontFamily.figureHeavy,
-    letterSpacing: 0,
   },
   rule: {
     height: StyleSheet.hairlineWidth * 2,

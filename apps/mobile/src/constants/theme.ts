@@ -248,6 +248,26 @@ const roles = {
     letterSpacing: 1,
     fontVariant: ["tabular-nums"],
   },
+  /**
+   * Access rule: at font scale ≥ 1.3 the board switches to these solid
+   * Archivo 800 faces (dot-matrix gets hard to read when large).
+   */
+  boardDisplaySolid: {
+    fontFamily: FontFamily.figureHeavy,
+    fontWeight: "normal",
+    fontSize: 104,
+    lineHeight: 112,
+    letterSpacing: 0,
+    fontVariant: ["tabular-nums"],
+  },
+  boardLabelSolid: {
+    fontFamily: FontFamily.figureHeavy,
+    fontWeight: "normal",
+    fontSize: 17,
+    lineHeight: 24,
+    letterSpacing: 0.5,
+    fontVariant: ["tabular-nums"],
+  },
   /** Figures next to the board, stat numbers (Archivo 700). */
   figure: {
     fontFamily: FontFamily.figure,
